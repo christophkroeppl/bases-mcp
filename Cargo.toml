@@ -1,0 +1,57 @@
+[package]
+name = "bases-mcp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "MCP server that resolves Obsidian Bases to human-readable markdown"
+license = "MIT"
+default-run = "bases-mcp"
+
+[[bin]]
+name = "bases-mcp"
+path = "src/main.rs"
+
+[lib]
+name = "bases_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+# The official Rust MCP SDK, so the wire format cannot drift from the clients
+# this has to talk to. `schemars` is not optional here: tool input schemas are
+# derived from the parameter types, and a tool with no schema is a tool an
+# agent cannot call correctly.
+rmcp = { version = "3", features = ["server", "transport-io", "schemars"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+# One vault backend, several implementations: the fs and WebDAV sources and the
+# draft overlay are all reached as a single trait object.
+async-trait = "0.1"
+# The evaluator's errors name a construct, a position and a property. That
+# detail has to reach the tool result, not be flattened into a string, so the
+# error is a type rather than a message.
+thiserror = "2"
+# Percent-decoding of WebDAV hrefs, and percent-encoding on the way out.
+percent-encoding = "2"
+# WebDAV `getlastmodified` arrives in three formats across three RFCs, and the
+# local offset decides what `file.mtime` means. chrono keeps the offset.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+sha2 = "0.10"
+hex = "0.4"
+# An HTTP client for the WebDAV backend. rustls, so no system OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "charset",
+  "http2",
+] }
+regex = "1.13.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[profile.release]
+# The evaluator recurses over a Pratt AST and is the hot path of every query.
+lto = "thin"
+codegen-units = 1
+strip = true
