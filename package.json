@@ -1,0 +1,43 @@
+{
+  "name": "bases-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server that resolves Obsidian Bases to human-readable markdown",
+  "license": "MIT",
+  "module": "src/index.ts",
+  "bin": {
+    "bases-mcp": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "check": "biome check .",
+    "check:fix": "biome check --write .",
+    "verify": "bun run typecheck && bun run check && bun test",
+    "test": "bun test",
+    "test:unit": "bun test test/unit",
+    "test:conformance": "bun test test/conformance",
+    "test:parity": "bun test test/parity",
+    "test:webdav": "bun test test/webdav",
+    "seed:webdav": "bun run scripts/seed-webdav.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.3",
+    "fast-xml-parser": "^5.2.5",
+    "yaml": "^2.8.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

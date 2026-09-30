@@ -1,0 +1,18 @@
+# Obsidian writes its per-vault workspace state into the vault. The testing
+# vault is content we control, so this must never be committed.
+test/vault/.obsidian/
+
+# Node / Bun
+node_modules/
+*.tsbuildinfo
+
+# Scratch scripts used while developing; not part of the deliverable.
+scratch/
+
+# Biome's LSP daemon keeps per-workspace state outside node_modules.
+.biome/
+
+# Local env
+.env
+.env.*
+!.env.example

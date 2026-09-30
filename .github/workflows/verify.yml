@@ -1,0 +1,39 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint and format check
+        run: bun run check
+
+      - name: Unit and conformance tests
+        # Excludes test/parity, which needs a live Obsidian CLI against the
+        # registered testing vault. See test/parity/parity.test.ts -- it skips
+        # cleanly when the CLI is unavailable.
+        run: bun test test/unit
+
+  # The Obsidian CLI only exists on a machine with Obsidian installed and the
+  # testing vault registered, so parity cannot run in CI. It is a local gate.
+  parity:
+    runs-on: ubuntu-latest
+    if: false
+    steps:
+      - run: echo "Run `bun test test/parity` locally with Obsidian open."

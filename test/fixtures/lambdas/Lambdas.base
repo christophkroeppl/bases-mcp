@@ -1,0 +1,27 @@
+# Higher-order list methods, as TaskNotes actually ships them.
+#
+# Expressions below are the ones TaskNotes generates into real vaults; see
+# github.com/callumalpass/tasknotes src/templates/defaultBasesFiles.ts
+filters:
+  and:
+    - file.hasProperty("pomodoros")
+formulas:
+  completedPomos: 'if(note["pomodoros"], list(note["pomodoros"]).filter(value.type == "work" && value.completed == true).length, 0)'
+  attemptedPomos: 'if(note["pomodoros"], list(note["pomodoros"]).filter(value.type == "work").length, 0)'
+  focusMinutes: 'if(note["pomodoros"], list(note["pomodoros"]).filter(value.type == "work" && value.completed == true).map(if(value.plannedDuration && value.plannedDuration > 0, value.plannedDuration, 0)).reduce(acc + value, 0), 0)'
+  days: 'list(note["pomodoros"]).filter(value.startTime).map(date(value.startTime).format("YYYY-MM-DD")).unique().join(", ")'
+  completionRate: 'if(formula.attemptedPomos > 0, (formula.completedPomos / formula.attemptedPomos * 100).round() + "%", "0%")'
+  maxPlanned: 'values.filter(value.isType("number")).reduce(if(acc == null || value > acc, value, acc), null)'
+views:
+  - type: table
+    name: Summary
+    order:
+      - file.name
+      - formula.days
+      - formula.completedPomos
+      - formula.attemptedPomos
+      - formula.focusMinutes
+      - formula.completionRate
+    sort:
+      - property: file.name
+        direction: ASC

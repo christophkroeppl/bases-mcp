@@ -1,0 +1,25 @@
+# Duration semantics, where Obsidian's docs and its runtime disagree.
+#
+# The docs say `now() - file.ctime` yields milliseconds. The runtime yields a
+# Duration, and `number(duration)` throws. Real vaults use BOTH idioms, so we
+# support both: see docs/divergences.md.
+filters:
+  and:
+    - file.ext == "md"
+formulas:
+  # Real-vault idiom: field access on a Duration.
+  days_since_update: '(now() - file.mtime).days.round(0)'
+  # Documented idiom: divide a difference by 86400000.
+  days_via_number: '((number(now()) - number(file.mtime)) / 86400000).floor()'
+  # M is a month, m is a minute.
+  in_one_month: 'date("2024-12-01") + "1M"'
+  in_one_minute: 'date("2024-12-01") + "1m"'
+views:
+  - type: table
+    name: Durations
+    order:
+      - file.name
+      - formula.days_since_update
+      - formula.days_via_number
+      - formula.in_one_month
+      - formula.in_one_minute
