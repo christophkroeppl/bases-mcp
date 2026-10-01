@@ -1,0 +1,11 @@
+# `cargo parity` compares against the live Obsidian CLI, which needs Obsidian
+# running with test/vault registered.
+#
+# It deliberately does not accept a quiet unverified run: `tests/parity.rs`
+# PANICS when the CLI cannot answer, and only relaxes with
+# BASES_MCP_ALLOW_SKIP=1. "Compared nothing" has to be a deliberate choice, since
+# the alternative is a green suite that checked nothing -- the exact failure this
+# project already made once.
+[alias]
+parity = "test --test parity"
+verify = "test -- --test-threads=1"

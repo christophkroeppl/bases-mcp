@@ -71,13 +71,6 @@ quick-xml = { version = "0.39", default-features = false, features = ["encoding"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
-# `cargo parity` compares against the live Obsidian CLI and therefore needs
-# Obsidian open with test/vault registered. It deliberately does NOT accept a
-# quiet unverified run: `test/parity.rs` fails unless BASES_MCP_ALLOW_SKIP=1 is
-# set, and the alias sets it only when --allow-skip is passed.
-[alias]
-parity = "test --test parity"
-
 [profile.release]
 # The evaluator recurses over a Pratt AST and is the hot path of every query.
 lto = "thin"
