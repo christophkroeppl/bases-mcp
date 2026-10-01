@@ -34,6 +34,7 @@ use crate::render::project::{
     ReconcileResult, RefusedRegion, RenderedRegion,
 };
 use crate::value::{strip_extension, BasesValue};
+use crate::vault::fs::content_hash;
 use crate::vault::{FsVaultSource, Vault, VaultSource};
 
 /// One `.base` file, with the views it declares.
@@ -61,6 +62,13 @@ pub struct NoteView {
     pub content: String,
     /// One entry per Base region, in document order.
     pub regions: Vec<FenceProvenance>,
+    /// Content hash of `raw`, for passing back as `write_note`'s `base_hash`.
+    ///
+    /// This is what makes a write conditional rather than blind. Without it the
+    /// server has no way to tell "the agent edited the text it read" from "the
+    /// agent edited a copy that has since been overwritten", and the second case
+    /// silently discards whatever arrived in between.
+    pub base_hash: String,
 }
 
 /// What `get_note` was asked for.
@@ -278,6 +286,7 @@ impl Resolver {
 
         if options.raw {
             return Ok(NoteView {
+                base_hash: content_hash(&raw),
                 path: resolved,
                 raw: raw.clone(),
                 content: raw,
@@ -311,6 +320,7 @@ impl Resolver {
         });
 
         Ok(NoteView {
+            base_hash: content_hash(&raw),
             path: resolved,
             raw,
             content,
@@ -403,9 +413,45 @@ impl Resolver {
     ///
     /// Base regions are restored verbatim and any attempt to change them is
     /// reported. The rest of the note is written as the agent left it.
-    pub async fn write_note(&self, path: &str, content: &str) -> Result<WriteNoteResult> {
+    ///
+    /// `base_hash` makes the write conditional. When it is supplied and no longer
+    /// matches the note on disk, the write is REFUSED and nothing is written,
+    /// because the agent edited a copy that has since been replaced. Obsidian
+    /// autosaves continuously, so that is the normal case rather than a rare one,
+    /// and without the check the alternative is overwriting the user's prose and
+    /// reporting `health: ok`.
+    ///
+    /// Omitting it is allowed, and means "I accept that this is a blind write" --
+    /// which is right for an agent constructing a note wholesale and wrong for
+    /// one editing prose it read earlier.
+    pub async fn write_note(
+        &self,
+        path: &str,
+        content: &str,
+        base_hash: Option<&str>,
+    ) -> Result<WriteNoteResult> {
         let resolved = self.resolve_note_path(path)?;
-        let original = self.vault.read_text(&resolved).await?;
+        // Read the note as it is on disk RIGHT NOW, not as it was when this
+        // process last looked. `self.vault` caches, and the cache is populated by
+        // queries, so a note the agent read a minute ago comes back stale --
+        // while Obsidian has been autosaving over the top of it. Reconciling
+        // against the stale copy and writing the result destroys the user's
+        // edits and reports success.
+        let original = self.backend().read_fresh(&resolved).await?;
+
+        if let Some(expected) = base_hash {
+            let current = content_hash(&original);
+            if current != expected {
+                return Err(BasesError::new(format!(
+                    "{resolved} changed since you read it, so nothing was written. You edited \
+                     text that is no longer current. Read it again with get_note, reapply your \
+                     edit to the new text, and write it back."
+                ))
+                .with_note(&resolved)
+                .with_construct("concurrent-edit"));
+            }
+        }
+
         let result = reconcile_note(&resolved, &original, content);
 
         // Verify the result still parses, so we never write a broken note. The

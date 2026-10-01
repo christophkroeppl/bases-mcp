@@ -242,6 +242,24 @@ impl VaultSource for FsVaultSource {
         Ok(text)
     }
 
+    async fn read_fresh(&self, rel: &str) -> Result<String> {
+        // The cache is deliberately bypassed rather than invalidated first: the
+        // write path calls this to see the note as it is now, and dropping the
+        // whole cache to do it would make every write a full re-listing.
+        let abs = self.abs(rel)?;
+        let bytes = tokio::fs::read(&abs)
+            .await
+            .map_err(|e| io("read", &abs, e))?;
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        // Keep the cache consistent with disk, so a later `read_text` cannot
+        // hand back the pre-write copy we just superseded.
+        self.text_cache
+            .borrow_mut()
+            .insert(rel.to_string(), text.clone());
+        self.hash_cache.borrow_mut().remove(rel);
+        Ok(text)
+    }
+
     async fn write_text(&self, rel: &str, data: &str) -> Result<()> {
         let abs = self.abs(rel)?;
         if let Some(parent) = abs.parent() {

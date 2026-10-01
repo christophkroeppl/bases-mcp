@@ -255,7 +255,10 @@ impl ToolSurface {
             .resolver
             .read_note(&args.path, NoteOptions::raw())
             .await?;
-        let result = self.resolver.write_note(&args.path, &args.content).await?;
+        let result = self
+            .resolver
+            .write_note(&args.path, &args.content, args.base_hash.as_deref())
+            .await?;
         let health = if result.refused.is_empty() {
             Health::Ok
         } else {
@@ -410,6 +413,15 @@ struct WriteNoteArgs {
     /// The agent's edited note. Send the `raw` text from get_note, never a
     /// Projection.
     content: String,
+    /// `base_hash` from the `get_note` this edit is based on.
+    ///
+    /// Supplying it makes the write conditional: if the note changed in the
+    /// meantime -- Obsidian autosaves constantly -- the write is refused and
+    /// nothing is touched, instead of overwriting whatever arrived since. Omit
+    /// it only when writing a note wholesale rather than editing one read
+    /// earlier.
+    #[serde(default)]
+    base_hash: Option<String>,
 }
 
 /// `backlinks`' arguments.

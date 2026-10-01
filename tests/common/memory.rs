@@ -386,6 +386,11 @@ impl VaultSource for MemoryVaultSource {
         self.read(&path, "GET")
     }
 
+    /// There is no cache here, so a fresh read is the same read.
+    async fn read_fresh(&self, rel: &str) -> std::result::Result<String, BasesError> {
+        self.read_text(rel).await
+    }
+
     async fn stat(&self, rel: &str) -> std::result::Result<FileStat, BasesError> {
         let path = self.normalise_refusing(rel)?;
         self.fire(MemoryOp::Stat, &path)?;
@@ -467,6 +472,9 @@ impl VaultSource for SharedSource {
     }
     async fn read_text(&self, path: &str) -> std::result::Result<String, BasesError> {
         self.0.read_text(path).await
+    }
+    async fn read_fresh(&self, path: &str) -> std::result::Result<String, BasesError> {
+        self.0.read_fresh(path).await
     }
     async fn write_text(&self, path: &str, data: &str) -> std::result::Result<(), BasesError> {
         self.0.write_text(path, data).await

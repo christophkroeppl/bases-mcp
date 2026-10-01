@@ -479,6 +479,21 @@ async fn commit_draft(
         return Err(verification_error(&stored, &view, &failures, &yaml));
     }
 
+    // The absence check ran when the draft was PROPOSED. Between then and now a
+    // human may have created a note at this path -- minutes later, while they
+    // read the proposal -- and `create_note` replaces verbatim. Re-check against
+    // the vault as it is now, not against the index as it was, so the commit
+    // refuses rather than overwriting prose it never saw.
+    if resolver.vault().note_paths().contains(&stored.path) {
+        return Err(BasesError::new(format!(
+            "{path} was created after this draft was proposed, so nothing was written. \
+             add_note_to_base only creates a NEW row; use write_note to change a note that \
+             already exists, or pick another path.",
+            path = stored.path
+        ))
+        .with_note(&stored.path));
+    }
+
     resolver.create_note(&stored.path, &content).await?;
     resolver.drafts().release(&stored.id);
     Ok(AddNoteToBaseResult::Commit(DraftCommit {
@@ -1267,6 +1282,15 @@ impl VaultSource for DraftVaultSource {
             return Ok(self.content.clone());
         }
         self.inner.read_text(path).await
+    }
+
+    /// The draft overlays the real vault, so a fresh read still has to consult
+    /// the draft for its own path before going to the backend for anything else.
+    async fn read_fresh(&self, path: &str) -> Result<String> {
+        if path == self.path {
+            return Ok(self.content.clone());
+        }
+        self.inner.read_fresh(path).await
     }
 
     /// Refuses rather than delegating, so verification is incapable of touching

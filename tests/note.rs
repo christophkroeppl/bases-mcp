@@ -14,6 +14,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[allow(unused_imports)]
+use bases_mcp::note::is_base_embed;
 use bases_mcp::note::{
     extract_inline_tags, extract_links, extract_tasks, fence_attrs, is_base_region, parse_note,
     parse_note_with_embeds, serialise, BaseFence, ParsedNote, Segment, SegmentKind, TaskItem,
@@ -539,4 +541,63 @@ fn the_testing_vault_has_the_base_regions_it_is_a_fixture_for() {
         (3, 1),
         "the vault's regions moved: {regions:?}"
     );
+}
+
+/// A CRLF note's Base region must still be a Base region.
+///
+/// Regression. Rust's `(?m)` treats only `\n` as a line terminator, so `$` does
+/// not match before a `\r`. That made every CRLF note's region invisible, and
+/// `write_note` then persisted the agent's deletion of it while reporting
+/// `health: ok` — silent vault corruption on a note the tool claimed to have
+/// protected. JavaScript's multiline `$` does match before `\r`, so this was a
+/// port regression rather than inherited behaviour.
+#[test]
+fn a_crlf_host_note_still_has_a_base_region() {
+    for (label, text) in [
+        ("plain", "# Host\r\n\r\n![[T.base]]\r\n"),
+        ("indented", "# Host\r\n\r\n  ![[T.base]]  \r\n"),
+        ("with view", "# Host\r\n\r\n![[T.base#View]]\r\n"),
+        ("no trailing newline", "# Host\r\n\r\n![[T.base]]"),
+    ] {
+        let note = parse_note_with_embeds("Host.md", text);
+        let regions: Vec<_> = note.segments.iter().filter(|s| is_base_region(s)).collect();
+        assert_eq!(
+            regions.len(),
+            1,
+            "{label}: expected exactly one Base region, found {}",
+            regions.len()
+        );
+        // The region covers the whole line: indentation, the embed, trailing
+        // spaces, and on a CRLF note the `\r`. Consuming the `\r` is what keeps
+        // removal and restoration byte exact; dropping it while keeping the `\n`
+        // would leave a stray carriage return behind.
+        assert_eq!(
+            &text[regions[0].start()..regions[0].end()],
+            expected_region(label),
+            "{label}: the region must span the line and nothing else"
+        );
+        assert_eq!(
+            regions[0].base_path(),
+            Some("T.base"),
+            "{label}: the region must name its Base"
+        );
+    }
+}
+
+/// The byte span a Base region must occupy for each CRLF shape below.
+fn expected_region(label: &str) -> &'static str {
+    match label {
+        "indented" => "  ![[T.base]]  \r",
+        "with view" => "![[T.base#View]]\r",
+        "no trailing newline" => "![[T.base]]",
+        _ => "![[T.base]]\r",
+    }
+}
+
+/// A CRLF note must round-trip byte for byte, like every other note.
+#[test]
+fn a_crlf_note_round_trips_exactly() {
+    let text = "# Host\r\n\r\nintro\r\n\r\n![[T.base]]\r\n\r\ntail\r\n";
+    let note = parse_note_with_embeds("Host.md", text);
+    assert_eq!(serialise(&note.segments), text);
 }

@@ -1040,7 +1040,14 @@ pattern!(external_scheme_re, r"(?i)^[a-z]+://");
 fn base_embed_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?m)^([ \t]*)!\[\[([^\]|#]+?\.base)(#[^\]|]*)?(\|[^\]]*)?\]\][ \t]*$")
+        // The trailing `\r?` is load-bearing. Rust's `(?m)` treats only `\n` as a
+        // line terminator, so `$` does not match before a `\r`. Without it a CRLF
+        // note's Base region is invisible, and `write_note` then persists the
+        // agent's deletion of it and reports success. JavaScript's multiline `$`
+        // does match before `\r`, which is why the TypeScript tree never had this
+        // bug and the port inherited it. A CRLF note comes from `core.autocrlf`,
+        // a Windows sync client, or `sed -i` on an imported file.
+        Regex::new(r"(?m)^([ \t]*)!\[\[([^\]|#]+?\.base)(#[^\]|]*)?(\|[^\]]*)?\]\][ \t]*\r?$")
             .expect("the base embed pattern compiles")
     })
 }

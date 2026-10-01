@@ -1287,3 +1287,94 @@ fn summarised_onto(mut result: QueryResult, summaries: &[(&str, &str)]) -> Query
     );
     result
 }
+
+/// A restore must not corrupt the agent's prose.
+///
+/// Regression. The insertion point for a deleted region was a byte offset taken
+/// from the ORIGINAL text and then indexed into the EDITED text. Once the agent
+/// had added or removed anything above the region, that offset pointed at an
+/// arbitrary character — routinely the middle of a sentence it had just written,
+/// with the embed spliced in between the halves.
+///
+/// Anchoring on the other regions' positions rather than on an offset is what
+/// fixes it, and the assertion has to be about the prose rather than merely that
+/// the embed is present, which is all the existing test checked.
+#[test]
+fn a_restore_does_not_split_a_sentence_the_agent_just_wrote() {
+    let original = "# Host\n\nIntro line.\n\n![[T.base]]\n\nTrailing prose.\n";
+    // The agent deletes the region and writes a long new paragraph above it, so
+    // every byte after the deletion point shifts.
+    let edited = "# Host\n\nIntro line.\n\nA brand new paragraph inserted by the agent, \
+long enough to shift every byte\n\nTrailing prose.\n";
+
+    let result = reconcile_note("Host.md", original, edited);
+
+    assert!(result.removed_region);
+    assert!(
+        result.text.contains("![[T.base]]"),
+        "the embed was not restored"
+    );
+    assert!(
+        !result
+            .text
+            .contains("shift every byte\n![[T.base]]\n offset"),
+        "the embed was spliced into the middle of the sentence"
+    );
+    for phrase in [
+        "A brand new paragraph inserted by the agent, long enough to shift every byte",
+        "Intro line.",
+        "Trailing prose.",
+    ] {
+        assert!(
+            result.text.contains(phrase),
+            "the agent's prose lost a line: {phrase:?}\n---\n{}",
+            result.text
+        );
+    }
+    // The embed sits between the prose blocks, as a whole line.
+    let embed_line = result
+        .text
+        .lines()
+        .position(|line| line == "![[T.base]]")
+        .expect("the embed is on its own line");
+    let intro_line = result
+        .text
+        .lines()
+        .position(|line| line.starts_with("A brand new paragraph"))
+        .expect("the new paragraph survives");
+    assert!(
+        embed_line > intro_line,
+        "the embed must not land above the prose the agent wrote"
+    );
+}
+
+/// Two deleted regions, restored in their original order and not stacked together.
+#[test]
+fn two_deleted_regions_keep_their_order() {
+    let original = "# Host\n\nA\n\n![[One.base]]\n\nMiddle prose.\n\n![[Two.base]]\n\nEnd prose.\n";
+    let edited = "# Host\n\nA\n\nOne short new line.\n\nMiddle prose.\n\nEnd prose.\n";
+
+    let result = reconcile_note("Host.md", original, edited);
+
+    assert!(result.removed_region);
+    assert_eq!(result.refused.len(), 2);
+    assert!(result.text.contains("![[One.base]]"));
+    assert!(result.text.contains("![[Two.base]]"));
+    let one = result.text.find("![[One.base]]").expect("restored");
+    let two = result.text.find("![[Two.base]]").expect("restored");
+    assert!(one < two, "the regions came back in the wrong order");
+    assert!(
+        result.text.contains("One short new line."),
+        "the agent's edit was lost"
+    );
+}
+
+/// A note that is nothing but a deleted region still round-trips.
+#[test]
+fn a_region_only_note_still_round_trips() {
+    let original = "![[Only.base]]\n";
+    let result = reconcile_note("Host.md", original, "");
+
+    assert!(result.removed_region);
+    assert_eq!(result.text, "![[Only.base]]\n");
+}

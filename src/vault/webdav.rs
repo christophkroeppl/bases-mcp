@@ -1590,6 +1590,19 @@ impl VaultSource for WebdavVaultSource {
         Ok(text)
     }
 
+    /// Bypass the cache and go to the server.
+    ///
+    /// Same reasoning as the filesystem backend: the write path needs the note as
+    /// it is now, not as it was when this process last read it. Obsidian may be
+    /// syncing the same vault concurrently, so a cached copy can be arbitrarily
+    /// old.
+    async fn read_fresh(&self, rel: &str) -> Result<String> {
+        let path = vault_relative_path(rel)?;
+        let text = self.fetch_text(DavOperation::Read, &path).await?;
+        self.text_cache.borrow_mut().insert(path, text.clone());
+        Ok(text)
+    }
+
     /// Size and mtime as the SERVER reports them.
     ///
     /// `getlastmodified` is passed through untouched. It is the only mtime that

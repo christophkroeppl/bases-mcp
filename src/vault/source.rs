@@ -89,6 +89,19 @@ pub trait VaultSource {
 
     async fn read_text(&self, path: &str) -> Result<String>;
 
+    /// Read the note as it is RIGHT NOW, bypassing any cache.
+    ///
+    /// This is what the write path uses, and the distinction from `read_text` is
+    /// the whole point: `read_text` may answer from a snapshot taken earlier in
+    /// the process's life, which is right for queries and catastrophic for a
+    /// write. Reconciling an edit against a stale copy and then writing the
+    /// result over the top of whatever the user has since typed destroys their
+    /// work while reporting success.
+    ///
+    /// Obsidian autosaves continuously, so "the user edited this note in the
+    /// last thirty seconds" is the normal case, not an edge case.
+    async fn read_fresh(&self, path: &str) -> Result<String>;
+
     async fn write_text(&self, path: &str, data: &str) -> Result<()>;
 
     async fn stat(&self, path: &str) -> Result<FileStat>;

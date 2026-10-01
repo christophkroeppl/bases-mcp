@@ -1278,7 +1278,8 @@ fn a_prose_edit_is_applied_and_written() {
     let original = futures_block_on(resolver.vault().read_text(note)).expect("reads");
 
     let edited = original.replace("# Invoice export", "# Invoice export, revised");
-    let result = futures_block_on(resolver.write_note(note, &edited)).expect("the edit applies");
+    let result =
+        futures_block_on(resolver.write_note(note, &edited, None)).expect("the edit applies");
     assert_eq!(result.path, note);
     assert!(result.refused.is_empty());
     assert!(!result.removed_region);
@@ -1301,7 +1302,7 @@ fn an_edit_that_changes_nothing_does_not_touch_the_file() {
         .len();
 
     let result =
-        futures_block_on(resolver.write_note(note, &original)).expect("a no-op edit applies");
+        futures_block_on(resolver.write_note(note, &original, None)).expect("a no-op edit applies");
     assert_eq!(result.text, original);
     assert_eq!(
         std::fs::metadata(dir.path().join(note))
@@ -1324,7 +1325,7 @@ fn editing_a_base_region_is_refused_and_the_rest_of_the_edit_still_lands() {
     let edited = projection
         .content
         .replace("A root-level host note", "A host note");
-    let result = futures_block_on(resolver.write_note(note, &edited)).expect("applies");
+    let result = futures_block_on(resolver.write_note(note, &edited, None)).expect("applies");
 
     assert!(
         result.refused.is_empty(),
@@ -1357,7 +1358,7 @@ fn deleting_a_base_region_is_refused_and_the_region_is_restored() {
     assert!(original.contains("![[Tickets.base]]"));
 
     let edited = original.replace("![[Tickets.base]]", "");
-    let result = futures_block_on(resolver.write_note(note, &edited)).expect("applies");
+    let result = futures_block_on(resolver.write_note(note, &edited, None)).expect("applies");
 
     assert!(result.removed_region, "the deletion is reported");
     assert_eq!(result.refused.len(), 1);
@@ -1378,7 +1379,7 @@ fn deleting_a_base_region_is_refused_and_the_region_is_restored() {
 #[test]
 fn a_note_that_does_not_exist_cannot_be_written() {
     let (_dir, resolver) = sandbox();
-    let message = message_of_async(|| resolver.write_note("Tickets/__nope.md", "# nope\n"));
+    let message = message_of_async(|| resolver.write_note("Tickets/__nope.md", "# nope\n", None));
     assert!(message.contains("Note not found"), "{message}");
 }
 
@@ -1638,4 +1639,108 @@ fn a_filter_over_a_chained_formula_verifies_the_way_the_query_pipeline_evaluates
         )
     });
     assert_eq!(result.written(), Some("Notes/Beta.md"));
+}
+
+/// A concurrent external edit must survive a write.
+///
+/// Regression. `write_note` read the note through the cached vault, so it
+/// reconciled the agent's edit against a snapshot from whenever the note was last
+/// read and wrote the result over the top. With Obsidian autosaving
+/// continuously, one second of typing was enough to lose the user's paragraph,
+/// and the response said `health: ok`.
+///
+/// The fix is to read the note fresh at the top of the write. This test performs
+/// the sequence that used to lose data: read, then have someone else write, then
+/// write the agent's edit of the ORIGINAL copy.
+#[test]
+fn an_external_edit_made_after_the_read_is_not_clobbered() {
+    let (dir, resolver) = sandbox();
+    let note = "Tickets/Invoice export.md";
+
+    // The agent reads the note, exactly as the designed flow intends.
+    let as_read = futures_block_on(resolver.vault().read_text(note)).expect("reads");
+
+    // The user edits the same note in Obsidian, which autosaves it.
+    let user_text = format!(
+        "{as_read}\nTWO MINUTES LATER: the user rewrote this whole paragraph in Obsidian, adding \
+several new lines of real prose that must not be lost.\n"
+    );
+    std::fs::write(dir.path().join(note), &user_text).expect("the user's save lands");
+
+    // The agent writes back its edit of the copy it read.
+    let agent_edit = as_read.replace("# Invoice export", "# Invoice export, revised");
+    let hash = futures_block_on(resolver.read_note(note, NoteOptions::raw()))
+        .expect("reads")
+        .base_hash;
+
+    // The conditional write is refused, and the user's paragraph survives.
+    let message = message_of_async(|| resolver.write_note(note, &agent_edit, Some(&hash)));
+    assert!(
+        message.contains("changed since you read it"),
+        "the stale write was not refused: {message}"
+    );
+    let on_disk = std::fs::read_to_string(dir.path().join(note)).expect("the note is on disk");
+    assert!(
+        on_disk.contains("the user rewrote this whole paragraph"),
+        "the user's edit was destroyed. On disk:\n{on_disk}"
+    );
+}
+
+/// The same test, but the two edits touch different paragraphs.
+///
+/// Reconciling against a stale copy loses whichever change was made outside the
+/// agent's view. Here the user appends and the agent rewrites a heading, so the
+/// correct result contains both.
+#[test]
+fn a_stale_read_does_not_lose_an_appended_paragraph() {
+    let (dir, resolver) = sandbox();
+    let note = "Tickets/Invoice export.md";
+    // Read, and take the hash of what was read.
+    let view = futures_block_on(resolver.read_note(note, NoteOptions::raw())).expect("reads");
+    let agent_edit = view.raw.replace("Invoice export", "Invoice export v2");
+
+    // The user saves the note, appending a ticked task.
+    std::fs::write(
+        dir.path().join(note),
+        format!("{}\n\n- [x] a task the user ticked\n", view.raw),
+    )
+    .expect("the user's save lands");
+
+    futures_block_on(resolver.write_note(note, &agent_edit, Some(&view.base_hash)))
+        .expect_err("the stale write must be refused");
+
+    let on_disk = std::fs::read_to_string(dir.path().join(note)).expect("reads");
+    assert!(on_disk.contains("a task the user ticked"), "{on_disk}");
+}
+
+/// Re-reading and reapplying succeeds, which is the whole point of refusing.
+#[test]
+fn a_conditional_write_succeeds_when_nothing_changed() {
+    let (_dir, resolver) = sandbox();
+    let note = "Tickets/Invoice export.md";
+
+    let view = futures_block_on(resolver.read_note(note, NoteOptions::raw())).expect("reads");
+    let edited = view
+        .raw
+        .replace("# Invoice export", "# Invoice export, revised");
+
+    futures_block_on(resolver.write_note(note, &edited, Some(&view.base_hash)))
+        .expect("an uncontested conditional write applies");
+
+    let on_disk = futures_block_on(resolver.read_note(note, NoteOptions::raw())).expect("reads");
+    assert!(on_disk.raw.contains("revised"), "{}", on_disk.raw);
+}
+
+/// A wrong hash is refused rather than applied, including a hash of nothing.
+#[test]
+fn a_mismatched_hash_is_refused() {
+    let (dir, resolver) = sandbox();
+    let note = "Tickets/Invoice export.md";
+    let before = std::fs::read_to_string(dir.path().join(note)).expect("reads");
+
+    futures_block_on(resolver.write_note(note, "# clobbered\n", Some("0000000000000000")))
+        .expect_err("a wrong hash must be refused");
+
+    let after = std::fs::read_to_string(dir.path().join(note)).expect("reads");
+    assert_eq!(before, after, "a refused write changed the note");
 }

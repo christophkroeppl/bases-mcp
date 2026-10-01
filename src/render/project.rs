@@ -353,15 +353,39 @@ pub fn reconcile_note(note_path: &str, original: &str, edited: &str) -> Reconcil
 
     // Rebuild: walk the edited segments, restore the paired regions, and drop
     // anything the agent added.
+    //
+    // A region the agent deleted is re-inserted according to its position among
+    // the OTHER regions, using the original index as the ordering key. Byte
+    // offsets are not usable here: an offset into the original text refers to a
+    // document that the agent's edits have already changed, so anchoring on one
+    // put the embed wherever the edit happened to shift things to -- in the
+    // middle of a sentence the agent had just written.
     let mut refused: Vec<RefusedRegion> = Vec::new();
     let mut out = String::new();
     let mut regions = edited_regions.iter();
+    // Missing regions still to emit, ascending by original index.
+    let mut pending: std::collections::VecDeque<&BaseRegionRef> = missing.into();
+    pending.make_contiguous().sort_by_key(|region| region.index);
+
+    let mut removed_any = false;
+
     for segment in &after.segments {
         if !is_base_region(segment) {
             out.push_str(segment.raw());
             continue;
         }
         let region = regions.next().expect("every Base region has a ref");
+        // Anything the agent deleted that belongs BEFORE this region goes back
+        // first, so the original ordering survives.
+        while let Some(earlier) = pending.front() {
+            if earlier.index >= region.index {
+                break;
+            }
+            let earlier = pending.pop_front().expect("front was just read");
+            push_line(&mut out, &original[earlier.start..earlier.end]);
+            refused.push(removal_refusal(earlier));
+            removed_any = true;
+        }
         let Some(original_raw) = pairs.get(&region.index) else {
             refused.push(RefusedRegion {
                 index: region.index,
@@ -394,32 +418,45 @@ add_note_to_base to be guided through creating a matching note."
         out.push_str(original_raw);
     }
 
-    // Re-insert any region the agent deleted, at its original position.
-    let removed_region = !missing.is_empty();
-    let mut text = out;
-    for region in missing {
-        let raw = original[region.start..region.end].to_string();
-        text = match newline_at_or_after(&text, region.start) {
-            // Spliced in just past the newline the region's own offset pointed
-            // at, so it lands on its own line as it did.
-            Some(anchor) => format!("{}\n{raw}\n{}", &text[..anchor + 1], &text[anchor + 1..]),
-            None => format!("{text}\n{raw}\n"),
-        };
-        refused.push(RefusedRegion {
-            index: region.index,
-            base_path: region.base_path.clone(),
-            reason: "The base region was removed.".to_string(),
-            guidance: "Base regions are never removed by a note edit. Restore the embed, or \
-delete the base region deliberately outside this tool."
-                .to_string(),
-        });
+    // Whatever is still pending belongs after every surviving region.
+    while let Some(later) = pending.pop_front() {
+        push_line(&mut out, &original[later.start..later.end]);
+        refused.push(removal_refusal(later));
+        removed_any = true;
     }
 
     ReconcileResult {
-        text,
+        removed_region: removed_any,
+        text: out,
         refused,
-        removed_region,
     }
+}
+
+/// The report for a Base region the agent deleted outright.
+fn removal_refusal(region: &BaseRegionRef) -> RefusedRegion {
+    RefusedRegion {
+        index: region.index,
+        base_path: region.base_path.clone(),
+        reason: "The base region was removed.".to_string(),
+        guidance: "Base regions are never removed by a note edit. Restore the embed, or delete \
+the base region deliberately outside this tool."
+            .to_string(),
+    }
+}
+
+/// Append `line` to `out` as a whole line, normalising both joins.
+///
+/// A Base region is always a complete line in a note, so it has to start on one
+/// and end on one. Assuming the surrounding text already cooperates is what let a
+/// restore splice an embed into the middle of a sentence the agent had just
+/// written: the insertion point was a byte offset from the *original* text, and
+/// the agent's edits had shifted everything after it.
+fn push_line(out: &mut String, line: &str) {
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(line);
+    out.push('\n');
 }
 
 /// Do two regions name the same thing?
@@ -453,17 +490,4 @@ fn same_region(edited: &BaseRegionRef, original: &BaseRegionRef) -> bool {
 /// never touched.
 fn embed_base_path(segment: &Segment) -> Option<String> {
     segment.base_embed().map(|embed| embed.base_path.clone())
-}
-
-/// The byte offset of the first newline at or after `from`, or `None`.
-///
-/// Byte offsets, because `from` is a byte offset: the testing vault's umlauts
-/// make a character offset wrong here, and `text[from..]` would panic rather
-/// than merely disagree.
-fn newline_at_or_after(text: &str, from: usize) -> Option<usize> {
-    let mut start = from.min(text.len());
-    while start < text.len() && !text.is_char_boundary(start) {
-        start += 1;
-    }
-    text.get(start..)?.find('\n').map(|offset| start + offset)
 }
