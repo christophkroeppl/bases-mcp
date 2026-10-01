@@ -95,21 +95,40 @@ export async function project(
   render: (region: BaseRegionRef) => string | RenderedRegion | Promise<string | RenderedRegion>,
 ): Promise<string> {
   const out: string[] = [];
-  for (const seg of note.segments) {
+  for (let at = 0; at < note.segments.length; at++) {
+    const seg = note.segments[at]!;
     if (!isBaseRegion(seg)) {
       out.push(seg.raw);
       continue;
     }
     const ref = regionRef(seg);
     const rendered = await render(ref);
-    if (typeof rendered === "string") {
-      out.push(rendered.endsWith("\n") ? rendered : `${rendered}\n`);
-    } else {
-      out.push(rendered.text);
+    const text = typeof rendered === "string" ? rendered : rendered.text;
+    out.push(text);
+    // A Base region occupies whole lines, so its replacement has to end at a
+    // line boundary. It does NOT get a newline added when the boundary is
+    // already there, and it usually is: the prose after a region begins with the
+    // newline that ended the region's own line. Adding one anyway left a stray
+    // blank line in every Projection, and because `write_note` reconciles rather
+    // than writes, that newline came back out as a spurious edit.
+    if (!endsItsOwnLine(text, note.segments[at + 1])) {
       out.push("\n");
     }
   }
   return out.join("");
+}
+
+/**
+ * Whether this replacement already ends where a line ends.
+ *
+ * True when the text ends with a newline, when nothing follows the region (the
+ * region was last in the note), or when the following segment starts with the
+ * newline that terminated the region's own line.
+ */
+function endsItsOwnLine(text: string, next: ParsedNote["segments"][number] | undefined): boolean {
+  if (text.endsWith("\n")) return true;
+  if (next === undefined) return true;
+  return next.raw.startsWith("\n");
 }
 
 /** Identifies one base region within a note. */

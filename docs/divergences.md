@@ -300,3 +300,37 @@ pipeline's sort depends on. The effect is that a rendered date cell in the Rust
 port carries a time component the TypeScript dropped, which **will** show up in
 `format=md` byte parity once Obsidian is reachable. Recorded here so it is not
 discovered as a mystery later.
+
+### `project` appended a stray newline (fixed in both)
+
+The Projection builder added a newline after every rendered region without
+checking whether the boundary already had one — and it almost always did, because
+the prose following a region begins with the newline that ended the region's own
+line. Since `write_note` reconciles rather than writes, that newline came back out
+as a spurious edit to the host note, so a clean read-edit-write cycle was not a
+no-op.
+
+Fixed in both implementations. The round-trip is now byte-identical, and the
+equivalence test asserts exactly that rather than comparing modulo trailing
+whitespace.
+
+## TypeScript and Rust: verified equivalent
+
+Both implementations are live and both pass their own suites. They were also run
+side by side through a real MCP stdio session, eleven cases across all six tools,
+and compared as parsed JSON (key order in a JSON object is not meaningful):
+
+| | |
+|---|---|
+| Equivalent (key order ignored) | **11 / 11** |
+| Byte-identical text blocks | 6 / 11 |
+
+The five non-byte-identical cases differ only in the key order of the
+human-readable ```` ```json ```` text block: the TypeScript puts `rows` first,
+Rust puts the metadata first. `structuredContent` — what a machine reads — is
+identical in every case, and `format=markdown` is byte-identical, which is the
+surface the parity suite compares against the Obsidian CLI.
+
+`serde_json`'s `preserve_order` feature is enabled so insertion order is kept
+rather than sorted; the remaining difference is the order the payload is built
+in, which is a presentation choice with no bearing on the result.

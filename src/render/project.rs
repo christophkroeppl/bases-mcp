@@ -19,6 +19,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
 use crate::note::{fence_attrs, is_base_region, parse_note_with_embeds, ParsedNote, Segment};
 
 /// The fence language for a rendered base. Deliberately not `base`.
@@ -34,15 +36,24 @@ pub const RENDER_FENCE: &str = "base-rendered";
 /// Every field is optional because the shapes are genuinely different: a live
 /// inline fence has a view but no Base path, a file embed has a path and
 /// possibly a view, and only a host-bound render has a context.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Serialized for `get_note`'s `regions`, which is the provenance an agent needs
+/// to reason about a fence it is about to hand back. Absent fields are skipped
+/// rather than emitted as null, because a fence info string never carried them
+/// and an agent comparing the two must not see a difference that is not there.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct FenceProvenance {
     /// The `.base` file the region came from, when it was a file embed.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// The view name rendered.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub view: Option<String>,
     /// The host note bound to `this`, when one was supplied.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
     /// Rows the view resolved to.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<usize>,
 }
 

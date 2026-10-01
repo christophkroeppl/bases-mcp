@@ -20,11 +20,19 @@ path = "src/lib.rs"
 # this has to talk to. `schemars` is not optional here: tool input schemas are
 # derived from the parameter types, and a tool with no schema is a tool an
 # agent cannot call correctly.
-rmcp = { version = "3", features = ["server", "transport-io", "schemars"] }
+#
+# `local` is not optional either, and the reason is the vault: it is indexed
+# behind `RefCell` and every `file.*` accessor is an `Rc` closure reaching back
+# into that index, so the Resolver is `!Send` by construction. `local` is rmcp's
+# mode for a single-threaded server, and it is what lets a handler hold one.
+rmcp = { version = "3", features = ["server", "transport-io", "schemars", "local"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
+# Draft ids are opaque handles an agent resends, and a v4 UUID is the shape the
+# tool surface documents. Nothing reads them back, only compares them.
+uuid = { version = "1", features = ["v4"] }
 # One vault backend, several implementations: the fs and WebDAV sources and the
 # draft overlay are all reached as a single trait object.
 async-trait = "0.1"

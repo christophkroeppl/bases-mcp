@@ -74,7 +74,11 @@ pub struct NoteRecord {
 
 /// The index.
 pub struct Vault {
-    source: Box<dyn VaultSource>,
+    /// `Rc`, not `Box`, so a caller that needs the backend can keep reading
+    /// through it while an overlay vault is built over the same listing. The
+    /// verify step behind `add_note_to_base` needs exactly that, and moving the
+    /// box out is not an option — the index is still reading from it.
+    source: Rc<dyn VaultSource>,
     /// `Rc` per record so `note()` can hand one out without holding the map
     /// borrowed. The map is a `BTreeMap` rather than an insertion-ordered one
     /// because `list()` is sorted on every backend, so key order IS registration
@@ -97,6 +101,11 @@ impl std::fmt::Debug for Vault {
 
 impl Vault {
     pub fn new(source: Box<dyn VaultSource>) -> Self {
+        Self::with_source(Rc::from(source))
+    }
+
+    /// Index a vault whose backend is already shared.
+    pub fn with_source(source: Rc<dyn VaultSource>) -> Self {
         Self {
             source,
             notes: RefCell::new(BTreeMap::new()),
@@ -113,6 +122,15 @@ impl Vault {
     /// The underlying backend, for writes that must bypass the snapshot.
     pub fn backend(&self) -> &dyn VaultSource {
         self.source.as_ref()
+    }
+
+    /// The backend, shared.
+    ///
+    /// For an overlay index built over the same listing — see
+    /// [`crate::drafts`], which splices one unsaved note into the real backend
+    /// so verification exercises the real link resolution rather than a stand-in.
+    pub fn shared_source(&self) -> Rc<dyn VaultSource> {
+        Rc::clone(&self.source)
     }
 
     /// Build the index. Safe to call repeatedly; use [`Vault::reload`] to force a

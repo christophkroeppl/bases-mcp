@@ -698,14 +698,13 @@ describe("writeText, ensureDir and createNote", () => {
       expect(result.text).not.toContain("base-rendered");
       expect(result.refused).toEqual([]);
       expect(result.removedRegion).toBe(false);
-      // Compared modulo trailing whitespace on purpose. A Projection puts a
-      // newline after each rendered region, and both notes that carry nothing but
-      // an embed end with the embed and no final newline, so round-tripping either
-      // one appends exactly one. That is the Projection being lossy about
-      // whitespace, not a backend difference, and it is pinned here so a later
-      // change to it has to be deliberate.
-      expect(result.text.trimEnd()).toBe(original.trimEnd());
-      expect(result.text).not.toBe(original);
+      // Byte-identical, not merely equal modulo whitespace. This used to append
+      // exactly one newline, because `project` added one after every rendered
+      // region without checking whether the boundary was already there — and
+      // since `write_note` reconciles rather than writes, that newline came back
+      // out as a spurious edit. Read, edit the prose, write back is the DESIGNED
+      // flow, so it must not perturb the host note at all.
+      expect(result.text).toBe(original);
     },
     SANDBOX_TIMEOUT_MS,
   );
