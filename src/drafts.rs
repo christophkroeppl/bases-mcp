@@ -38,6 +38,7 @@ use serde_yaml::{Mapping, Value as Yaml};
 
 use crate::ast::{Literal, Node, NodeKind};
 use crate::base::{order_formulas, resolve_host_note, select_view, BaseFile, BaseView, FilterNode};
+use crate::depth::{Depth, FILTER};
 use crate::error::{BasesError, Result};
 use crate::evaluator::{evaluate, EvalContext, RESERVED};
 use crate::note::parse_note_with_embeds;
@@ -622,6 +623,36 @@ fn probe(
     failures: &mut Vec<FilterProbe>,
     collect: bool,
 ) -> bool {
+    probe_within(node, where_, ctx, failures, collect, &Depth::new())
+}
+
+/// The walk itself, against a budget the caller holds.
+///
+/// Bounded for the same reason [`crate::base::query`]'s `run_filter` is, and
+/// because `probe` is a third independent copy of the tree walk that this
+/// module has to keep agreeing with it.
+///
+/// A refusal is not an error return, because `probe` answers `bool`, so an
+/// over-nested subtree reports itself as a leaf that did not match — which is
+/// the shape an agent correcting its frontmatter already knows how to read.
+/// Under a `not:` that inverts into a group that holds, since a child that did
+/// not match is exactly what `not:` wants. That costs a third return value to
+/// say properly, and the path is not reachable to get it wrong: the YAML loader
+/// refuses a filter tree past 63 levels and [`crate::depth`] spends
+/// [`crate::depth::MAX_DEPTH`], so the refusal never fires from a parsed Base.
+/// Recorded rather than threaded through, because the day it does become
+/// reachable it should be fixed loudly.
+fn probe_within(
+    node: &FilterNode,
+    where_: &str,
+    ctx: &EvalContext,
+    failures: &mut Vec<FilterProbe>,
+    collect: bool,
+    depth: &Depth,
+) -> bool {
+    let Ok(_level) = depth.enter(FILTER) else {
+        return false;
+    };
     match node {
         // A draft that omits a property the filter dereferences makes the
         // expression THROW rather than evaluate to false. From the agent's point
@@ -674,21 +705,22 @@ fn probe(
         FilterNode::And(children) => {
             let mut all = true;
             for (index, child) in children.iter().enumerate() {
-                let held = probe(
+                let held = probe_within(
                     child,
                     &format!("{where_}.and[{index}]"),
                     ctx,
                     failures,
                     collect,
+                    depth,
                 );
                 all = all && held;
             }
             all
         }
         FilterNode::Or(children) => {
-            let ok = children
-                .iter()
-                .any(|child| probe(child, &format!("{where_}.or"), ctx, failures, false));
+            let ok = children.iter().any(|child| {
+                probe_within(child, &format!("{where_}.or"), ctx, failures, false, depth)
+            });
             if !ok && collect {
                 failures.push(FilterProbe {
                     where_: where_.to_string(),
@@ -700,9 +732,9 @@ fn probe(
         }
         // `not` is NAND, not negation: none of these may be true.
         FilterNode::Not(children) => {
-            let ok = children
-                .iter()
-                .all(|child| !probe(child, &format!("{where_}.not"), ctx, failures, false));
+            let ok = children.iter().all(|child| {
+                !probe_within(child, &format!("{where_}.not"), ctx, failures, false, depth)
+            });
             if !ok && collect {
                 failures.push(FilterProbe {
                     where_: where_.to_string(),

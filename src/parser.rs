@@ -12,6 +12,7 @@
 //!     real vaults use both spellings.
 
 use crate::ast::{BinOp, Literal, Node, NodeKind, Precedence, Span, UnaryOp};
+use crate::depth::{Depth, EXPRESSION};
 use crate::error::{BasesError, Result};
 use crate::lexer::{lex, Tok, Token};
 
@@ -21,7 +22,7 @@ pub fn parse(input: &str) -> Result<Node> {
         pos: 0,
         source_len: input.len(),
     };
-    let node = parser.parse_expression(Precedence::Lowest)?;
+    let node = parser.parse_expression(Precedence::Lowest, &Depth::new())?;
     parser.finish()?;
     Ok(node)
 }
@@ -74,19 +75,27 @@ impl Parser {
         Ok(())
     }
 
-    fn parse_expression(&mut self, precedence: Precedence) -> Result<Node> {
-        let mut left = self.parse_prefix()?;
+    /// Parse one expression at `precedence`, spending a nesting level.
+    ///
+    /// The spend is here rather than in `parse_prefix` because this is the frame
+    /// that recurses: every `(`, `!`, `-`, `[` and right-hand operand costs one
+    /// more of these, and each `Result` in the frame is stack the guard does not
+    /// get back. This is the walk that sets the crate's depth limit — see
+    /// [`crate::depth`] for the measurement behind the number.
+    fn parse_expression(&mut self, precedence: Precedence, depth: &Depth) -> Result<Node> {
+        let _level = depth.enter(EXPRESSION)?;
+        let mut left = self.parse_prefix(depth)?;
         while let Some((op, start)) = self.peek_infix() {
             let prec = precedence_of(op);
             if prec < precedence {
                 break;
             }
-            left = self.parse_infix_rest(op, start, left, prec)?;
+            left = self.parse_infix_rest(op, start, left, prec, depth)?;
         }
         Ok(left)
     }
 
-    fn parse_prefix(&mut self) -> Result<Node> {
+    fn parse_prefix(&mut self, depth: &Depth) -> Result<Node> {
         let tok = self.peek().clone();
         let span = Span {
             start: tok.start,
@@ -135,7 +144,7 @@ impl Parser {
             }
             Tok::LParen => {
                 self.advance();
-                let inner = self.parse_expression(Precedence::Lowest)?;
+                let inner = self.parse_expression(Precedence::Lowest, depth)?;
                 let close = self.next()?;
                 if close.kind != Tok::RParen {
                     return Err(
@@ -154,11 +163,11 @@ impl Parser {
             }
             Tok::LBracket => {
                 self.advance();
-                self.parse_list(span.start)
+                self.parse_list(span.start, depth)
             }
             Tok::Bang => {
                 self.advance();
-                let operand = self.parse_expression(Precedence::Unary)?;
+                let operand = self.parse_expression(Precedence::Unary, depth)?;
                 let end = operand.span.end;
                 Ok(Node::new(
                     NodeKind::Unary {
@@ -173,7 +182,7 @@ impl Parser {
             }
             Tok::Minus => {
                 self.advance();
-                let operand = self.parse_expression(Precedence::Unary)?;
+                let operand = self.parse_expression(Precedence::Unary, depth)?;
                 let end = operand.span.end;
                 Ok(Node::new(
                     NodeKind::Unary {
@@ -198,7 +207,7 @@ impl Parser {
         }
     }
 
-    fn parse_list(&mut self, start: usize) -> Result<Node> {
+    fn parse_list(&mut self, start: usize, depth: &Depth) -> Result<Node> {
         let mut elements = Vec::new();
         if self.at(Tok::RBracket) {
             let end = self.peek().end;
@@ -206,7 +215,7 @@ impl Parser {
             return Ok(Node::new(NodeKind::List(elements), Span { start, end }));
         }
         loop {
-            elements.push(self.parse_expression(Precedence::Lowest)?);
+            elements.push(self.parse_expression(Precedence::Lowest, depth)?);
             if self.at(Tok::Comma) {
                 self.advance();
                 if self.at(Tok::RBracket) {
@@ -266,6 +275,7 @@ impl Parser {
         start: usize,
         left: Node,
         prec: Precedence,
+        depth: &Depth,
     ) -> Result<Node> {
         // The operator token itself is consumed. Its value is discarded, but the
         // advance is load-bearing: the caller's loop would otherwise never make
@@ -278,7 +288,7 @@ impl Parser {
                 let mut args = Vec::new();
                 if !self.at(Tok::RParen) {
                     loop {
-                        args.push(self.parse_expression(Precedence::Lowest)?);
+                        args.push(self.parse_expression(Precedence::Lowest, depth)?);
                         if self.at(Tok::Comma) {
                             self.advance();
                             if self.at(Tok::RParen) {
@@ -329,7 +339,7 @@ impl Parser {
                 ))
             }
             Infix::Index => {
-                let index = self.parse_expression(Precedence::Lowest)?;
+                let index = self.parse_expression(Precedence::Lowest, depth)?;
                 let close = self.next()?;
                 if close.kind != Tok::RBracket {
                     return Err(
@@ -348,7 +358,7 @@ impl Parser {
                 ))
             }
             Infix::Not => {
-                let operand = self.parse_expression(Precedence::Unary)?;
+                let operand = self.parse_expression(Precedence::Unary, depth)?;
                 let end = operand.span.end;
                 Ok(Node::new(
                     NodeKind::Unary {
@@ -359,7 +369,7 @@ impl Parser {
                 ))
             }
             Infix::Binary(bin) => {
-                let right = self.parse_expression(prec)?;
+                let right = self.parse_expression(prec, depth)?;
                 let end = right.span.end;
                 Ok(Node::new(
                     NodeKind::Binary {

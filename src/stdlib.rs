@@ -1699,7 +1699,7 @@ fn m_object_values(
 
 /// Invoke the lambda once, for element `index` with the given accumulator.
 fn call(
-    runner: &crate::evaluator::LambdaRunner,
+    runner: &crate::evaluator::LambdaRunner<'_>,
     body: &crate::ast::Node,
     index: usize,
     value: &BasesValue,
@@ -1721,7 +1721,7 @@ pub fn run_higher_order(
     target: &BasesValue,
     name: &str,
     _arity: u8,
-    runner: crate::evaluator::LambdaRunner,
+    runner: crate::evaluator::LambdaRunner<'_>,
     body: &crate::ast::Node,
     seed: Option<BasesValue>,
     ctx: &EvalContext,
