@@ -351,3 +351,34 @@ describe("display stringification", () => {
     expect(toDisplayString(null)).toBe("");
   });
 });
+
+describe("comparing a list against a scalar does not recurse", () => {
+  // Regression: `tags == 1` used to wrap the pair in lists and re-enter the same
+  // branch, overflowing the stack and killing the server. Any filter comparing a
+  // list-valued property to a scalar hit it, so the corpus did not have to be
+  // malformed -- an ordinary `tags == "x"` in a user's base would do it.
+  const ctxWith = (tags: BasesValue, prop: string): EvalContext =>
+    makeCtx({ note: { [prop]: tags } });
+
+  test("a one-element list equals its bare element", () => {
+    expect(ev('lst == "a"', ctxWith(["a"], "lst"))).toBe(true);
+    expect(ev('lst == "b"', ctxWith(["a"], "lst"))).toBe(false);
+  });
+
+  test("a longer list never equals a bare scalar", () => {
+    expect(ev('lst == "a"', ctxWith(["a", "b"], "lst"))).toBe(false);
+    expect(ev('lst != "a"', ctxWith(["a", "b"], "lst"))).toBe(true);
+  });
+
+  test("comparing a list to a number, null or boolean is false, not a crash", () => {
+    expect(ev("lst == 1", ctxWith(["a"], "lst"))).toBe(false);
+    expect(ev("lst == null", ctxWith(["a"], "lst"))).toBe(false);
+    expect(ev("lst == true", ctxWith(["a"], "lst"))).toBe(false);
+    expect(ev("lst == []", ctxWith([], "lst"))).toBe(true);
+  });
+
+  test("an empty list against a scalar is false in both directions", () => {
+    expect(ev("lst == 0", ctxWith([], "lst"))).toBe(false);
+    expect(ev("lst != 0", ctxWith([], "lst"))).toBe(true);
+  });
+});

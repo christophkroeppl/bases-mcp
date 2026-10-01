@@ -468,8 +468,11 @@ export function valuesEqual(a: BasesValue, b: BasesValue): boolean {
     if (a instanceof FileValue && typeof b === "string") return a.path === b || a.basename === b;
     if (b instanceof FileValue && typeof a === "string") return b.path === a || b.basename === a;
   }
-  if (isList(a) && !isList(b)) return valuesEqual([a], [b]);
-  if (!isList(a) && isList(b)) return valuesEqual([a], [b]);
+  // A list equals a bare scalar only when it holds exactly one element. Wrapping
+  // the pair in lists instead would re-enter this branch forever, because the
+  // wrapper is itself a list.
+  if (isList(a) && !isList(b)) return a.length === 1 && valuesEqual(a[0]!, b);
+  if (!isList(a) && isList(b)) return b.length === 1 && valuesEqual(a, b[0]!);
   if (isList(a) && isList(b)) {
     if (a.length !== b.length) return false;
     return a.every((x, i) => valuesEqual(x, b[i]!));
@@ -490,6 +493,26 @@ export function valuesEqual(a: BasesValue, b: BasesValue): boolean {
     if (isDuration(a) && isDuration(b)) {
       return a.ms === b.ms && a.months === b.months && a.years === b.years;
     }
+  }
+  if (a === null || b === null) return a === null && b === null;
+  // A checkbox crosses with a number the same way: `true == 1`, `false == 0`,
+  // `true == 2` false. Obsidian reaches this through raw-data `==`, where a
+  // boolean's data is 1 or 0.
+  if (typeof a === "boolean" && typeof b === "number") return (a ? 1 : 0) === b;
+  if (typeof b === "boolean" && typeof a === "number") return (b ? 1 : 0) === a;
+  // Strings cross-compare to numbers and booleans the way JavaScript's `==`
+  // does, by coercing the string to a number. Obsidian's DataValue.looseEquals
+  // compares raw data with `==`, so these are its results, not our preferences:
+  // `"5" == 5`, `"" == 0`, `"" == false`, `"1" == true`, and `"abc" == 5` false.
+  //
+  // `toNumberLoose` is deliberately not used: it rejects "" as "no number",
+  // which is right for arithmetic and wrong here, because JavaScript's ToNumber
+  // maps "" to 0 and that is exactly why `"" == 0` is true in Obsidian.
+  if (typeof a === "string" && (typeof b === "number" || typeof b === "boolean")) {
+    return jsLooseNumber(a) === (typeof b === "boolean" ? (b ? 1 : 0) : b);
+  }
+  if (typeof b === "string" && (typeof a === "number" || typeof a === "boolean")) {
+    return jsLooseNumber(b) === (typeof a === "boolean" ? (a ? 1 : 0) : a);
   }
   return a === b;
 }
@@ -802,6 +825,14 @@ export function toDisplayString(v: BasesValue): string {
     return JSON.stringify(v);
   }
   return String(v);
+}
+
+/** JavaScript's ToNumber for a string, as `==` applies it. Returns NaN for
+ * anything that does not convert, because NaN is how "not equal" is expressed
+ * here rather than by returning null. `""` converts to 0. */
+function jsLooseNumber(v: string): number {
+  const trimmed = v.trim();
+  return trimmed === "" ? 0 : Number(trimmed);
 }
 
 export function toNumberLoose(v: BasesValue): number | null {
