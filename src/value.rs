@@ -404,6 +404,18 @@ pub fn compare(a: &BasesValue, b: &BasesValue) -> Option<std::cmp::Ordering> {
             }
             Some(x.len().cmp(&y.len()))
         }
+        // A list compares equal to a bare scalar only when it holds exactly one
+        // element, which is Obsidian's ListValue.looseEquals against a
+        // non-list. Wrapping the pair in lists instead would recurse forever,
+        // because the wrapper is itself a list.
+        (List(x), other) => match x.as_slice() {
+            [only] => compare(only, other),
+            _ => None,
+        },
+        (other, List(y)) => match y.as_slice() {
+            [only] => compare(other, only),
+            _ => None,
+        },
         (Link { .. }, Link { .. }) => Some(a.link_target().cmp(&b.link_target())),
         (File(x), File(y)) => Some(x.path.cmp(&y.path)),
         // Namespaces compare by rendered content: `BasesValue` is not `Ord`, and
@@ -411,22 +423,49 @@ pub fn compare(a: &BasesValue, b: &BasesValue) -> Option<std::cmp::Ordering> {
         (Namespace(x), Namespace(y)) => Some(render_namespace(x).cmp(&render_namespace(y))),
         // A number and the string that spells it compare equal, which is what
         // makes `file.size == 42` and `status == "active"` both behave.
-        (Number(n), String(s)) | (String(s), Number(n)) => {
-            s.parse::<f64>().ok().and_then(|p| p.partial_cmp(n))
-        }
-        (Bool(x), String(s)) | (String(s), Bool(x)) => {
-            let want = if *x { "true" } else { "false" };
-            Some(want.cmp(s.as_str()))
-        }
+        //
+        // The empty string coerces to 0 rather than failing to parse, because
+        // Obsidian compares raw data with JavaScript `==` and ToNumber("") is 0.
+        // A string that does not convert is genuinely unordered against a
+        // number, which is why `"abc" > 1` is false for every operator.
+        // Split rather than merged into one `|` arm, because the arms below are
+        // not symmetric: merging them compares the parsed string against the
+        // number on both sides, which reverses the answer.
+        (Number(n), String(s)) => js_to_number(s).and_then(|p| n.partial_cmp(&p)),
+        (String(s), Number(n)) => js_to_number(s).and_then(|p| p.partial_cmp(n)),
+        // A checkbox crosses with a number the same way, because a boolean's raw
+        // data is 1 or 0: `true == 1`, `false == 0`, `true == 2` false.
+        (Bool(x), Number(n)) => f64::from(u8::from(*x)).partial_cmp(n),
+        (Number(n), Bool(x)) => n.partial_cmp(&f64::from(u8::from(*x))),
+        (Bool(x), String(s)) => f64::from(u8::from(*x)).partial_cmp(&js_to_number(s)?),
+        (String(s), Bool(x)) => js_to_number(s)?.partial_cmp(&f64::from(u8::from(*x))),
         _ => None,
     }
+}
+
+/// JavaScript's ToNumber for a string, as `==` and `<`/`>` apply it.
+///
+/// The empty string is 0, which is load-bearing: it is why `"" == 0` and
+/// `"" == false` both hold in Obsidian. Anything that does not convert is None,
+/// which reads as "not comparable" rather than as an error.
+fn js_to_number(s: &str) -> Option<f64> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Some(0.0);
+    }
+    trimmed.parse::<f64>().ok().filter(|n| n.is_finite())
 }
 
 /// Equality as Bases defines it: link equality by resolved target, scalars
 /// across types by their string form.
 pub fn values_equal(a: &BasesValue, b: &BasesValue) -> bool {
+    // Only null equals null. Obsidian's looseEquals is false for null against
+    // anything else, which is what makes an empty string and an empty list both
+    // *not* null: `"" == null` and `[] == null` are both false, so `!= null` is
+    // the test for "this property has a value at all".
     match (a, b) {
-        (BasesValue::Null, other) | (other, BasesValue::Null) => other.is_empty(),
+        (BasesValue::Null, BasesValue::Null) => true,
+        (BasesValue::Null, _) | (_, BasesValue::Null) => false,
         _ => compare(a, b) == Some(std::cmp::Ordering::Equal),
     }
 }

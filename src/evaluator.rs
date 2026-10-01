@@ -391,6 +391,15 @@ fn evaluate_binary(op: BinOp, left: &Node, right: &Node, ctx: &EvalContext) -> R
             // An incomparable pair is falsy rather than an error, matching
             // Obsidian's behaviour of treating a mismatched type as "not
             // greater than".
+            //
+            // A null operand is falsy too, and `compare` would rank Null below
+            // everything rather than decline: it has to, because a sort needs
+            // Null to go somewhere. Obsidian's ComparisonExpr returns Null for
+            // any null side, and null is not truthy, so `due < today()` simply
+            // drops a note with no `due` instead of including it.
+            if matches!(l, BasesValue::Null) || matches!(r, BasesValue::Null) {
+                return Ok(BasesValue::Bool(false));
+            }
             let ord = compare(&l, &r);
             let b = match ord {
                 None => false,

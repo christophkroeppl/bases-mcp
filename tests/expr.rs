@@ -95,6 +95,18 @@ impl AccessorsOptions {
         self.path = Some(path.to_string());
         self
     }
+
+    /// Frontmatter holding typed values, for the coercion tests. Typed props
+    /// cannot go through `prop`, which only builds strings.
+    fn props(pairs: &[(&str, BasesValue)]) -> Self {
+        Self {
+            note: pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect(),
+            ..Self::default()
+        }
+    }
     fn tagged(mut self, tags: &[&str]) -> Self {
         self.tags = tags.iter().map(|s| s.to_string()).collect();
         self
@@ -512,4 +524,124 @@ fn object_keys_and_values_work_on_a_namespace() {
         ev_in("note.values()[0]", &ctx).unwrap().to_display_string(),
         "active"
     );
+}
+
+/// Cross-type coercion, measured against `obsidian base:query` on Obsidian
+/// 1.13.7 rather than inferred.
+///
+/// Obsidian's `DataValue.looseEquals` compares raw data with JavaScript `==`, so
+/// a string coerces to a number and a checkbox is 1 or 0. These are the CLI's
+/// answers, one note per property.
+#[test]
+fn scalars_coerce_across_types_like_javascript() {
+    let ctx = make_ctx(Some(AccessorsOptions::props(&[
+        ("s", BasesValue::String(String::new())),
+        ("n", BasesValue::Number(5.0)),
+        ("b", BasesValue::Bool(true)),
+        ("bf", BasesValue::Bool(false)),
+        ("abc", BasesValue::String("abc".into())),
+    ])));
+
+    // A string that spells a number equals that number, and the empty string is
+    // 0, which is why `"" == 0` and `"" == false` both hold.
+    assert!(b_in("s == 0", &ctx));
+    assert!(b_in("s == false", &ctx));
+    assert!(!b_in("s == 1", &ctx));
+    assert!(b_in("n == \"5\"", &ctx));
+    // A string that will not convert is never equal to a number.
+    assert!(!b_in("abc == 5", &ctx));
+    assert!(!b_in("abc == 0", &ctx));
+    // A checkbox is 1 or 0, so it crosses with a number but not with its own
+    // spelling: `true == "true"` is false, because "true" is NaN as a number.
+    assert!(b_in("b == 1", &ctx));
+    assert!(!b_in("b == 2", &ctx));
+    assert!(!b_in("b == \"true\"", &ctx));
+    assert!(b_in("bf == 0", &ctx));
+    assert!(!b_in("bf == 1", &ctx));
+}
+
+/// Ordering coerces a number against a string the same way `==` does.
+#[test]
+fn ordering_coerces_a_number_against_a_string() {
+    let ctx = make_ctx(Some(AccessorsOptions::props(&[
+        ("n", BasesValue::Number(5.0)),
+        ("abc", BasesValue::String("abc".into())),
+    ])));
+
+    assert!(b_in("n > \"3\"", &ctx));
+    assert!(b_in("n >= \"3\"", &ctx));
+    assert!(b_in("n < \"10\"", &ctx));
+    assert!(!b_in("n > 10", &ctx));
+    // ToNumber("abc") is NaN, so every operator against it is false.
+    assert!(!b_in("abc > 1", &ctx));
+    assert!(!b_in("abc < 1", &ctx));
+    assert!(!b_in("abc >= 1", &ctx));
+    assert!(!b_in("abc <= 1", &ctx));
+}
+
+/// A null operand makes an ordering falsy rather than true.
+///
+/// `compare` ranks Null below everything, because a sort needs nulls to go
+/// somewhere. Obsidian's ComparisonExpr returns Null instead, and null is not
+/// truthy, so `due < today()` drops a note with no `due` rather than including it.
+#[test]
+fn an_ordering_against_null_is_falsy() {
+    let ctx = make_ctx(Some(AccessorsOptions::props(&[(
+        "n",
+        BasesValue::Number(5.0),
+    )])));
+
+    assert!(b_in("n < 10", &ctx));
+    assert!(!b_in("missing < 10", &ctx));
+    assert!(!b_in("n < missing", &ctx));
+    assert!(!b_in("missing >= 0", &ctx));
+    assert!(!b_in("missing <= 0", &ctx));
+}
+
+/// Only null equals null: an empty string and an empty list both have values.
+///
+/// This is what makes `!= null` the test for "this property is present at all",
+/// which is the idiom the corpus and user bases rely on.
+#[test]
+fn only_null_equals_null() {
+    let ctx = make_ctx(Some(AccessorsOptions::props(&[
+        ("empty", BasesValue::String(String::new())),
+        ("lst", BasesValue::List(vec![])),
+    ])));
+
+    assert!(b_in("missing == null", &ctx));
+    assert!(!b_in("empty == null", &ctx));
+    assert!(b_in("empty != null", &ctx));
+    assert!(!b_in("lst == null", &ctx));
+    assert!(b_in("lst != null", &ctx));
+}
+
+/// A list equals a bare scalar only when it holds exactly one element.
+///
+/// Regression guard for the flattening rule: wrapping the pair in lists instead
+/// re-enters the same branch forever, because the wrapper is itself a list.
+#[test]
+fn a_list_equals_a_scalar_only_when_it_has_one_element() {
+    let ctx = make_ctx(Some(AccessorsOptions::props(&[
+        (
+            "one",
+            BasesValue::List(vec![BasesValue::String("a".into())]),
+        ),
+        (
+            "two",
+            BasesValue::List(vec![
+                BasesValue::String("a".into()),
+                BasesValue::String("b".into()),
+            ]),
+        ),
+        ("empty", BasesValue::List(vec![])),
+    ])));
+
+    assert!(b_in("one == \"a\"", &ctx));
+    assert!(!b_in("one == \"b\"", &ctx));
+    assert!(!b_in("two == \"a\"", &ctx));
+    assert!(b_in("two != \"a\"", &ctx));
+    assert!(!b_in("empty == 0", &ctx));
+    assert!(b_in("empty != 0", &ctx));
+    assert!(!b_in("one == 1", &ctx));
 }
