@@ -132,3 +132,20 @@ describe("a context that is a note is untouched", () => {
     expect(rows.rows.length).toBeGreaterThan(0);
   });
 });
+
+describe("file.links", () => {
+  test("keeps every distinct link, not just the first", async () => {
+    // Regression: `dedupe` keyed on `String(link)`, which is `[object Object]`
+    // for every LinkValue, so any note with two links collapsed to one. That
+    // also cost backlinks, since `backlinksFor` is built on `linksFor`.
+    const resolver = await Resolver.openDir("test/vault");
+    const links = resolver.vaultSource.linksFor("Root Project.md");
+    const targets = links.map((l) => (l as { target: string }).target);
+    expect(targets).toEqual(["Geschäftsidee", "Projects"]);
+  });
+
+  test("a repeated link is still one link", async () => {
+    const resolver = await Resolver.openDir("test/vault");
+    expect(resolver.vaultSource.linksFor("Root Ticket.md")).toHaveLength(1);
+  });
+});

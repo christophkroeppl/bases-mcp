@@ -10,6 +10,7 @@
  *    the same folder as the referrer.
  */
 
+import { toDisplayString } from "../expr/evaluator";
 import {
   type BasesValue,
   DateValue,
@@ -303,11 +304,20 @@ function stripBrackets(s: string): string {
   return m !== null ? m[1]! : s.trim();
 }
 
-function dedupe<T>(items: T[]): T[] {
+/**
+ * Deduplicate by each value's own string form.
+ *
+ * This used to key on `String(item)`, which is `[object Object]` for every
+ * `LinkValue` — so `file.links` collapsed to a single element for any note with
+ * two links, and `backlinksFor`, which is built on `linksFor`, could lose a
+ * backlink behind the first. `Root Project.md` in the testing vault carries
+ * three links in its frontmatter and returned one.
+ */
+function dedupe<T extends BasesValue>(items: T[]): T[] {
   const seen = new Set<string>();
   const out: T[] = [];
   for (const i of items) {
-    const key = String(i);
+    const key = toDisplayString(i);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(i);

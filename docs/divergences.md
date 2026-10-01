@@ -190,3 +190,62 @@ restart, so a draft id that fails to resolve means starting the handshake again
 without `draft_id`. A successful commit **consumes** the draft id; a failed
 verify does not, so the same id is resent with the corrected content until it
 expires.
+
+## Bugs found in this implementation
+
+Recorded separately from the divergences above, because these are defects we
+repaired rather than differences we chose. Each was found by running the
+TypeScript and Rust implementations against each other and disagreeing.
+
+### `file.links` collapsed every link to one
+
+`Vault.dedupe` keyed on `String(item)`. Every `LinkValue` stringifies to
+`[object Object]`, so `file.links` returned a single element for any note with
+two or more links. The docs say `file.links` is the "list of all internal links
+in the note, including frontmatter", so returning one of three is wrong.
+
+The cost was not confined to `file.links`: `backlinksFor` is built on
+`linksFor`, so a note whose first link pointed elsewhere could lose a backlink
+entirely.
+
+Fixed in both implementations by keying on the value's own string form. A
+repeated link is still deduplicated, which is what the original reached for.
+Pinned by `file_links_keeps_every_distinct_link` on the Rust side and
+`file.links keeps every distinct link` on the TypeScript side.
+
+Not verified against the live Obsidian CLI: the bridge was down (empty stdout,
+exit 0) while this was found and repaired. The reasoning is the spec sentence
+above, and the fact that the pre-fix value was self-evidently wrong.
+
+### An indented or blockquoted opening fence looped forever
+
+`find_next_fence` scanned for ```` ``` ```` at a line start, handed the match to a
+function that could reject it (blockquote prefix, backtick in the info string),
+and then re-found the same line — with no forward progress. `parseNote` hung on
+a note beginning with `  ```base` or `> ```ts`.
+
+The Rust port requires strict progress. Behaviour is byte-identical everywhere
+the TypeScript terminated, and it terminates where the TypeScript hung. Pinned
+by `an_indented_fence_is_prose_rather_than_an_infinite_loop`.
+
+### `Earliest` and `Latest` were advertised but unimplemented
+
+The error message for an unknown summary name listed `Earliest` and `Latest`
+among the supported values. Neither was in the switch, so using either threw.
+Implemented in both.
+
+### `parseConfig` validated `base` as if it were a note path
+
+A refactor briefly routed the `base` argument through `assertNotePath`, which
+refuses anything ending in `.base` — refusing the only valid value. Corrected
+to check that `base` is present without asserting it is a note.
+
+### The parity suite passed vacuously when Obsidian was down
+
+Seven `if (!available) return;` guards made the suite report green with zero
+assertions whenever the CLI was unreachable, which is the exact failure the
+suite exists to catch. Replaced with `test.skipIf`, so absence is visible. The
+same gap had a second cause: `available()` only checked the exit code, and
+Obsidian exits 0 even with a dead bridge, so a dead bridge reported available.
+It now requires non-empty stdout, and there is a `vaultReachable` check for the
+case where the app runs but the vault is not open.

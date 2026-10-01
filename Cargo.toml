@@ -46,8 +46,21 @@ reqwest = { version = "0.12", default-features = false, features = [
   "http2",
 ] }
 regex = "1.13.1"
+# Link resolution has to fold `Página` onto `Pagina` the way JavaScript's
+# `normalize("NFKD")` does, and `to_lowercase()` alone does not: the fold has to
+# happen before the diacritics are dropped or the accents survive.
+unicode-normalization = "0.1.25"
+# HTTP Basic is the only credential this client holds, and it lives in exactly
+# one place: the `Authorization` header.
+base64 = "0.23.1"
+# `207 Multi-Status` bodies are untrusted input and this is the only XML reader in
+# the project. A tree binding would answer with a vault that looks empty rather
+# than refuse, because an empty `<resourcetype/>` and an absent property are the
+# same shape to it; see `src/vault/webdav.rs`.
+quick-xml = { version = "0.39", default-features = false, features = ["encoding"] }
 
 [dev-dependencies]
+tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [profile.release]
