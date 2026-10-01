@@ -1378,3 +1378,110 @@ fn a_region_only_note_still_round_trips() {
     assert!(result.removed_region);
     assert_eq!(result.text, "![[Only.base]]\n");
 }
+
+/// A restored Base region must be spliced in with the note's OWN line ending.
+///
+/// Regression, and the second half of the CRLF work in `src/note.rs` (c4af62f).
+/// That commit made a Base region visible in a CRLF note at all; this is what
+/// happens once it is visible again. `push_line` appended `\n` to the joins it
+/// generates, so a deleted region restored into a CRLF Host note came back with a
+/// lone LF beside two CRLF lines. Git, diff tools and Obsidian's own line-ending
+/// handling all read such a file as corrupt or as wholly rewritten, and it
+/// reaches disk whether or not the caller looked at it.
+///
+/// An inline ```base fence is the shape that shows it, because the region's byte
+/// span stops at the closing fence and carries no `\r` of its own for a bare `\n`
+/// to accidentally complete. An `![[X.base]]` embed spans its line's `\r`, so the
+/// same call on an embed produced CRLF by luck rather than by construction.
+///
+/// The note holds no other Base region on purpose: segmenting an embed moves the
+/// line's `\r` into the region and leaves the `\n` behind, which is a separate
+/// question about `split_base_embeds` and not one this assertion is about.
+#[test]
+fn a_restored_region_is_spliced_into_a_crlf_note_with_crlf() {
+    let original = "# Host\r\n\r\nIntro.\r\n\r\n```base\r\nviews: []\r\n```\r\n\r\nEnd.\r\n";
+    // The agent deletes the inline fence and the blank lines around it, so the
+    // restore has to generate its own terminator rather than inherit one.
+    let edited = "# Host\r\n\r\nIntro.\r\n\r\nEnd.\r\n";
+
+    let result = reconcile_note("Host.md", original, edited);
+
+    assert!(result.removed_region);
+    assert!(
+        result
+            .refused
+            .iter()
+            .any(|refusal| refusal.reason.contains("was removed")),
+        "the deletion must still be reported: {:?}",
+        result.refused
+    );
+    assert!(
+        result.text.contains("```base\r\nviews: []\r\n```"),
+        "the inline Base region was not restored: {:?}",
+        result.text
+    );
+    for phrase in ["Intro.", "End."] {
+        assert!(result.text.contains(phrase), "prose lost: {phrase:?}");
+    }
+    assert_eq!(
+        lone_lf(&result.text),
+        0,
+        "a bare LF was spliced into a CRLF note: {:?}",
+        result.text
+    );
+}
+
+/// Every restore shape in a CRLF Host note comes out pure CRLF.
+///
+/// `push_line` generates a join on both sides of the restored region, so each side
+/// is its own way to splice a bare LF in. The leading join needs text that does
+/// not already end in a terminator, which is why one shape ends without a
+/// newline. The trailing join fires whenever the region's own bytes stop before
+/// its terminator, which an inline fence always does and an embed at end of file
+/// does too -- and an embed on a terminated line does not, so it is pinned as the
+/// shape that was never broken.
+#[test]
+fn every_restore_shape_in_a_crlf_note_is_pure_crlf() {
+    for (label, original, edited) in [
+        (
+            "an inline fence between prose",
+            "# Host\r\n\r\nIntro.\r\n\r\n```base\r\nviews: []\r\n```\r\n\r\nEnd.\r\n",
+            "# Host\r\n\r\nIntro.\r\n\r\nEnd.\r\n",
+        ),
+        (
+            "an embed at end of file",
+            "# Host\r\n\r\nIntro.\r\n\r\n![[Only.base]]",
+            "# Host\r\n\r\nIntro.\r\n",
+        ),
+        (
+            "edited text ending without a newline",
+            "# Host\r\n\r\nIntro.\r\n\r\n```base\r\nviews: []\r\n```\r\n\r\nEnd.\r\n",
+            "# Host\r\n\r\nIntro.\r\n\r\nEnd.",
+        ),
+        (
+            "an embed whose own line already ends in CRLF",
+            "# Host\r\n\r\nIntro.\r\n\r\n![[Only.base]]\r\n",
+            "# Host\r\n\r\nIntro.\r\n",
+        ),
+    ] {
+        let result = reconcile_note("Host.md", original, edited);
+        assert!(
+            result.removed_region,
+            "{label}: the deletion went unreported"
+        );
+        assert_eq!(
+            lone_lf(&result.text),
+            0,
+            "{label}: a bare LF was spliced into a CRLF note: {:?}",
+            result.text
+        );
+    }
+}
+
+/// How many `\n` in `text` are not the second half of a `\r\n`.
+fn lone_lf(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    (0..bytes.len())
+        .filter(|&index| bytes[index] == b'\n' && (index == 0 || bytes[index - 1] != b'\r'))
+        .count()
+}

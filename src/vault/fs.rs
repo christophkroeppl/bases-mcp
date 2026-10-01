@@ -260,6 +260,29 @@ impl VaultSource for FsVaultSource {
         Ok(text)
     }
 
+    /// Ask the filesystem, never the listing snapshot.
+    ///
+    /// The snapshot is dropped by `refresh` and by every write, and the caller
+    /// here is a commit that is about to overwrite: a `refresh` landing between
+    /// the check and the write would not prevent the clobber, it would just make
+    /// it happen over fresher bytes. `metadata` rather than `read_text` because
+    /// the question is whether the path is taken, not what it says.
+    ///
+    /// Only `NotFound` is absence. The TypeScript tree answers `false` for EVERY
+    /// throw here, because `fs.stat` does not hand back a code the `catch` can
+    /// read -- so a permissions error there reports the note as absent, and the
+    /// commit that asked goes ahead and overwrites. This backend can tell the
+    /// codes apart and does, because `false` here is permission to destroy
+    /// something rather than an absence of information.
+    async fn exists(&self, rel: &str) -> Result<bool> {
+        let abs = self.abs(rel)?;
+        match tokio::fs::metadata(&abs).await {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(io("stat", &abs, error)),
+        }
+    }
+
     async fn write_text(&self, rel: &str, data: &str) -> Result<()> {
         let abs = self.abs(rel)?;
         if let Some(parent) = abs.parent() {

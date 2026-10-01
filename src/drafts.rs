@@ -342,6 +342,19 @@ fn require_field(value: Option<&str>, name: &str) -> Result<String> {
     })
 }
 
+/// Refuse to draft a note at a path the index already holds one at.
+///
+/// The INDEX, deliberately, where the commit-time check below asks the backend.
+/// This call has done nothing yet, so a stale listing costs a false refusal and
+/// nothing else — and the false refusal is the safe direction, because it stops a
+/// draft rather than permitting a write. `write_note` is named in the message
+/// because a path that is genuinely taken is that tool's job, not this one's, and
+/// an agent that reads "already exists" needs to be told where to go next rather
+/// than left to guess.
+///
+/// The commit cannot work that way round. By then the agent has edited the draft
+/// and is waiting on a write, and Obsidian may have autosaved a note at the path
+/// in between; see [`VaultSource::exists`].
 fn assert_note_absent(resolver: &Resolver, path: &str) -> Result<()> {
     if resolver
         .vault()
@@ -479,12 +492,17 @@ async fn commit_draft(
         return Err(verification_error(&stored, &view, &failures, &yaml));
     }
 
-    // The absence check ran when the draft was PROPOSED. Between then and now a
-    // human may have created a note at this path -- minutes later, while they
-    // read the proposal -- and `create_note` replaces verbatim. Re-check against
-    // the vault as it is now, not against the index as it was, so the commit
-    // refuses rather than overwriting prose it never saw.
-    if resolver.vault().note_paths().contains(&stored.path) {
+    // The absence check that ran when the draft was PROPOSED cannot answer this.
+    // Between then and now a human may have created a note at this path -- minutes
+    // later, while they read the proposal -- and `create_note` replaces verbatim.
+    //
+    // The index is the wrong instrument here for the same reason the write path
+    // reads fresh: it only moves when THIS SERVER writes, and a human's save
+    // never goes through it. So this asks the backend. Every later step of the
+    // handshake is allowed to be a snapshot by then; this one is the last thing
+    // before an overwrite, and "I could not find out" must not read as "the path
+    // is free" -- hence `exists` returning a `Result` at all.
+    if resolver.backend().exists(&stored.path).await? {
         return Err(BasesError::new(format!(
             "{path} was created after this draft was proposed, so nothing was written. \
              add_note_to_base only creates a NEW row; use write_note to change a note that \
@@ -1301,6 +1319,21 @@ impl VaultSource for DraftVaultSource {
              once, after its filter has matched."
         ))
         .with_note(path))
+    }
+
+    /// The draft is at its own path, unsaved, so this source answers `true` there
+    /// and asks the backend about everything else.
+    ///
+    /// It has to answer at all: the overlay wraps a real backend and the whole
+    /// point of `Vault::rebuild` is that it asks every question of the source it
+    /// was built from. Nothing in the verify step consults existence — it wants
+    /// the draft indexed whether or not anything is on disk — so this is not on
+    /// the path that decides anything, only on the one that must not fall over.
+    async fn exists(&self, path: &str) -> Result<bool> {
+        if path == self.path {
+            return Ok(true);
+        }
+        self.inner.exists(path).await
     }
 
     async fn stat(&self, path: &str) -> Result<FileStat> {

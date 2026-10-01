@@ -1139,6 +1139,75 @@ fn an_existing_note_is_never_clobbered() {
     assert_eq!(before, after, "the existing note is byte-identical");
 }
 
+/// A note created by a HUMAN between the two halves of the handshake must survive.
+///
+/// Regression. The commit-time absence check read `Vault::note_paths()`, which is
+/// the index -- and the index is only rebuilt by a write through this server. The
+/// case the check was written for is precisely the one the index cannot see: a
+/// human creates the note in Obsidian while they read the proposal, Obsidian
+/// autosaves it, and no MCP call ever runs, so the index still says the path is
+/// free. `create_note` then replaces the file verbatim and the human's prose is
+/// destroyed, unreported, with `verified: true` attached to the commit.
+///
+/// The fix is to ask the BACKEND rather than the index. The note below is created
+/// by writing the file directly, with no server-side write in between, which is
+/// what Obsidian does.
+#[test]
+fn a_note_a_human_wrote_while_the_draft_was_out_is_not_clobbered() {
+    let (dir, resolver) = sandbox();
+    let target = "Tickets/Offline sync bug.md";
+    let proposal = draft_for(&resolver, target, Some(HOST), None);
+
+    // The human writes the note in Obsidian. `std::fs::write` is the honest
+    // simulation: nothing in this process re-indexes the vault afterwards.
+    let human = "---\nstatus: open\n---\n\n# Offline sync bug\n\nNotes I took by hand \
+                 while the agent was thinking.\n";
+    std::fs::write(dir.path().join(target), human).expect("the human's save lands");
+    assert!(
+        !resolver.vault().note_paths().contains(&target.to_string()),
+        "the index must NOT see this note, or the test is not reproducing the defect"
+    );
+
+    let message = message_of(|| commit(&resolver, &proposal.draft_id, &proposal.content));
+    assert!(
+        message.contains("was created after this draft was proposed"),
+        "the commit did not refuse the collision: {message}"
+    );
+
+    let on_disk = std::fs::read_to_string(dir.path().join(target)).expect("the note is on disk");
+    assert_eq!(on_disk, human, "the human's note was replaced by the draft");
+}
+
+/// A refused commit leaves the draft live, so the same id can be resent.
+///
+/// A refusal must not consume the draft. Resending it has to produce the same
+/// actionable refusal rather than an expiry error, or the agent is told to restart
+/// the handshake over a collision it did not cause.
+#[test]
+fn a_refused_commit_leaves_the_draft_live_and_resendable() {
+    let (dir, resolver) = sandbox();
+    let taken = "Tickets/Offline sync bug.md";
+    let proposal = draft_for(&resolver, taken, Some(HOST), None);
+    std::fs::write(dir.path().join(taken), "# mine\n").expect("the human's save lands");
+
+    let first = message_of(|| commit(&resolver, &proposal.draft_id, &proposal.content));
+    assert_eq!(
+        resolver.drafts().len(),
+        1,
+        "the draft was consumed by a refusal"
+    );
+
+    let second = message_of(|| commit(&resolver, &proposal.draft_id, &proposal.content));
+    assert_eq!(
+        second, first,
+        "resending a live draft must produce the same refusal"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(taken)).expect("reads"),
+        "# mine\n"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The host note's path depth does not change the verdict
 // ---------------------------------------------------------------------------

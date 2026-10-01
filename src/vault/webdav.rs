@@ -79,6 +79,7 @@ pub enum DavOperation {
     List,
     Read,
     Stat,
+    Exists,
     Write,
     EnsureDir,
     Delete,
@@ -90,6 +91,7 @@ impl DavOperation {
             DavOperation::List => "list",
             DavOperation::Read => "read",
             DavOperation::Stat => "stat",
+            DavOperation::Exists => "exists",
             DavOperation::Write => "write",
             DavOperation::EnsureDir => "ensureDir",
             DavOperation::Delete => "delete",
@@ -281,6 +283,13 @@ impl WebdavTransport for HttpTransport {
 /// the state the caller was trying to reach already holds, which is the whole
 /// intent of the call. `list`, `read`, `stat` and `write` tolerate nothing, so a
 /// `PROPFIND` that is refused is a refusal rather than an empty directory.
+///
+/// `exists` is deliberately NOT here, though it also finds a `404` meaningful:
+/// for `MKCOL` and `DELETE` a `404` is a success wearing a refusal's clothes,
+/// where for `exists` it is the ANSWER. Listing it would hand `exists` a `404` as
+/// `Ok`, and the operation would then have to read the status back out of a
+/// successful response to tell present from absent -- so the one status it treats
+/// as an answer is matched where it is used instead.
 const fn tolerated(operation: DavOperation, status: u16) -> bool {
     matches!(
         (operation, status),
@@ -1645,6 +1654,50 @@ impl VaultSource for WebdavVaultSource {
         let hash = content_hash(&self.read_text(&path).await?);
         self.hash_cache.borrow_mut().insert(path, hash.clone());
         Ok(hash)
+    }
+
+    /// Ask the server whether the path is taken, bypassing every cache.
+    ///
+    /// A `PROPFIND` at `Depth: 0` rather than a `HEAD`: this is the same request
+    /// [`stat`](Self::stat) already issues for one resource, so a server that
+    /// cannot answer it cannot serve this vault either, and no new HTTP verb
+    /// enters the vocabulary.
+    ///
+    /// **Only `404` means absent, and everything else is an error.** The refusal
+    /// this guards against is a clobber, so the failure mode that matters is the
+    /// one where the server did NOT say the path is free: a `401`, a `503`, a
+    /// transport failure, a redirect this client did not follow. Answering any of
+    /// them with `false` would report a note as absent precisely when the server
+    /// could not be asked, and the caller would then overwrite it -- turning a
+    /// connectivity problem into silent data loss, which is the whole thing
+    /// `VaultSource::exists` is written to prevent.
+    ///
+    /// The distinction is structural rather than stringly, and it is made in three
+    /// places rather than two: `exists` is not in [`tolerated`], so `send` hands
+    /// the `404` back as a refusal; the refusal carries its status as a field, so
+    /// it is matched as a number; and `Ok` therefore means a `2xx` and nothing
+    /// else. Both halves matter -- tolerating the `404` inside `send` would make
+    /// every answer below the `Ok` arm, and the method would report a missing note
+    /// as present.
+    async fn exists(&self, rel: &str) -> Result<bool> {
+        let path = vault_relative_path(rel)?;
+        match self
+            .send(
+                DavOperation::Exists,
+                WebdavMethod::Propfind,
+                &path,
+                DavRequestOptions {
+                    body: Some(DAV_PROPFIND_BODY.to_string()),
+                    depth: Some(Depth::Zero),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(refusal) if refusal.status == Some(404) => Ok(false),
+            Err(refusal) => Err(refusal.into()),
+        }
     }
 
     /// Store text, then read it back and refuse anything but the bytes that were

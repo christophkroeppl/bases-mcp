@@ -367,6 +367,13 @@ pub fn reconcile_note(note_path: &str, original: &str, edited: &str) -> Reconcil
     let mut pending: std::collections::VecDeque<&BaseRegionRef> = missing.into();
     pending.make_contiguous().sort_by_key(|region| region.index);
 
+    // Detected once, from the note as it is on disk. `push_line` is the only place
+    // this reconciliation GENERATES bytes rather than copying them, so it is the
+    // only place a line ending can be invented -- and a lone LF invented next to
+    // CRLF lines turns the Host note into a file every diff tool and Obsidian
+    // reads as corrupt, or as wholly rewritten.
+    let ending = line_ending(original);
+
     let mut removed_any = false;
 
     for segment in &after.segments {
@@ -382,7 +389,7 @@ pub fn reconcile_note(note_path: &str, original: &str, edited: &str) -> Reconcil
                 break;
             }
             let earlier = pending.pop_front().expect("front was just read");
-            push_line(&mut out, &original[earlier.start..earlier.end]);
+            push_line(&mut out, &original[earlier.start..earlier.end], ending);
             refused.push(removal_refusal(earlier));
             removed_any = true;
         }
@@ -420,7 +427,7 @@ add_note_to_base to be guided through creating a matching note."
 
     // Whatever is still pending belongs after every surviving region.
     while let Some(later) = pending.pop_front() {
-        push_line(&mut out, &original[later.start..later.end]);
+        push_line(&mut out, &original[later.start..later.end], ending);
         refused.push(removal_refusal(later));
         removed_any = true;
     }
@@ -451,12 +458,52 @@ the base region deliberately outside this tool."
 /// restore splice an embed into the middle of a sentence the agent had just
 /// written: the insertion point was a byte offset from the *original* text, and
 /// the agent's edits had shifted everything after it.
-fn push_line(out: &mut String, line: &str) {
+///
+/// `ending` is the note's own line ending, because these two joins are the only
+/// bytes this function invents. `line` itself is copied out of the original and
+/// carries whatever the original used, but an inline ```base fence spans no
+/// terminator at all and an embed at end of file spans none either, so the byte
+/// after a restored region is always one this function chose.
+fn push_line(out: &mut String, line: &str, ending: &str) {
     if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
+        out.push_str(ending);
     }
     out.push_str(line);
-    out.push('\n');
+    out.push_str(ending);
+}
+
+/// The line ending a note uses, which every join this module generates must match.
+///
+/// **The FIRST terminator in the note decides**, and that is a stability rule
+/// rather than an aesthetic one. `write_note` reconciles against a note it re-reads
+/// each time, so any rule that depended on where the note happened to be edited
+/// from — the terminator next to the restore point, the majority, the last one —
+/// could pick a different answer on the next write and rewrite the file's own
+/// line endings underneath the user. The first terminator is invariant under every
+/// edit after it, so repeated read/write cycles converge instead of oscillating.
+///
+/// A note with no terminator at all has no line ending to honour, and gets `\n`:
+/// the region has to be terminated somehow, `\n` is what the rest of this crate
+/// writes, and a note that never had a newline cannot be evidence for CRLF.
+///
+/// A note that is already mixed has no single answer to give, which is why this
+/// comment exists: the fallback is the first one written rather than the one that
+/// would be most often correct. Such a note is already in the state this module
+/// exists to avoid creating, and guessing differently per call site would make
+/// the damage depend on which code path happened to touch it.
+///
+/// The TypeScript tree asks a different question of the same input -- whether a
+/// `\r\n` appears ANYWHERE rather than which terminator comes first -- and the two
+/// disagree only on a note that is already mixed. They disagree most often on the
+/// shape that is actually common: one Windows paste into an otherwise LF note,
+/// where "anywhere" picks CRLF for a region being restored next to LF prose and
+/// "first" does not.
+fn line_ending(note: &str) -> &'static str {
+    match note.find('\n') {
+        Some(0) | None => "\n",
+        Some(at) if note.as_bytes()[at - 1] == b'\r' => "\r\n",
+        Some(_) => "\n",
+    }
 }
 
 /// Do two regions name the same thing?

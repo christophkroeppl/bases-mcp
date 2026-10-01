@@ -102,6 +102,26 @@ pub trait VaultSource {
     /// last thirty seconds" is the normal case, not an edge case.
     async fn read_fresh(&self, path: &str) -> Result<String>;
 
+    /// Is there something at `path` RIGHT NOW?
+    ///
+    /// The listing is the wrong answer to this question. It is a snapshot that
+    /// only moves when this server writes, and Obsidian autosaves without ever
+    /// going through this server — so a note a human created two minutes ago is
+    /// absent from it, and the write path behind `add_note_to_base` would replace
+    /// that note's prose while reporting `verified: true`. This is the only
+    /// method that asks the storage rather than the cache, and it exists because
+    /// a clobber is unrecoverable.
+    ///
+    /// A `true` is the SAFE answer on every backend: a directory at the path, or
+    /// anything else that is not a note, still means the path is not free for a
+    /// new note.
+    ///
+    /// An ERROR MUST NEVER BECOME `false`. `false` tells the caller the path is
+    /// free, which is permission to overwrite, so a backend that answered "I could
+    /// not find out" with `false` would defeat the entire method. Only a positive
+    /// statement that nothing is there may produce `false`.
+    async fn exists(&self, path: &str) -> Result<bool>;
+
     async fn write_text(&self, path: &str, data: &str) -> Result<()>;
 
     async fn stat(&self, path: &str) -> Result<FileStat>;

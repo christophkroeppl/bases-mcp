@@ -314,6 +314,74 @@ Fixed in both implementations. The round-trip is now byte-identical, and the
 equivalence test asserts exactly that rather than comparing modulo trailing
 whitespace.
 
+### The draft commit's absence check consulted the index
+
+`add_note_to_base`'s commit-time check read `Vault::note_paths()` — the index,
+which only moves when this server writes. That is precisely the case the check was
+written for and could not see: a human creates the note in Obsidian while reading
+the proposal, Obsidian autosaves it, and no MCP call ever runs. `create_note` then
+replaced the file verbatim and returned `verified: true`.
+
+Reproduced end to end: propose a draft against `Tickets.base`, write the path
+directly with `std::fs` (no server write in between), commit. Before the fix the
+commit returned `Ok(Commit { written: …, verified: true })` and the note on disk was
+the draft's `TODO: replace this paragraph` boilerplate. After, it returns
+`… was created after this draft was proposed, so nothing was written` and the file
+is byte-identical to what the human saved.
+
+`VaultSource::exists` now answers from the storage rather than from a snapshot:
+`tokio::fs::metadata` on the filesystem backend, a `Depth: 0` `PROPFIND` on WebDAV.
+Over WebDAV **only a `404` means absent**; every other failure is an error, because
+`false` is not a neutral answer there — it is permission to overwrite, so a `503`
+turned into `false` would convert a connectivity problem into the silent loss this
+check exists to prevent. `exists` is deliberately *not* in the `tolerated` table
+for that reason: for `MKCOL` and `DELETE` a `404` is a success wearing a refusal's
+clothes, where for `exists` it is the answer.
+
+The propose-time check still reads the index, on purpose. Nothing has been written
+at that point, so a stale listing costs a false refusal and nothing else — and a
+false refusal is the safe direction, because it stops a draft rather than permitting
+a write. Only the last check before an overwrite has to be true at the instant of
+the write.
+
+The TypeScript tree already asks the backend here and the Rust port regressed it,
+so the port is the second implementation to need the fix rather than the first.
+One place is deliberately NOT equivalent: the TypeScript filesystem backend
+answers `false` for every `fs.stat` throw, because `fs.stat` hands back a
+`SystemError` whose `code` the `catch` never reads — so a permissions error
+reports the note as absent and the commit proceeds. `FsVaultSource::exists` here
+distinguishes `NotFound` from every other code and refuses the rest. `false` in
+this method is permission to destroy a note rather than an absence of
+information, so the looser reading is the one that loses data.
+
+### A restored Base region was spliced into a CRLF Host note with a bare LF
+
+`push_line` appended `\n` to the joins it generates, so a deleted region restored
+into a CRLF Host note came back as `…\n` between two CRLF lines — a mixed-ending
+file, which is what the CRLF work in `src/note.rs` (c4af62f) existed to prevent. The
+region's own bytes come from the original and carry whatever it used, but an inline
+` ```base ` fence spans no terminator at all and an embed at end of file spans none
+either, so the byte after a restored region is always one `push_line` chose. On an
+embed whose own line ends CRLF a bare `\n` accidentally completed the pair, which is
+why pinning the embed case alone would have pinned the one shape that was never
+broken.
+
+`reconcile_note` now detects the note's line ending once, from the first terminator
+in the original, and writes both joins with it. First, deliberately: `write_note`
+re-reads the note on every call, so a rule that depended on where the note was
+edited from — the terminator beside the restore point, the majority, the last one —
+could pick a different answer on the next write and rewrite the file's endings
+underneath the user. A note with no terminator gets `\n`: it has no convention to
+honour, and the region still has to be terminated.
+
+The TypeScript tree fixed this first and the Rust port regressed it, so the two
+now differ in one documented place: the tree asks whether a `\r\n` appears
+*anywhere*, this one asks which terminator comes *first*. They disagree only on a
+note that is already mixed, and most often on one Windows paste inside an
+otherwise LF note — where "anywhere" picks CRLF for a region restored beside LF
+prose. Recorded here rather than left as a silent difference between two trees that
+are meant to be equivalent.
+
 ## TypeScript and Rust: verified equivalent
 
 Both implementations are live and both pass their own suites. They were also run

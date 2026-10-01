@@ -1819,3 +1819,138 @@ fn a_webdav_error_converts_into_the_trait_error_and_keeps_its_fields() {
     assert_eq!(as_bases.construct(), Some("webdav"));
     assert!(as_bases.message().contains("404"));
 }
+
+// ---------------------------------------------------------------------------
+// exists: one status means absent
+// ---------------------------------------------------------------------------
+
+/// The one question the backend is allowed to answer from a refusal.
+///
+/// `exists` guards a clobber, so `false` is not a neutral answer -- it is
+/// permission to overwrite. Every status that is not the server stating "there is
+/// nothing there" must therefore surface as an error, or a connectivity problem
+/// becomes silent data loss.
+#[test]
+fn only_a_404_means_a_note_is_absent() {
+    let server = fake([VaultFile {
+        path: "Tickets/Kept.md".to_string(),
+        content: "# kept".to_string(),
+    }]);
+    let source = source_over(&server);
+
+    assert!(
+        run(source.exists("Tickets/Kept.md")).expect("the server answers"),
+        "a note the server holds must be reported present"
+    );
+    assert!(
+        !run(source.exists("Tickets/Gone.md")).expect("the server answers"),
+        "a 404 is the one status that means absent"
+    );
+
+    for status in [401, 403, 409, 500, 502, 503] {
+        server.refusing(
+            "Tickets/Kept.md",
+            Status {
+                status,
+                status_text: "No",
+            },
+        );
+        let error = failure_of(source.exists("Tickets/Kept.md"));
+        assert!(
+            error.message().contains(&status.to_string()),
+            "{status} must be named in the refusal: {error}"
+        );
+        assert_eq!(
+            error.construct(),
+            Some("webdav"),
+            "{status} must read as a backend refusal, not as an absent note"
+        );
+    }
+}
+
+/// A server that cannot be reached is not a server with nothing there.
+#[test]
+fn an_unreachable_server_is_an_error_rather_than_an_absent_note() {
+    let server = fake([]);
+    server.wedged();
+    let source = source_over_with(&server, None, None, Some(20));
+
+    let error = failure_of(source.exists("Tickets/Gone.md"));
+    assert!(
+        error.message().contains("got no response"),
+        "a transport failure must not read as an absent note: {error}"
+    );
+}
+
+/// The request is the one `stat` already makes, so no server gains a requirement.
+#[test]
+fn asks_the_server_with_a_depth_zero_propfind_and_never_the_listing() {
+    let server = fake([VaultFile {
+        path: "Tickets/Kept.md".to_string(),
+        content: "# kept".to_string(),
+    }]);
+    let source = source_over(&server);
+
+    run(source.exists("Tickets/Kept.md")).expect("the server answers");
+
+    let requests = server.requests();
+    assert_eq!(
+        requests.len(),
+        1,
+        "existence is one round trip: {requests:?}"
+    );
+    assert_eq!(
+        requests[0].verb_depth(),
+        ("PROPFIND".to_string(), Some("0".to_string()))
+    );
+    assert_eq!(
+        requests[0].url,
+        format!("{BASE_URL}/Tickets/Kept.md"),
+        "the path must be addressed as a file, not as a collection"
+    );
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some(format!("Basic {}", base64_of(format!("{USER}:{PASSWORD}"))).as_str()),
+        "existence is authenticated like every other request"
+    );
+}
+
+/// The filesystem backend answers `exists` from the filesystem, not its snapshot.
+///
+/// `FsVaultSource::list` is a snapshot that only a write or an explicit
+/// `refresh` moves, so a cached answer here would be the very bug this method
+/// exists to remove: the index cannot see a note a human saved in Obsidian.
+#[test]
+fn the_filesystem_backend_asks_the_filesystem_and_not_its_listing() {
+    let dir = tempfile::TempDir::new().expect("a temp dir is writable");
+    let source = FsVaultSource::new(dir.path()).expect("a directory is a vault root");
+
+    // The listing is taken against an empty vault and cached, which is the state
+    // every long-lived server process is in: it indexed the vault at startup and
+    // has not listed it since.
+    assert!(
+        run(source.list()).expect("the vault lists").is_empty(),
+        "the snapshot predates the note"
+    );
+    std::fs::write(dir.path().join("Later.md"), "# saved by a human").expect("a note is written");
+    assert_eq!(
+        run(source.list()).expect("the vault lists"),
+        Vec::<String>::new(),
+        "the snapshot is what `list` cached, so it still cannot see the note"
+    );
+
+    assert!(
+        run(source.exists("Later.md")).expect("the filesystem answers"),
+        "existence must not be answered from the listing"
+    );
+    assert!(
+        !run(source.exists("Never.md")).expect("the filesystem answers"),
+        "a path the filesystem does not hold is absent"
+    );
+}
+
+/// The base64 the tests compare an `Authorization` header against.
+fn base64_of(plain: String) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(plain)
+}
