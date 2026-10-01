@@ -39,7 +39,6 @@ async-trait = "0.1"
 # The evaluator's errors name a construct, a position and a property. That
 # detail has to reach the tool result, not be flattened into a string, so the
 # error is a type rather than a message.
-thiserror = "2"
 # Percent-decoding of WebDAV hrefs, and percent-encoding on the way out.
 percent-encoding = "2"
 # WebDAV `getlastmodified` arrives in three formats across three RFCs, and the

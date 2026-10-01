@@ -2,20 +2,15 @@
 # vault is content we control, so this must never be committed.
 test/vault/.obsidian/
 
-# Node / Bun
-node_modules/
-*.tsbuildinfo
-
-# Scratch scripts used while developing; not part of the deliverable.
-scratch/
-
-# Biome's LSP daemon keeps per-workspace state outside node_modules.
-.biome/
-
-# Local env
+# Machine-specific settings for the Obsidian CLI and any WebDAV server. The
+# example file is committed; the real one never is, because it holds paths that
+# differ per machine and, on the WebDAV side, credentials.
 .env
 .env.*
 !.env.example
 
 # Rust
 /target/
+
+# Scratch notes kept while developing; not part of the deliverable.
+scratch/

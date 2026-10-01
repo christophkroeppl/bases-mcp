@@ -2,38 +2,69 @@ name: verify
 
 on:
   push:
-    branches: [main]
+    branches: [develop]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # One build directory shared by every step, so nothing is compiled twice.
+  CARGO_TARGET_DIR: target
 
 jobs:
   verify:
+    name: fmt, clippy, tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # commitlint's --from/--to need full history, and so does a reviewer
+          # reading the diff.
+          fetch-depth: 0
 
-      - name: Install
-        run: bun install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
 
-      - name: Typecheck
-        run: bun run typecheck
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Lint and format check
-        run: bun run check
+      - uses: astral-sh/setup-uv@v3
 
-      - name: Unit and conformance tests
-        # Excludes test/parity, which needs a live Obsidian CLI against the
-        # registered testing vault. See test/parity/parity.test.ts -- it skips
-        # cleanly when the CLI is unavailable.
-        run: bun test test/unit
+      - name: Install just
+        run: uv tool install just
 
-  # The Obsidian CLI only exists on a machine with Obsidian installed and the
-  # testing vault registered, so parity cannot run in CI. It is a local gate.
-  parity:
+      - name: Versions agree
+        run: ./scripts/check-versions.sh
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        # Parity is excluded because it needs a live Obsidian CLI against a
+        # registered vault, which does not exist in CI. The recorded CLI answers
+        # under test/parity/data/ are what CI checks instead; see the
+        # `parity-data` job.
+        run: cargo test --all-targets -- --skip parity
+
+  commitlint:
+    name: commit messages
     runs-on: ubuntu-latest
-    if: false
     steps:
-      - run: echo "Run `bun test test/parity` locally with Obsidian open."
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-save @commitlint/cli @commitlint/config-conventional
+      - name: Lint the commits in this pull request
+        run: |
+          npx commitlint --from "${{ github.event.pull_request.base.sha }}" \
+                         --to   "${{ github.event.pull_request.head.sha }}" \
+                         --verbose
