@@ -6,6 +6,10 @@ test/vault/.obsidian/
 node_modules/
 *.tsbuildinfo
 
+# Rust build output. Present even on branches without Cargo.toml, because the
+# working tree is shared, and Biome's vcs.useIgnoreFile would otherwise walk it.
+target/
+
 # Scratch scripts used while developing; not part of the deliverable.
 scratch/
 
