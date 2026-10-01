@@ -21,6 +21,32 @@ export interface VaultSource {
 
   readText(path: string): Promise<string>;
 
+  /**
+   * Read a note as it is RIGHT NOW, bypassing any cache.
+   *
+   * This is what the write path uses, and the distinction from `readText` is
+   * the whole point: `readText` may answer from a snapshot taken earlier in the
+   * process's life, which is right for queries and catastrophic for a write.
+   * Reconciling an edit against a stale copy and then writing the result over
+   * the top of whatever the user has since typed destroys their work while
+   * reporting success.
+   *
+   * Obsidian autosaves continuously, so "the user edited this note in the last
+   * thirty seconds" is the normal case rather than an edge case.
+   */
+  readFresh(path: string): Promise<string>;
+
+  /**
+   * Is there a file at this path, RIGHT NOW?
+   *
+   * `list()` is a snapshot, so it cannot answer this for a file created since
+   * the snapshot was taken -- which is exactly the question
+   * `add_note_to_base`'s commit has to ask before replacing a note verbatim.
+   * Asking the index instead is a check that passes precisely when the note it
+   * was supposed to protect was written behind the server's back.
+   */
+  exists(path: string): Promise<boolean>;
+
   writeText(path: string, data: string): Promise<void>;
 
   stat(path: string): Promise<FileStat>;

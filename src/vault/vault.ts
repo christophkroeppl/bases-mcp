@@ -122,6 +122,18 @@ export class Vault {
     return this.source.readText(path);
   }
 
+  /**
+   * Read a note bypassing the backend's snapshot.
+   *
+   * `Vault.reload` rebuilds the index from `readText`, so it re-reads the listing
+   * without re-reading any note -- the snapshot has to be dropped at the backend
+   * for a rebuild to see anything new. Anything about to write goes through here
+   * instead, because it must reconcile against the note as it is now.
+   */
+  async readFresh(path: string): Promise<string> {
+    return this.source.readFresh(path);
+  }
+
   /** Resolve a link target to a vault path, or undefined when unresolved. */
   resolve(target: string): string | undefined {
     return matchPath(target, this.byPath);

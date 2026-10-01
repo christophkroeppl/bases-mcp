@@ -143,3 +143,98 @@ describe("deleting a region is still refused", () => {
     expect(result.text).toContain("![[Tickets.base]]");
   });
 });
+
+describe("restoring a deleted region must not corrupt the agent's prose", () => {
+  // Regression. The insertion point for a deleted region was a character offset
+  // taken from the ORIGINAL text and then indexed into the EDITED text. Once the
+  // agent had added or removed anything above the region, that offset pointed at
+  // an arbitrary character -- routinely the middle of a sentence it had just
+  // written, with the embed spliced in between the halves.
+  //
+  // Anchoring on the other regions' positions rather than on an offset is what
+  // fixes it, and the assertion has to be about the prose rather than merely that
+  // the embed is present, which is all the test above checks.
+  const ORIGINAL = "# Host\n\nIntro line.\n\n![[T.base]]\n\nTrailing prose.\n";
+  // The agent deletes the region and writes a long new paragraph above it, so
+  // every character after the deletion point shifts.
+  const NEW_PARA = "A brand new paragraph inserted by the agent, long enough to shift every byte";
+  const EDITED = `# Host\n\nIntro line.\n\n${NEW_PARA}\n\nTrailing prose.\n`;
+
+  test("the agent's prose survives, intact", () => {
+    const result = reconcileNote("Host.md", ORIGINAL, EDITED);
+
+    expect(result.removedRegion).toBe(true);
+    expect(result.refused.map((r) => r.reason)).toEqual(["The base region was removed."]);
+    for (const phrase of [NEW_PARA, "Intro line.", "Trailing prose."]) {
+      expect(result.text).toContain(phrase);
+    }
+  });
+
+  test("the embed lands on a line of its own, not against the agent's sentence", () => {
+    // The exact shape of the old defect: the offset pointed at the newline that
+    // ended the agent's new paragraph, so the embed was spliced straight onto the
+    // end of its last line with no blank line between.
+    const result = reconcileNote("Host.md", ORIGINAL, EDITED);
+
+    expect(result.text).not.toContain(`${NEW_PARA}\n![[T.base]]`);
+    const lines = result.text.split("\n");
+    expect(lines.filter((l) => l === "![[T.base]]")).toHaveLength(1);
+  });
+
+  test("the embed does not land above the prose the agent wrote", () => {
+    const result = reconcileNote("Host.md", ORIGINAL, EDITED);
+
+    const lines = result.text.split("\n");
+    const embed = lines.indexOf("![[T.base]]");
+    const para = lines.findIndex((l) => l.startsWith("A brand new paragraph"));
+    expect(para).toBeGreaterThanOrEqual(0);
+    expect(embed).toBeGreaterThan(para);
+  });
+
+  test("two deleted regions come back in their original order", () => {
+    const original =
+      "# Host\n\nA\n\n![[One.base]]\n\nMiddle prose.\n\n![[Two.base]]\n\nEnd prose.\n";
+    const edited = "# Host\n\nA\n\nOne short new line.\n\nMiddle prose.\n\nEnd prose.\n";
+
+    const result = reconcileNote("Host.md", original, edited);
+
+    expect(result.removedRegion).toBe(true);
+    expect(result.refused).toHaveLength(2);
+    expect(result.text.indexOf("![[One.base]]")).toBeLessThan(result.text.indexOf("![[Two.base]]"));
+    expect(result.text).toContain("One short new line.");
+  });
+
+  test("the first of two deleted regions does not derail the note", () => {
+    // Two regions naming DIFFERENT Bases, so the surviving one cannot be paired
+    // and the reconciler has nothing but its original index to order by. The old
+    // offset landed the restore against "Mid" and left three blank lines behind.
+    const original = "# Host\n\nA\n\n![[One.base]]\n\nMid\n\n![[Two.base]]\n\nEnd\n";
+    const edited = "# Host\n\nA\n\nMid\n\n![[Two.base]]\n\nEnd\n";
+
+    const result = reconcileNote("Host.md", original, edited);
+
+    expect(result.text).toContain("![[One.base]]");
+    expect(result.text).toContain("![[Two.base]]");
+    expect(result.text).not.toContain("Mid\n![[One.base]]");
+    expect(result.text).not.toContain("\n\n\n\n");
+    expect(result.text.indexOf("![[One.base]]")).toBeLessThan(result.text.indexOf("![[Two.base]]"));
+  });
+
+  test("a note that is nothing but a deleted region still round-trips", () => {
+    const result = reconcileNote("Host.md", "![[Only.base]]\n", "");
+
+    expect(result.removedRegion).toBe(true);
+    expect(result.text).toBe("![[Only.base]]\n");
+  });
+
+  test("a restore into a CRLF note uses CRLF", () => {
+    const original = "# Host\r\n\r\nIntro.\r\n\r\n![[T.base]]\r\n\r\nTail.\r\n";
+    const edited = original.replace("![[T.base]]\r\n", "");
+
+    const result = reconcileNote("Host.md", original, edited);
+
+    expect(result.text).toContain("![[T.base]]\r\n");
+    expect(result.text).not.toContain("![[T.base]]\n");
+    expect(result.text).toContain("Tail.");
+  });
+});

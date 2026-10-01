@@ -184,6 +184,22 @@ export class MemoryVaultSource implements VaultSource {
     return this.read(path, "GET");
   }
 
+  /**
+   * There is no cache here, so a fresh read is the same read.
+   *
+   * It still fires the `read` fault, because the faults stand for what the
+   * SERVER does and a real backend bypasses its cache only to reach the server.
+   */
+  async readFresh(rel: string): Promise<string> {
+    return this.readText(rel);
+  }
+
+  async exists(rel: string): Promise<boolean> {
+    const path = this.resolve(rel);
+    this.fire({ op: "stat", path });
+    return this.files.has(path);
+  }
+
   async stat(rel: string): Promise<FileStat> {
     const path = this.resolve(rel);
     this.fire({ op: "stat", path });

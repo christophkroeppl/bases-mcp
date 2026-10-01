@@ -6,6 +6,12 @@
  * mid-write. `refresh()` is explicit rather than watching, because the
  * filesystem backend is a development and test path and deterministic
  * behaviour matters more than freshness here.
+ *
+ * The snapshot is for QUERIES. Anything about to write reads through
+ * `readFresh` instead, which is the difference between reconciling an edit
+ * against the note as it is now and reconciling it against whatever was there
+ * when this process last looked -- a distinction worth an hour of someone's lost
+ * work. See `VaultSource.readFresh`.
  */
 
 import { createHash } from "node:crypto";
@@ -67,6 +73,31 @@ export class FsVaultSource implements VaultSource {
     const text = await fs.readFile(this.abs(rel), "utf8");
     this.textCache.set(rel, text);
     return text;
+  }
+
+  /**
+   * Read the note as it is on disk, not as the snapshot remembers it.
+   *
+   * The cache is bypassed rather than invalidated first: the write path calls
+   * this to see a note as it is now, and dropping the whole cache to do it would
+   * make every write a full re-listing.
+   */
+  async readFresh(rel: string): Promise<string> {
+    const text = await fs.readFile(this.abs(rel), "utf8");
+    // Keep the cache consistent with disk, so a later `readText` cannot hand back
+    // the pre-write copy this read just superseded.
+    this.textCache.set(rel, text);
+    this.hashCache.delete(rel);
+    return text;
+  }
+
+  async exists(rel: string): Promise<boolean> {
+    try {
+      await fs.stat(this.abs(rel));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async writeText(rel: string, data: string): Promise<void> {

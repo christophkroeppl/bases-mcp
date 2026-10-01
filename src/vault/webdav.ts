@@ -23,10 +23,13 @@
  * Snapshot semantics match `FsVaultSource` exactly -- `list()` is a snapshot until
  * `refresh()` or a write, and text and hashes are cached beneath it -- because the
  * two backends are meant to be interchangeable and the equivalence suite treats a
- * difference as a finding. Exactly two behaviours deliberately differ, both
- * commented where they happen: a refused `PROPFIND` is an error here rather than a
- * silently smaller vault (`childrenOf`), and a `delete` of something absent is
- * tolerated here rather than reported as a success it was not (`delete`).
+ * difference as a finding. `readFresh` and `exists` bypass that snapshot the same
+ * way on both backends, for the same reason: a write has to see the note as it is
+ * now. Three behaviours deliberately differ, all commented where they happen: a
+ * refused `PROPFIND` is an error here rather than a silently smaller vault
+ * (`childrenOf`), a `delete` of something absent is tolerated here rather than
+ * reported as a success it was not (`delete`), and `exists` reports only a `404`
+ * as absent rather than swallowing every refusal (`exists`).
  */
 
 import { XMLParser } from "fast-xml-parser";
@@ -681,6 +684,41 @@ export class WebdavVaultSource implements VaultSource {
     const text = await this.fetchText("read", path);
     this.textCache.set(path, text);
     return text;
+  }
+
+  /**
+   * Bypass the cache and go to the server.
+   *
+   * Same reasoning as the filesystem backend: the write path needs the note as it
+   * is now, not as it was when this process last read it. Obsidian may be syncing
+   * the same vault concurrently, so a cached copy can be arbitrarily old.
+   */
+  async readFresh(rel: string): Promise<string> {
+    const path = vaultRelativePath(rel);
+    const text = await this.fetchText("read", path);
+    this.textCache.set(path, text);
+    this.hashCache.delete(path);
+    return text;
+  }
+
+  /**
+   * Ask the server whether the resource is there.
+   *
+   * A `Depth: 0` `PROPFIND` rather than a `HEAD`, because a server may answer
+   * `HEAD` without the collection semantics a vault needs, and because `stat`
+   * already speaks this dialect. Only `404` means absent: every other status is a
+   * failure to find out, and reporting that as "no" would let a commit replace a
+   * note because the network was down.
+   */
+  async exists(rel: string): Promise<boolean> {
+    const path = namedFile(vaultRelativePath(rel));
+    try {
+      await this.send("stat", "PROPFIND", path, { body: DAV_PROPFIND_BODY, depth: "0" });
+      return true;
+    } catch (err) {
+      if (err instanceof WebdavError && err.status === 404) return false;
+      throw err;
+    }
   }
 
   /**

@@ -20,9 +20,9 @@ import {
   reconcileNote,
   wrapInFence,
 } from "./render/project";
-import { FsVaultSource } from "./vault/fs";
+import { contentHash, FsVaultSource } from "./vault/fs";
 import type { VaultSource } from "./vault/source";
-import { type NoteRecord, Vault } from "./vault/vault";
+import { Vault } from "./vault/vault";
 
 export interface BaseSummary {
   path: string;
@@ -37,6 +37,15 @@ export interface NoteView {
   content: string;
   /** One entry per base region, describing what was rendered. */
   regions: Array<{ provenance: Record<string, unknown> }>;
+  /**
+   * Content hash of `raw`, for passing back as `write_note`'s `base_hash`.
+   *
+   * This is what makes a write conditional rather than blind. Without it the
+   * server has no way to tell "the agent edited the text it read" from "the
+   * agent edited a copy that has since been overwritten", and the second case
+   * silently discards whatever arrived in between.
+   */
+  baseHash: string;
 }
 
 export class Resolver {
@@ -123,23 +132,26 @@ export class Resolver {
    *
    * `raw: true` returns the stored text untouched, which is the escape hatch
    * for an agent that wants to edit the note itself.
+   *
+   * Both surfaces are built from a FRESH read rather than from the indexed note.
+   * `base_hash` is this text's hash and `writeNote` compares it against a fresh
+   * read, so serving a stale `raw` here would make every conditional write refuse
+   * -- and refuse identically on the retry, because nothing between the two would
+   * re-read the note.
    */
   async readNote(path: string, options: QueryOptions & { raw?: boolean } = {}): Promise<NoteView> {
     const resolved = this.resolveNotePath(path);
-    const record = this.vault.note(resolved);
-    if (record === undefined) {
-      throw new BasesError(`Note not found: ${path}`);
-    }
-    const raw = record.parsed.segments.map((s) => s.raw).join("");
+    const raw = await this.vault.readFresh(resolved);
+    const parsed = parseNoteWithEmbeds(resolved, raw);
 
     if (options.raw === true) {
-      return { path: resolved, raw, content: raw, regions: [] };
+      return { path: resolved, raw, content: raw, regions: [], baseHash: contentHash(raw) };
     }
 
     const regions: Array<{ provenance: Record<string, unknown> }> = [];
 
-    const content = await project(record.parsed, async (ref: BaseRegionRef) => {
-      const body = await this.renderRegion(record, ref, options);
+    const content = await project(parsed, async (ref: BaseRegionRef) => {
+      const body = await this.renderRegion(resolved, ref, options);
       const wrapped = wrapInFence(
         body,
         ref.basePath !== undefined
@@ -157,21 +169,21 @@ export class Resolver {
       return wrapped.text;
     });
 
-    return { path: resolved, raw, content, regions };
+    return { path: resolved, raw, content, regions, baseHash: contentHash(raw) };
   }
 
   /** Render one base region: an embed resolves the target `.base` file. */
   private async renderRegion(
-    note: NoteRecord,
+    hostPath: string,
     ref: BaseRegionRef,
     options: QueryOptions,
   ): Promise<string> {
     // An inline ```base fence carries its own YAML; `this` is the host note.
     if (ref.basePath === undefined && ref.yaml !== undefined) {
-      const base = parseBase(`${note.path}#inline`, ref.yaml);
-      const result = queryBase(this.vault, `${note.path}#inline`, base, {
+      const base = parseBase(`${hostPath}#inline`, ref.yaml);
+      const result = queryBase(this.vault, `${hostPath}#inline`, base, {
         ...options,
-        context: options.context ?? note.path,
+        context: options.context ?? hostPath,
       });
       return renderMarkdown(base, result, "structured");
     }
@@ -183,7 +195,7 @@ export class Resolver {
       ...options,
       // An embedded base always binds `this` to the note containing it, unless
       // the caller overrode it.
-      context: options.context ?? note.path,
+      context: options.context ?? hostPath,
       view: ref.viewName ?? options.view,
     });
     return renderMarkdown(base, result, "structured");
@@ -214,10 +226,40 @@ export class Resolver {
    *
    * Base regions are restored verbatim and any attempt to change them is
    * reported. The rest of the note is written as the agent left it.
+   *
+   * `baseHash` makes the write conditional. When it is supplied and no longer
+   * matches the note on disk, the write is REFUSED and nothing is written,
+   * because the agent edited a copy that has since been replaced. Obsidian
+   * autosaves continuously, so that is the normal case rather than a rare one,
+   * and without the check the alternative is overwriting the user's prose and
+   * reporting `health: ok`.
+   *
+   * Omitting it is allowed, and means "I accept that this is a blind write" --
+   * which is right for an agent constructing a note wholesale and wrong for one
+   * editing prose it read earlier.
    */
-  async writeNote(path: string, content: string): Promise<ReconcileResult & { path: string }> {
+  async writeNote(
+    path: string,
+    content: string,
+    baseHash?: string,
+  ): Promise<ReconcileResult & { path: string }> {
     const resolved = this.resolveNotePath(path);
-    const original = await this.vault.readText(resolved);
+    // Read the note as it is on disk RIGHT NOW, not as it was when this process
+    // last looked. The backend caches, and the cache is populated by queries, so
+    // a note the agent read a minute ago comes back stale -- while Obsidian has
+    // been autosaving over the top of it. Reconciling against the stale copy and
+    // writing the result destroys the user's edits and reports success.
+    const original = await this.vault.readFresh(resolved);
+
+    if (baseHash !== undefined && contentHash(original) !== baseHash) {
+      throw new BasesError(
+        `${resolved} changed since you read it, so nothing was written. You edited text that ` +
+          `is no longer current. Read it again with get_note, reapply your edit to the new text, ` +
+          `and write it back.`,
+        { note: resolved, construct: "concurrent-edit" },
+      );
+    }
+
     const result = reconcileNote(resolved, original, content);
 
     // Verify the result still parses, so we never write a broken note.

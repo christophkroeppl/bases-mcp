@@ -288,6 +288,19 @@ export function splitBaseEmbeds(segments: Segment[]): Segment[] {
     let cursor = 0;
     // Matches `![[Foo.base]]` / `![[Foo.base#View]]`, optionally with a
     // display suffix, on its own line.
+    //
+    // The missing `\r?` before `$` is deliberate, and the reason is a language
+    // difference rather than an oversight. JavaScript's multiline `$` matches
+    // before `\r`, `\n`, `\u2028` and `\u2029`; Rust's `(?m)` treats only `\n` as
+    // a line terminator. So on a CRLF Host note this pattern still matches, and
+    // the region ends before the `\r` -- which leaves it in the following prose
+    // segment, where `serialise` puts it straight back. The Rust port, reading
+    // the same pattern with `(?m)`, matched nothing at all on a CRLF note, which
+    // made the region invisible and `write_note` then persisted the agent's
+    // deletion of it while reporting `health: ok`. Adding a `\r?` here would be
+    // harmless but would change where the region boundary falls, so the
+    // asymmetry is left explicit and pinned by
+    // `test/unit/note.test.ts` instead of papered over.
     const re = /^([ \t]*)!\[\[([^\]|#]+?\.base)(#[^\]|]*)?(\|[^\]]*)?\]\][ \t]*$/gm;
     let m: RegExpExecArray | null;
     while ((m = re.exec(seg.raw)) !== null) {

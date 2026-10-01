@@ -221,7 +221,7 @@ async function proposeDraft(host: DraftHost, options: AddNoteOptions): Promise<D
   // gets as far as a lookup.
   const path = requireField(options.path, "path");
   assertNotePath(path);
-  assertNoteAbsent(host, path);
+  await assertNoteAbsent(host, path);
 
   const basePath = host.resolveBasePath(requireField(options.base, "base"));
   const base = await host.loadBase(basePath);
@@ -265,8 +265,15 @@ function requireField(value: string | undefined, name: string): string {
   return value;
 }
 
-function assertNoteAbsent(host: DraftHost, path: string): void {
-  if (host.vaultSource.notePaths().includes(path)) {
+/**
+ * Refuse to draft a row for a path that is already taken.
+ *
+ * Asks the BACKEND, not the index. The index is a snapshot from whenever this
+ * process last listed the vault, so a note written since then is invisible to it
+ * -- and a note written since then is exactly what this check exists to catch.
+ */
+async function assertNoteAbsent(host: DraftHost, path: string): Promise<void> {
+  if (await host.vaultSource.backend.exists(path)) {
     throw new BasesError(
       `${path} already exists. add_note_to_base creates a NEW row; use write_note to change a note ` +
         `that is already there, or pick another path.`,
@@ -378,6 +385,22 @@ async function commitDraft(host: DraftHost, options: AddNoteOptions): Promise<Dr
   if (failures.length > 0) {
     const yaml = await host.vaultSource.readText(stored.base);
     throw verificationError(stored, view, failures, yaml);
+  }
+
+  // The absence check ran when the draft was PROPOSED. Between then and now a
+  // human may have created a note at this path -- minutes later, while they read
+  // the proposal -- and `createNote` replaces verbatim. So the commit asks the
+  // BACKEND whether the path is taken, not the index: the index is a snapshot
+  // taken when this process last listed the vault, and a note written since then
+  // is exactly the one this check exists to catch. Asking the index is a check
+  // that passes precisely when it is needed.
+  if (await host.vaultSource.backend.exists(stored.path)) {
+    throw new BasesError(
+      `${stored.path} was created after this draft was proposed, so nothing was written. ` +
+        `add_note_to_base only creates a NEW row; use write_note to change a note that already ` +
+        `exists, or pick another path.`,
+      { note: stored.path },
+    );
   }
 
   await host.createNote(stored.path, content);
@@ -954,6 +977,18 @@ class DraftVaultSource implements VaultSource {
 
   async readText(path: string): Promise<string> {
     return path === this.path ? this.content : this.inner.readText(path);
+  }
+
+  /**
+   * The draft overlays the real vault, so a fresh read still has to consult the
+   * draft for its own path before going to the backend for anything else.
+   */
+  async readFresh(path: string): Promise<string> {
+    return path === this.path ? this.content : this.inner.readFresh(path);
+  }
+
+  async exists(path: string): Promise<boolean> {
+    return path === this.path || this.inner.exists(path);
   }
 
   async writeText(path: string): Promise<void> {

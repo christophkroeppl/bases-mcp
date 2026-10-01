@@ -213,6 +213,11 @@ export function reconcileNote(notePath: string, original: string, edited: string
   const refused: RefusedRegion[] = [];
   let removedRegion = false;
 
+  // A note carries one line ending, not two, and a restore has to use the one
+  // already there: writing a bare `\n` into a CRLF note leaves a line that every
+  // other tool has to re-detect.
+  const eol = original.includes("\r\n") ? "\r\n" : "\n";
+
   // Pair each edited region with the original region it replaced.
   //
   // A rendered fence is matched on the Base path carried in its info string,
@@ -220,7 +225,7 @@ export function reconcileNote(notePath: string, original: string, edited: string
   // body is rendered rows, not YAML, so position alone would mispair a note
   // whose regions were reordered. Everything else is matched by position,
   // since an embed or a live ```base fence is identified by its own text.
-  const pairs = new Map<number, string>();
+  const pairs = new Map<number, BaseRegionRef>();
   const claimed = new Set<number>();
   editedRegions.forEach((ref, i) => {
     const orig = originalRegions[i];
@@ -231,7 +236,7 @@ export function reconcileNote(notePath: string, original: string, edited: string
       (ref.viewName ?? null) === (orig.viewName ?? null) &&
       (ref.yaml === undefined) === (orig.yaml === undefined);
     if (sameBase) {
-      pairs.set(i, original.slice(orig.start, orig.end));
+      pairs.set(i, orig);
       claimed.add(i);
     }
   });
@@ -243,25 +248,51 @@ export function reconcileNote(notePath: string, original: string, edited: string
       (orig, j) => !claimed.has(j) && orig.basePath === ref.basePath,
     );
     if (hit < 0) return;
-    const hitRef = originalRegions[hit]!;
-    pairs.set(i, original.slice(hitRef.start, hitRef.end));
+    pairs.set(i, originalRegions[hit]!);
     claimed.add(hit);
   });
 
   const missing = originalRegions.filter((_, i) => !claimed.has(i));
   if (missing.length > 0) removedRegion = true;
 
-  // Rebuild: walk the edited segments, restoring base regions, and drop any
+  // Rebuild: walk the edited segments, restore base regions, and drop any
   // region the agent added.
-  const out: string[] = [];
+  //
+  // A region the agent deleted is re-inserted according to its position among
+  // the OTHER regions, using the ORIGINAL index as the ordering key. Character
+  // offsets are not usable here: an offset into the original text refers to a
+  // document the agent's edits have already changed, so anchoring on one put the
+  // embed wherever the edit happened to shift things to -- routinely wedged
+  // between the halves of a sentence the agent had just written.
+  let out = "";
+  // Missing regions still to emit, ascending by original index.
+  const pending = [...missing].sort((a, b) => a.index - b.index);
+
+  const restore = (region: BaseRegionRef): void => {
+    out = pushLine(out, original.slice(region.start, region.end), eol);
+    refused.push(removalRefusal(region));
+    removedRegion = true;
+  };
+
   for (const seg of after.segments) {
     if (!isBaseRegion(seg)) {
-      out.push(seg.raw);
+      out += seg.raw;
       continue;
     }
     const index = baseIndexOf(after, seg);
-    const originalRaw = pairs.get(index);
-    if (originalRaw !== undefined) {
+    const paired = pairs.get(index);
+
+    // Anything the agent deleted that belongs BEFORE this region goes back
+    // first, so the original ordering survives. A region we could not pair
+    // anchors nothing -- we cannot say where in the note it came from -- so
+    // everything still pending goes before it rather than after, which keeps a
+    // deletion from flipping the note's order.
+    while (pending.length > 0 && (paired === undefined || pending[0]!.index < paired.index)) {
+      restore(pending.shift()!);
+    }
+
+    const originalRaw = paired === undefined ? undefined : original.slice(paired.start, paired.end);
+    if (paired !== undefined && originalRaw !== undefined) {
       // A rendered fence is replaced silently. Round-tripping a Projection --
       // read the note, edit the prose, write it back -- is the DESIGNED flow, so
       // reporting a refusal every time would mark the happy path
@@ -281,7 +312,7 @@ export function reconcileNote(notePath: string, original: string, edited: string
             "host note. Use add_note_to_base to be guided through creating a matching note.",
         });
       }
-      out.push(originalRaw);
+      out += originalRaw;
       continue;
     }
     refused.push({
@@ -294,28 +325,38 @@ export function reconcileNote(notePath: string, original: string, edited: string
     });
   }
 
-  // Re-insert any region the agent deleted, at its original position.
-  let text = out.join("");
-  if (missing.length > 0) {
-    for (const ref of missing) {
-      const raw = original.slice(ref.start, ref.end);
-      const anchor = text.indexOf("\n", ref.start);
-      text =
-        anchor === -1
-          ? `${text}\n${raw}\n`
-          : `${text.slice(0, anchor + 1)}${raw}\n${text.slice(anchor + 1)}`;
-      refused.push({
-        index: ref.index,
-        basePath: ref.basePath,
-        reason: "The base region was removed.",
-        guidance:
-          "Base regions are never removed by a note edit. Restore the embed, or delete " +
-          "the base region deliberately outside this tool.",
-      });
-    }
-  }
+  // Whatever is still pending belongs after every surviving region.
+  while (pending.length > 0) restore(pending.shift()!);
 
-  return { text, refused, removedRegion };
+  return { text: out, refused, removedRegion };
+}
+
+/** The report for a Base region the agent deleted outright. */
+function removalRefusal(region: BaseRegionRef): RefusedRegion {
+  return {
+    index: region.index,
+    basePath: region.basePath,
+    reason: "The base region was removed.",
+    guidance:
+      "Base regions are never removed by a note edit. Restore the embed, or delete " +
+      "the base region deliberately outside this tool.",
+  };
+}
+
+/**
+ * Append `line` to `out` as a whole line, normalising both joins.
+ *
+ * A Base region is always a complete line in a note, so it has to start on one
+ * and end on one. Assuming the surrounding text already cooperates is what let a
+ * restore splice an embed into the middle of a sentence the agent had just
+ * written: the insertion point was a character offset from the ORIGINAL text,
+ * and the agent's edits had shifted everything after it.
+ */
+function pushLine(out: string, line: string, eol: string): string {
+  // Any line ending ends in `\n`, so that is the whole test for "a line break is
+  // already here".
+  const lead = out !== "" && !out.endsWith("\n") ? eol : "";
+  return `${out}${lead}${line}${eol}`;
 }
 
 function baseIndexOf(note: ParsedNote, target: Segment): number {

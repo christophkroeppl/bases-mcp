@@ -171,7 +171,9 @@ export function createToolsServer(resolver: Resolver): McpServer {
         "This Projection is NEVER written back to disk. Obsidian treats a `base` fence as live YAML " +
         "and would reject rendered markdown inside one. To edit a note, read it with raw=true, " +
         "edit THAT, and send it to write_note.\n" +
-        "`raw: true` returns the stored text untouched and an empty `regions`.",
+        "`raw: true` returns the stored text untouched and an empty `regions`.\n" +
+        "`base_hash` is the hash of `raw`. Send it back as `write_note`'s `base_hash` so the " +
+        "write is conditional rather than blind.",
       inputSchema: {
         path: z.string().describe("Path to the `.md` note."),
         raw: z
@@ -187,6 +189,7 @@ export function createToolsServer(resolver: Resolver): McpServer {
           path: note.path,
           raw: note.raw,
           content: note.content,
+          base_hash: note.baseHash,
           regions: note.regions.map((r) => r.provenance),
           health: "ok" satisfies Health,
         };
@@ -211,7 +214,11 @@ export function createToolsServer(resolver: Resolver): McpServer {
         "was, while the rest of your edit was applied. `health` is `partial-with-errors` whenever " +
         "anything was refused, and `isError` stays false because the write itself succeeded.\n" +
         "Rows come from notes, not from the base file. To add a row, use add_note_to_base -- it " +
-        "authors a note whose properties satisfy the base's filter.",
+        "authors a note whose properties satisfy the base's filter.\n" +
+        "Send the `base_hash` from the get_note this edit is based on. Obsidian autosaves " +
+        "constantly, so a note can change under you between the read and the write; with the hash " +
+        "the write is REFUSED and nothing is touched, rather than overwriting whatever arrived " +
+        "since. Omit it only when writing a note wholesale rather than editing one read earlier.",
       inputSchema: {
         path: z.string().describe("Path to the `.md` note to write."),
         content: z
@@ -219,12 +226,19 @@ export function createToolsServer(resolver: Resolver): McpServer {
           .describe(
             "The agent's edited note. Send the `raw` text from get_note, never a Projection.",
           ),
+        base_hash: z
+          .string()
+          .optional()
+          .describe(
+            "`base_hash` from the get_note this edit is based on. Supplying it makes the write " +
+              "conditional: if the note changed in the meantime the write is refused.",
+          ),
       },
     },
     (args) =>
       attempt(async () => {
         const before = await resolver.readNote(args.path, { raw: true });
-        const result = await resolver.writeNote(args.path, args.content);
+        const result = await resolver.writeNote(args.path, args.content, args.base_hash);
         const health: Health = result.refused.length > 0 ? "partial-with-errors" : "ok";
         const applied = changeSummary(before.raw, result.text);
 

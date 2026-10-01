@@ -727,9 +727,12 @@ describe("writeText, ensureDir and createNote", () => {
       expect(fromMemory.refused).toEqual(fromFs.refused);
       expect(fromMemory.text).toBe(fromFs.text);
       expect(fromMemory.removedRegion).toBe(true);
+      // Removal FIRST. A restored region is put back at the point it belongs, so
+      // the refusals come out in the order the regions land in the rebuilt note
+      // rather than with every insertion reported ahead of every restoration.
       expect(fromMemory.refused.map((r) => r.reason)).toEqual([
-        "A new base region was inserted.",
         "The base region was removed.",
+        "A new base region was inserted.",
       ]);
       // Restored, so the note is still renderable.
       expect(fromMemory.text).toContain("```base\nfilters:");
