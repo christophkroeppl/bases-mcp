@@ -31,7 +31,7 @@ use std::rc::Rc;
 
 use async_trait::async_trait;
 use bases_mcp::error::BasesError;
-use bases_mcp::vault::{FileStat, SourceKind, VaultSource, content_hash, is_indexable};
+use bases_mcp::vault::{content_hash, is_indexable, FileStat, SourceKind, VaultSource};
 use chrono::{DateTime, FixedOffset};
 
 use super::VaultFile;
@@ -110,7 +110,10 @@ impl MemoryFault {
 
     /// A fault on one operation of one path.
     pub fn on(path: &str, op: MemoryOp, status: u16) -> Self {
-        Self { op: Some(op), ..Self::refusing(path, status) }
+        Self {
+            op: Some(op),
+            ..Self::refusing(path, status)
+        }
     }
 
     /// A write that succeeds and stores something else.
@@ -227,7 +230,10 @@ impl MemoryVaultSource {
                  `stored` bytes to accept the write and keep.",
             ));
         }
-        self.armed.borrow_mut().push(ArmedFault { remaining: fault.times, fault });
+        self.armed.borrow_mut().push(ArmedFault {
+            remaining: fault.times,
+            fault,
+        });
         Ok(())
     }
 
@@ -298,7 +304,10 @@ impl MemoryVaultSource {
                 }
                 continue;
             }
-            let status = entry.fault.status.expect("`inject` refuses a fault naming no outcome");
+            let status = entry
+                .fault
+                .status
+                .expect("`inject` refuses a fault naming no outcome");
             let verb = entry.fault.op.unwrap_or(at).as_str().to_uppercase();
             return Err(self.refuse(MemoryVaultError {
                 status,
@@ -335,7 +344,11 @@ impl MemoryOp {
 }
 
 fn not_found(verb: &str, path: &str, status: u16) -> MemoryVaultError {
-    MemoryVaultError { status, path: path.to_string(), message: format!("{verb} {path}: {status} Not Found") }
+    MemoryVaultError {
+        status,
+        path: path.to_string(),
+        message: format!("{verb} {path}: {status} Not Found"),
+    }
 }
 
 #[async_trait(?Send)]
@@ -356,8 +369,13 @@ impl VaultSource for MemoryVaultSource {
     /// backend get away with forgetting to re-list after a write.
     async fn list(&self) -> std::result::Result<Vec<String>, BasesError> {
         self.fire(MemoryOp::List, ANY_PATH)?;
-        let mut paths: Vec<String> =
-            self.files.borrow().keys().filter(|p| is_indexable(p)).cloned().collect();
+        let mut paths: Vec<String> = self
+            .files
+            .borrow()
+            .keys()
+            .filter(|p| is_indexable(p))
+            .cloned()
+            .collect();
         paths.sort();
         Ok(paths)
     }
@@ -372,7 +390,10 @@ impl VaultSource for MemoryVaultSource {
         let path = self.normalise_refusing(rel)?;
         self.fire(MemoryOp::Stat, &path)?;
         let text = self.read(&path, "PROPFIND")?;
-        Ok(FileStat { size: text.len() as u64, mtime: memory_mtime() })
+        Ok(FileStat {
+            size: text.len() as u64,
+            mtime: memory_mtime(),
+        })
     }
 
     /// The backend's own hash, taken over the text it read.
@@ -395,7 +416,9 @@ impl VaultSource for MemoryVaultSource {
     async fn write_text(&self, rel: &str, data: &str) -> std::result::Result<(), BasesError> {
         let path = self.normalise_refusing(rel)?;
         let swapped = self.fire(MemoryOp::Write, &path)?;
-        self.files.borrow_mut().insert(path, swapped.unwrap_or_else(|| data.to_string()));
+        self.files
+            .borrow_mut()
+            .insert(path, swapped.unwrap_or_else(|| data.to_string()));
         Ok(())
     }
 

@@ -13,17 +13,13 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use chrono::{
-    DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveTime,
-    TimeZone, Timelike,
+    DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveTime, TimeZone,
+    Timelike,
 };
 
 use crate::error::{BasesError, Result};
-use crate::evaluator::{
-    coerce_date, to_number_loose, EvalContext,
-};
-use crate::value::{
-    values_equal, BasesDate, BasesValue, Duration,
-};
+use crate::evaluator::{coerce_date, to_number_loose, EvalContext};
+use crate::value::{values_equal, BasesDate, BasesValue, Duration};
 
 /// Which receiver type a value dispatches on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -210,9 +206,9 @@ fn normalise_link(s: &str) -> String {
 
 fn link_points_at(l: &BasesValue, path: &str) -> bool {
     match l {
-        BasesValue::Link { target, resolved, .. } => {
-            matches_link_text(resolved.as_deref().unwrap_or(target), path)
-        }
+        BasesValue::Link {
+            target, resolved, ..
+        } => matches_link_text(resolved.as_deref().unwrap_or(target), path),
         BasesValue::String(s) => matches_link_text(s, path),
         _ => false,
     }
@@ -222,9 +218,9 @@ fn link_points_at(l: &BasesValue, path: &str) -> bool {
 fn linkish_path(v: &BasesValue) -> Option<String> {
     match v {
         BasesValue::File(f) => Some(f.path.clone()),
-        BasesValue::Link { target, resolved, .. } => {
-            Some(resolved.clone().unwrap_or_else(|| target.clone()))
-        }
+        BasesValue::Link {
+            target, resolved, ..
+        } => Some(resolved.clone().unwrap_or_else(|| target.clone())),
         BasesValue::String(s) => Some(s.clone()),
         _ => None,
     }
@@ -244,7 +240,11 @@ fn values_equal_loose(a: &BasesValue, b: &BasesValue) -> bool {
 fn compare_loose(a: &BasesValue, b: &BasesValue) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     if matches!(a, BasesValue::Null) {
-        return if matches!(b, BasesValue::Null) { Ordering::Equal } else { Ordering::Less };
+        return if matches!(b, BasesValue::Null) {
+            Ordering::Equal
+        } else {
+            Ordering::Less
+        };
     }
     if matches!(b, BasesValue::Null) {
         return Ordering::Greater;
@@ -328,8 +328,14 @@ const DURATION_UNITS: [(&str, i64); 22] = [
 ];
 
 /// Units that are calendar-relative and so cannot be a fixed millisecond span.
-const CALENDAR_UNITS: [(&str, i64); 6] =
-    [("M", 1), ("month", 1), ("months", 1), ("y", 12), ("year", 12), ("years", 12)];
+const CALENDAR_UNITS: [(&str, i64); 6] = [
+    ("M", 1),
+    ("month", 1),
+    ("months", 1),
+    ("y", 12),
+    ("year", 12),
+    ("years", 12),
+];
 
 /// Parse a duration literal such as `"1d"`, `"2w"` or `"1M"`.
 ///
@@ -366,7 +372,9 @@ pub fn parse_duration_literal(input: &str) -> Result<Duration> {
             i += 1;
         }
         let Ok(n) = text[start..i].parse::<f64>() else {
-            return Err(BasesError::new(format!("Could not parse duration \"{input}\"")));
+            return Err(BasesError::new(format!(
+                "Could not parse duration \"{input}\""
+            )));
         };
         // Skip whitespace between the number and the unit.
         while i < bytes.len() && (bytes[i] as char).is_whitespace() {
@@ -378,7 +386,9 @@ pub fn parse_duration_literal(input: &str) -> Result<Duration> {
         }
         let unit = &text[unit_start..i];
         if unit.is_empty() {
-            return Err(BasesError::new(format!("Could not parse duration \"{input}\"")));
+            return Err(BasesError::new(format!(
+                "Could not parse duration \"{input}\""
+            )));
         }
         if let Some((_, months_per)) = CALENDAR_UNITS.iter().find(|(u, _)| *u == unit) {
             if *months_per == 1 {
@@ -399,9 +409,15 @@ pub fn parse_duration_literal(input: &str) -> Result<Duration> {
     }
 
     if !matched {
-        return Err(BasesError::new(format!("Could not parse duration \"{input}\"")));
+        return Err(BasesError::new(format!(
+            "Could not parse duration \"{input}\""
+        )));
     }
-    Ok(Duration { millis, months, years })
+    Ok(Duration {
+        millis,
+        months,
+        years,
+    })
 }
 
 /// Parse a date from the forms Obsidian accepts: `YYYY-MM-DD`,
@@ -463,14 +479,37 @@ fn human_duration(ms: i64) -> String {
 /// Unrecognised characters pass through, so literal text still renders.
 pub fn format_date(d: &BasesDate, pattern: &str) -> String {
     const MONTHS: [&str; 12] = [
-        "January", "February", "March", "April", "May", "June", "July", "August",
-        "September", "October", "November", "December",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ];
-    const WEEKDAYS: [&str; 7] =
-        ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const WEEKDAYS: [&str; 7] = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
 
     let dt = d.0;
-    let pad2 = |n: i64| -> String { if n < 10 { format!("0{n}") } else { n.to_string() } };
+    let pad2 = |n: i64| -> String {
+        if n < 10 {
+            format!("0{n}")
+        } else {
+            n.to_string()
+        }
+    };
     // chrono has no %-d, so day-of-month is emitted by hand.
     let month = dt.month() as usize;
     let day = dt.day();
@@ -510,15 +549,36 @@ pub fn format_date(d: &BasesDate, pattern: &str) -> String {
         } else if rest.starts_with("HH") {
             Some(("HH", pad2(dt.hour() as i64)))
         } else if rest.starts_with("hh") {
-            Some(("hh", pad2(if dt.hour() % 12 == 0 { 12 } else { dt.hour() % 12 } as i64)))
+            Some((
+                "hh",
+                pad2(if dt.hour() % 12 == 0 {
+                    12
+                } else {
+                    dt.hour() % 12
+                } as i64),
+            ))
         } else if rest.starts_with("mm") {
             Some(("mm", pad2(dt.minute() as i64)))
         } else if rest.starts_with("ss") {
             Some(("ss", pad2(dt.second() as i64)))
         } else if rest.starts_with("A") {
-            Some(("A", if dt.hour() < 12 { "AM".into() } else { "PM".into() }))
+            Some((
+                "A",
+                if dt.hour() < 12 {
+                    "AM".into()
+                } else {
+                    "PM".into()
+                },
+            ))
         } else if rest.starts_with("a") {
-            Some(("a", if dt.hour() < 12 { "am".into() } else { "pm".into() }))
+            Some((
+                "a",
+                if dt.hour() < 12 {
+                    "am".into()
+                } else {
+                    "pm".into()
+                },
+            ))
         } else if rest.starts_with('Z') {
             Some(("Z", dt.offset().to_string()))
         } else {
@@ -565,14 +625,15 @@ fn g_number(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
             match trimmed.parse::<f64>() {
                 Ok(n) if !trimmed.is_empty() => BasesValue::Number(n),
                 _ => {
-                    return Err(BasesError::new(format!("number() could not convert \"{s}\""))
-                        .with_construct("number"))
+                    return Err(
+                        BasesError::new(format!("number() could not convert \"{s}\""))
+                            .with_construct("number"),
+                    )
                 }
             }
         }
         BasesValue::List(_) => {
-            return Err(BasesError::new("number() does not accept a List")
-                .with_construct("number"))
+            return Err(BasesError::new("number() does not accept a List").with_construct("number"))
         }
         _ => BasesValue::Number(0.0),
     })
@@ -640,8 +701,10 @@ fn g_date(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
         },
         BasesValue::Number(n) => BasesValue::Date(BasesDate::from_millis(n as i64)),
         other => {
-            return Err(BasesError::new(format!("date() cannot convert {}", describe(&other)))
-                .with_construct("date"))
+            return Err(
+                BasesError::new(format!("date() cannot convert {}", describe(&other)))
+                    .with_construct("date"),
+            )
         }
     })
 }
@@ -652,11 +715,10 @@ fn g_duration(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
         BasesValue::String(s) => BasesValue::Duration(parse_duration_literal(&s)?),
         BasesValue::Number(n) => BasesValue::Duration(Duration::from_millis(n as i64)),
         other => {
-            return Err(BasesError::new(format!(
-                "duration() cannot convert {}",
-                describe(&other)
-            ))
-            .with_construct("duration"))
+            return Err(
+                BasesError::new(format!("duration() cannot convert {}", describe(&other)))
+                    .with_construct("duration"),
+            )
         }
     })
 }
@@ -678,7 +740,9 @@ fn g_random(_args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
 }
 
 fn g_escape_html(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    Ok(BasesValue::String(escape_html(&arg(args, 0).to_display_string())))
+    Ok(BasesValue::String(escape_html(
+        &arg(args, 0).to_display_string(),
+    )))
 }
 
 fn g_html(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
@@ -686,14 +750,15 @@ fn g_html(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
 }
 
 fn g_icon(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    Ok(BasesValue::String(format!(":{}:", arg(args, 0).to_display_string())))
+    Ok(BasesValue::String(format!(
+        ":{}:",
+        arg(args, 0).to_display_string()
+    )))
 }
 
 fn g_image(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
     Ok(match arg(args, 0) {
-        BasesValue::Link { target, .. } => {
-            BasesValue::String(format!("![[{target}]]"))
-        }
+        BasesValue::Link { target, .. } => BasesValue::String(format!("![[{target}]]")),
         other => BasesValue::String(other.to_display_string()),
     })
 }
@@ -713,7 +778,11 @@ fn g_link(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
             target: f.path.clone(),
             display,
         },
-        BasesValue::Link { target, display: existing, resolved } => BasesValue::Link {
+        BasesValue::Link {
+            target,
+            display: existing,
+            resolved,
+        } => BasesValue::Link {
             target: target.clone(),
             display: display.or_else(|| existing.clone()),
             resolved: resolved.clone(),
@@ -730,7 +799,9 @@ fn g_file(args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
     let v = arg(args, 0);
     match &v {
         BasesValue::File(_) => Ok(v),
-        BasesValue::Link { resolved, target, .. } => {
+        BasesValue::Link {
+            resolved, target, ..
+        } => {
             let path = resolved.as_deref().unwrap_or(target);
             Ok(match (ctx.file.accessors.resolve)(path) {
                 Some(f) => BasesValue::File(Rc::new(f)),
@@ -770,11 +841,19 @@ fn start_of_day(now: i64) -> BasesDate {
 // Universal methods
 // ---------------------------------------------------------------------------
 
-fn m_to_string(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_to_string(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     Ok(BasesValue::String(target.to_display_string()))
 }
 
-fn m_is_truthy(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_is_truthy(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     Ok(BasesValue::Bool(target.is_truthy()))
 }
 
@@ -804,7 +883,11 @@ fn m_is_empty(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> 
 // String methods
 // ---------------------------------------------------------------------------
 
-fn m_str_contains(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_contains(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let haystack = as_str(target, "contains")?;
     let needle = arg(args, 0);
     let BasesValue::String(n) = &needle else {
@@ -817,21 +900,33 @@ fn m_str_contains(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) 
     Ok(BasesValue::Bool(haystack.contains(n.as_str())))
 }
 
-fn m_str_contains_all(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_contains_all(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let s = as_str(target, "containsAll")?;
-    Ok(BasesValue::Bool(args.iter().all(|a| {
-        matches!(a, BasesValue::String(n) if s.contains(n.as_str()))
-    })))
+    Ok(BasesValue::Bool(args.iter().all(
+        |a| matches!(a, BasesValue::String(n) if s.contains(n.as_str())),
+    )))
 }
 
-fn m_str_contains_any(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_contains_any(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let s = as_str(target, "containsAny")?;
-    Ok(BasesValue::Bool(args.iter().any(|a| {
-        matches!(a, BasesValue::String(n) if s.contains(n.as_str()))
-    })))
+    Ok(BasesValue::Bool(args.iter().any(
+        |a| matches!(a, BasesValue::String(n) if s.contains(n.as_str())),
+    )))
 }
 
-fn m_str_starts_with(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_starts_with(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let s = as_str(target, "startsWith")?;
     let p = arg(args, 0);
     let BasesValue::String(p) = &p else {
@@ -844,7 +939,11 @@ fn m_str_starts_with(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContex
     Ok(BasesValue::Bool(s.starts_with(p.as_str())))
 }
 
-fn m_str_ends_with(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_ends_with(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let s = as_str(target, "endsWith")?;
     let p = arg(args, 0);
     let BasesValue::String(p) = &p else {
@@ -857,23 +956,43 @@ fn m_str_ends_with(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext)
     Ok(BasesValue::Bool(s.ends_with(p.as_str())))
 }
 
-fn m_str_lower(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_lower(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     Ok(BasesValue::String(as_str(target, "lower")?.to_lowercase()))
 }
 
-fn m_str_title(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_title(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     Ok(BasesValue::String(title_case(&as_str(target, "title")?)))
 }
 
 fn m_str_trim(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    Ok(BasesValue::String(as_str(target, "trim")?.trim().to_string()))
+    Ok(BasesValue::String(
+        as_str(target, "trim")?.trim().to_string(),
+    ))
 }
 
-fn m_str_reverse(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    Ok(BasesValue::String(as_str(target, "reverse")?.chars().rev().collect()))
+fn m_str_reverse(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
+    Ok(BasesValue::String(
+        as_str(target, "reverse")?.chars().rev().collect(),
+    ))
 }
 
-fn m_str_repeat(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_repeat(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let s = as_str(target, "repeat")?;
     let n = to_number_loose(&arg(args, 0)).unwrap_or(0.0);
     let count = n.max(0.0).floor() as usize;
@@ -885,7 +1004,10 @@ fn m_str_slice(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> 
     let s: Vec<char> = as_str(target, "slice")?.chars().collect();
     let start = clamp_index(to_number_loose(&arg(args, 0)).unwrap_or(0.0), s.len());
     let end = if args.len() > 1 {
-        Some(clamp_index(to_number_loose(&arg(args, 1)).unwrap_or(0.0), s.len()))
+        Some(clamp_index(
+            to_number_loose(&arg(args, 1)).unwrap_or(0.0),
+            s.len(),
+        ))
     } else {
         None
     };
@@ -904,7 +1026,11 @@ fn clamp_index(n: f64, len: usize) -> usize {
     }
     if n < 0.0 {
         let from_end = len as f64 + n;
-        if from_end < 0.0 { 0 } else { from_end as usize }
+        if from_end < 0.0 {
+            0
+        } else {
+            from_end as usize
+        }
     } else if n as usize > len {
         len
     } else {
@@ -915,12 +1041,20 @@ fn clamp_index(n: f64, len: usize) -> usize {
 fn m_str_split(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
     let s = as_str(target, "split")?;
     let sep = arg(args, 0);
-    let limit = if args.len() > 1 { to_number_loose(&arg(args, 1)) } else { None };
+    let limit = if args.len() > 1 {
+        to_number_loose(&arg(args, 1))
+    } else {
+        None
+    };
     let mut parts: Vec<BasesValue> = match &sep {
-        BasesValue::String(sep) if sep.is_empty() => {
-            s.chars().map(|c| BasesValue::String(c.to_string())).collect()
-        }
-        BasesValue::String(sep) => s.split(sep.as_str()).map(|p| BasesValue::String(p.to_string())).collect(),
+        BasesValue::String(sep) if sep.is_empty() => s
+            .chars()
+            .map(|c| BasesValue::String(c.to_string()))
+            .collect(),
+        BasesValue::String(sep) => s
+            .split(sep.as_str())
+            .map(|p| BasesValue::String(p.to_string()))
+            .collect(),
         other => {
             return Err(BasesError::new(format!(
                 "Type error in \"split\", separator expects String, given {}",
@@ -937,7 +1071,11 @@ fn m_str_split(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> 
 
 /// `replace` accepts a String or a regex literal. The replacement supports `$1`
 /// capture references, which is how real vaults reorder names.
-fn m_str_replace(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_replace(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let s = as_str(target, "replace")?;
     let pattern = arg(args, 0);
     let replacement = match args.get(1) {
@@ -963,7 +1101,11 @@ fn m_str_replace(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -
     }
 }
 
-fn m_str_as_file(target: &BasesValue, _args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
+fn m_str_as_file(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    ctx: &EvalContext,
+) -> Result<BasesValue> {
     let s = as_str(target, "asFile")?;
     Ok(match (ctx.file.accessors.resolve)(&s) {
         Some(f) => BasesValue::File(Rc::new(f)),
@@ -981,23 +1123,43 @@ fn m_num_abs(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> R
 fn m_num_ceil(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
     Ok(BasesValue::Number(as_number(target, "ceil")?.ceil()))
 }
-fn m_num_floor(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_num_floor(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     Ok(BasesValue::Number(as_number(target, "floor")?.floor()))
 }
 
 /// Half-up, not banker's rounding: `(2.5).round()` is 3, per the docs.
 fn m_num_round(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    let digits = if args.is_empty() { 0.0 } else { to_number_loose(&arg(args, 0)).unwrap_or(0.0) };
+    let digits = if args.is_empty() {
+        0.0
+    } else {
+        to_number_loose(&arg(args, 0)).unwrap_or(0.0)
+    };
     let factor = 10f64.powi(digits as i32);
     let scaled = as_number(target, "round")? * factor;
     // Round half away from zero, which is what Obsidian documents.
-    let rounded = if scaled < 0.0 { -(-scaled).round() } else { scaled.round() };
+    let rounded = if scaled < 0.0 {
+        -(-scaled).round()
+    } else {
+        scaled.round()
+    };
     Ok(BasesValue::Number(rounded / factor))
 }
 
-fn m_num_to_fixed(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_num_to_fixed(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let d = to_number_loose(&arg(args, 0)).unwrap_or(0.0);
-    Ok(BasesValue::String(format!("{:.*}", d.max(0.0) as usize, as_number(target, "toFixed")?)))
+    Ok(BasesValue::String(format!(
+        "{:.*}",
+        d.max(0.0) as usize,
+        as_number(target, "toFixed")?
+    )))
 }
 
 fn as_number(v: &BasesValue, fn_name: &str) -> Result<f64> {
@@ -1015,19 +1177,23 @@ fn as_number(v: &BasesValue, fn_name: &str) -> Result<f64> {
 // List methods
 // ---------------------------------------------------------------------------
 
-fn m_list_contains(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_contains(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let items = as_list(target, "contains")?;
     let needle = arg(args, 0);
     match &needle {
-        BasesValue::Link { .. } | BasesValue::File(_) | BasesValue::List(_) => Ok(BasesValue::Bool(
-            items.iter().any(|item| values_equal_loose(item, &needle)),
-        )),
+        BasesValue::Link { .. } | BasesValue::File(_) | BasesValue::List(_) => Ok(
+            BasesValue::Bool(items.iter().any(|item| values_equal_loose(item, &needle))),
+        ),
         BasesValue::Null => Ok(BasesValue::Bool(
             items.iter().any(|item| matches!(item, BasesValue::Null)),
         )),
-        BasesValue::String(_) | BasesValue::Number(_) | BasesValue::Bool(_) => {
-            Ok(BasesValue::Bool(items.iter().any(|item| values_equal_loose(item, &needle))))
-        }
+        BasesValue::String(_) | BasesValue::Number(_) | BasesValue::Bool(_) => Ok(
+            BasesValue::Bool(items.iter().any(|item| values_equal_loose(item, &needle))),
+        ),
         other => Err(BasesError::new(format!(
             "Type error in \"contains\", parameter \"value\". Expected String not, given {}.",
             describe(other)
@@ -1036,18 +1202,26 @@ fn m_list_contains(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext)
     }
 }
 
-fn m_list_contains_all(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_contains_all(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let items = as_list(target, "containsAll")?;
-    Ok(BasesValue::Bool(
-        args.iter().all(|needle| items.iter().any(|item| values_equal_loose(item, needle))),
-    ))
+    Ok(BasesValue::Bool(args.iter().all(|needle| {
+        items.iter().any(|item| values_equal_loose(item, needle))
+    })))
 }
 
-fn m_list_contains_any(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_contains_any(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let items = as_list(target, "containsAny")?;
-    Ok(BasesValue::Bool(
-        args.iter().any(|needle| items.iter().any(|item| values_equal_loose(item, needle))),
-    ))
+    Ok(BasesValue::Bool(args.iter().any(|needle| {
+        items.iter().any(|item| values_equal_loose(item, needle))
+    })))
 }
 
 fn m_list_join(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
@@ -1057,22 +1231,37 @@ fn m_list_join(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> 
         Some(v) => v.to_display_string(),
     };
     Ok(BasesValue::String(
-        items.iter().map(|i| i.to_display_string()).collect::<Vec<_>>().join(&sep),
+        items
+            .iter()
+            .map(|i| i.to_display_string())
+            .collect::<Vec<_>>()
+            .join(&sep),
     ))
 }
 
-fn m_list_unique(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_unique(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let items = as_list(target, "unique")?;
     let mut out: Vec<BasesValue> = Vec::new();
     for item in items {
-        if !out.iter().any(|existing| values_equal_loose(existing, item)) {
+        if !out
+            .iter()
+            .any(|existing| values_equal_loose(existing, item))
+        {
             out.push(item.clone());
         }
     }
     Ok(BasesValue::List(out))
 }
 
-fn m_list_flat(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_flat(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let items = as_list(target, "flat")?;
     let mut out = Vec::new();
     for v in items {
@@ -1084,25 +1273,40 @@ fn m_list_flat(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) ->
     Ok(BasesValue::List(out))
 }
 
-fn m_list_reverse(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_reverse(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let items = as_list(target, "reverse")?;
     let mut out = items.to_vec();
     out.reverse();
     Ok(BasesValue::List(out))
 }
 
-fn m_list_sort(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_sort(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let items = as_list(target, "sort")?;
     let mut out = items.to_vec();
     out.sort_by(compare_loose);
     Ok(BasesValue::List(out))
 }
 
-fn m_list_slice(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_slice(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let items = as_list(target, "slice")?;
     let start = clamp_index(to_number_loose(&arg(args, 0)).unwrap_or(0.0), items.len());
     let end = if args.len() > 1 {
-        Some(clamp_index(to_number_loose(&arg(args, 1)).unwrap_or(0.0), items.len()))
+        Some(clamp_index(
+            to_number_loose(&arg(args, 1)).unwrap_or(0.0),
+            items.len(),
+        ))
     } else {
         None
     };
@@ -1117,20 +1321,34 @@ fn m_list_slice(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) ->
 fn m_list_sum(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
     let items = as_list(target, "sum")?;
     Ok(BasesValue::Number(
-        items.iter().map(|v| to_number_loose(v).unwrap_or(0.0)).sum(),
+        items
+            .iter()
+            .map(|v| to_number_loose(v).unwrap_or(0.0))
+            .sum(),
     ))
 }
 
-fn m_list_mean(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_mean(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let items = as_list(target, "mean")?;
     if items.is_empty() {
         return Ok(BasesValue::Null);
     }
-    let total: f64 = items.iter().map(|v| to_number_loose(v).unwrap_or(0.0)).sum();
+    let total: f64 = items
+        .iter()
+        .map(|v| to_number_loose(v).unwrap_or(0.0))
+        .sum();
     Ok(BasesValue::Number(total / items.len() as f64))
 }
 
-fn m_list_count(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_list_count(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     Ok(BasesValue::Number(as_list(target, "count")?.len() as f64))
 }
 
@@ -1143,7 +1361,9 @@ fn m_list_max(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> 
 }
 
 fn extremum(items: &[BasesValue], want: std::cmp::Ordering) -> Result<BasesValue> {
-    let Some(first) = items.first() else { return Ok(BasesValue::Null) };
+    let Some(first) = items.first() else {
+        return Ok(BasesValue::Null);
+    };
     let mut best = first.clone();
     for v in &items[1..] {
         if compare_loose(v, &best) == want {
@@ -1157,7 +1377,11 @@ fn extremum(items: &[BasesValue], want: std::cmp::Ordering) -> Result<BasesValue
 // Date, link and file methods
 // ---------------------------------------------------------------------------
 
-fn m_date_format(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_date_format(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let d = as_date(target, "format")?;
     let pattern = arg(args, 0);
     let BasesValue::String(pattern) = &pattern else {
@@ -1170,7 +1394,11 @@ fn m_date_format(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -
     Ok(BasesValue::String(format_date(&d, pattern)))
 }
 
-fn m_date_date(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_date_date(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let d = as_date(target, "date")?;
     Ok(BasesValue::String(format!(
         "{:04}-{:02}-{:02}",
@@ -1180,7 +1408,11 @@ fn m_date_date(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) ->
     )))
 }
 
-fn m_date_time(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_date_time(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let d = as_date(target, "time")?;
     Ok(BasesValue::String(format!(
         "{:02}:{:02}:{:02}",
@@ -1190,12 +1422,20 @@ fn m_date_time(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) ->
     )))
 }
 
-fn m_date_relative(target: &BasesValue, _args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
+fn m_date_relative(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    ctx: &EvalContext,
+) -> Result<BasesValue> {
     let d = as_date(target, "relative")?;
     Ok(BasesValue::String(relative_time(&d, now_millis(ctx)?)))
 }
 
-fn m_date_as_link(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_date_as_link(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let d = as_date(target, "asLink")?;
     Ok(BasesValue::Link {
         target: d.to_string(),
@@ -1204,12 +1444,23 @@ fn m_date_as_link(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext)
     })
 }
 
-fn m_date_as_file(_target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_date_as_file(
+    _target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     Ok(BasesValue::Null)
 }
 
-fn m_link_as_file(target: &BasesValue, _args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
-    let BasesValue::Link { target, resolved, .. } = target else {
+fn m_link_as_file(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    ctx: &EvalContext,
+) -> Result<BasesValue> {
+    let BasesValue::Link {
+        target, resolved, ..
+    } = target
+    else {
         return Ok(BasesValue::Null);
     };
     let path = resolved.as_deref().unwrap_or(target);
@@ -1219,41 +1470,63 @@ fn m_link_as_file(target: &BasesValue, _args: &[BasesValue], ctx: &EvalContext) 
     })
 }
 
-fn m_link_links_to(target: &BasesValue, args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
-    let BasesValue::Link { target, resolved, .. } = target else {
+fn m_link_links_to(
+    target: &BasesValue,
+    args: &[BasesValue],
+    ctx: &EvalContext,
+) -> Result<BasesValue> {
+    let BasesValue::Link {
+        target, resolved, ..
+    } = target
+    else {
         return Ok(BasesValue::Bool(false));
     };
     let other = arg(args, 0);
     if matches!(other, BasesValue::Null) {
         return Ok(BasesValue::Bool(false));
     }
-    let Some(to) = linkish_path(&other) else { return Ok(BasesValue::Bool(false)) };
+    let Some(to) = linkish_path(&other) else {
+        return Ok(BasesValue::Bool(false));
+    };
     // "Does the file this link points at itself link onward to `to`?"
     let from = resolved.as_deref().unwrap_or(target);
     let Some(from_file) = (ctx.file.accessors.resolve)(from) else {
         return Ok(BasesValue::Bool(false));
     };
     Ok(BasesValue::Bool(
-        (from_file.accessors.links)().iter().any(|l| link_points_at(l, &to)),
+        (from_file.accessors.links)()
+            .iter()
+            .any(|l| link_points_at(l, &to)),
     ))
 }
 
 /// `subcategory.contains(link("Note#Heading", "Alias"))` is a documented
 /// pattern, so a Link receiver compares against the link text.
-fn m_link_contains(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_link_contains(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let s = target.to_display_string();
     let needle = arg(args, 0);
     match &needle {
-        BasesValue::Link { .. } | BasesValue::File(_) => {
-            Ok(BasesValue::Bool(matches_link_text(&s, &linkish_path(&needle).unwrap_or_default())))
-        }
+        BasesValue::Link { .. } | BasesValue::File(_) => Ok(BasesValue::Bool(matches_link_text(
+            &s,
+            &linkish_path(&needle).unwrap_or_default(),
+        ))),
         BasesValue::Namespace(_) | BasesValue::List(_) => Ok(BasesValue::Bool(false)),
         other => Ok(BasesValue::Bool(s.contains(&other.to_display_string()))),
     }
 }
 
-fn m_file_as_link(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    let BasesValue::File(f) = target else { return Ok(BasesValue::Null) };
+fn m_file_as_link(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
+    let BasesValue::File(f) = target else {
+        return Ok(BasesValue::Null);
+    };
     let display = match args.first() {
         None | Some(BasesValue::Null) => None,
         Some(v) => Some(v.to_display_string()),
@@ -1268,21 +1541,43 @@ fn m_file_as_link(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) 
 fn normalise_tag(v: &BasesValue) -> Option<String> {
     let s = v.to_display_string();
     let trimmed = s.trim().trim_start_matches('#');
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
-fn m_file_has_tag(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    let BasesValue::File(f) = target else { return Ok(BasesValue::Bool(false)) };
-    let tags: Vec<String> = (f.accessors.tags)().iter().filter_map(normalise_tag).collect();
+fn m_file_has_tag(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
+    let BasesValue::File(f) = target else {
+        return Ok(BasesValue::Bool(false));
+    };
+    let tags: Vec<String> = (f.accessors.tags)()
+        .iter()
+        .filter_map(normalise_tag)
+        .collect();
     Ok(BasesValue::Bool(args.iter().any(|a| {
-        let Some(want) = normalise_tag(a) else { return false };
+        let Some(want) = normalise_tag(a) else {
+            return false;
+        };
         // Nested tags match: hasTag("tag1") is true for #tag1/a.
-        tags.iter().any(|t| *t == want || t.starts_with(&format!("{want}/")))
+        tags.iter()
+            .any(|t| *t == want || t.starts_with(&format!("{want}/")))
     })))
 }
 
-fn m_file_in_folder(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    let BasesValue::File(f) = target else { return Ok(BasesValue::Bool(false)) };
+fn m_file_in_folder(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
+    let BasesValue::File(f) = target else {
+        return Ok(BasesValue::Bool(false));
+    };
     let want = arg(args, 0).to_display_string();
     let want = want.trim_end_matches('/').to_string();
     if want.is_empty() {
@@ -1295,29 +1590,51 @@ fn m_file_in_folder(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext
     Ok(BasesValue::Bool(f.folder.starts_with(&format!("{want}/"))))
 }
 
-fn m_file_has_property(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    let BasesValue::File(f) = target else { return Ok(BasesValue::Bool(false)) };
+fn m_file_has_property(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
+    let BasesValue::File(f) = target else {
+        return Ok(BasesValue::Bool(false));
+    };
     let name = arg(args, 0).to_display_string();
     if name.is_empty() {
         return Ok(BasesValue::Bool(false));
     }
-    Ok(BasesValue::Bool((f.accessors.properties)().contains_key(&name)))
+    Ok(BasesValue::Bool(
+        (f.accessors.properties)().contains_key(&name),
+    ))
 }
 
-fn m_file_has_link(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    let BasesValue::File(f) = target else { return Ok(BasesValue::Bool(false)) };
+fn m_file_has_link(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
+    let BasesValue::File(f) = target else {
+        return Ok(BasesValue::Bool(false));
+    };
     let other = arg(args, 0);
     if matches!(other, BasesValue::Null) {
         return Ok(BasesValue::Bool(false));
     }
-    let Some(to) = linkish_path(&other) else { return Ok(BasesValue::Bool(false)) };
+    let Some(to) = linkish_path(&other) else {
+        return Ok(BasesValue::Bool(false));
+    };
     Ok(BasesValue::Bool(
         (f.accessors.links)().iter().any(|l| link_points_at(l, &to)),
     ))
 }
 
-fn m_file_contains(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    let BasesValue::File(f) = target else { return Ok(BasesValue::Bool(false)) };
+fn m_file_contains(
+    target: &BasesValue,
+    args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
+    let BasesValue::File(f) = target else {
+        return Ok(BasesValue::Bool(false));
+    };
     let needle = arg(args, 0);
     if !matches!(needle, BasesValue::Link { .. } | BasesValue::File(_)) {
         return Ok(BasesValue::Bool(false));
@@ -1332,7 +1649,11 @@ fn m_file_contains(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext)
 // Object methods
 // ---------------------------------------------------------------------------
 
-fn m_object_keys(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_object_keys(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let names: Vec<BasesValue> = match target {
         BasesValue::Null => Vec::new(),
         BasesValue::File(_) => ["name", "path", "folder", "ext", "basename"]
@@ -1348,13 +1669,23 @@ fn m_object_keys(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) 
     Ok(BasesValue::List(names))
 }
 
-fn m_object_values(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
+fn m_object_values(
+    target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
     let values: Vec<BasesValue> = match target {
         BasesValue::Null => Vec::new(),
-        BasesValue::File(f) => [f.name.clone(), f.path.clone(), f.folder.clone(), f.ext.clone(), f.basename.clone()]
-            .into_iter()
-            .map(BasesValue::String)
-            .collect(),
+        BasesValue::File(f) => [
+            f.name.clone(),
+            f.path.clone(),
+            f.folder.clone(),
+            f.ext.clone(),
+            f.basename.clone(),
+        ]
+        .into_iter()
+        .map(BasesValue::String)
+        .collect(),
         BasesValue::List(items) => items.to_vec(),
         BasesValue::Namespace(map) => map.values().cloned().collect(),
         other => vec![other.clone()],
@@ -1375,7 +1706,13 @@ fn call(
     acc: Option<&BasesValue>,
     ctx: &EvalContext,
 ) -> Result<BasesValue> {
-    runner(crate::evaluator::LambdaCall { body, value, index, acc, ctx })
+    runner(crate::evaluator::LambdaCall {
+        body,
+        value,
+        index,
+        acc,
+        ctx,
+    })
 }
 
 /// Run a higher-order method over a list. The evaluator supplies the closure
@@ -1465,8 +1802,10 @@ pub fn run_higher_order(
             acc
         }
         other => {
-            return Err(BasesError::new(format!("Unknown higher-order method \"{other}\""))
-                .with_construct(other))
+            return Err(
+                BasesError::new(format!("Unknown higher-order method \"{other}\""))
+                    .with_construct(other),
+            )
         }
     })
 }
@@ -1483,7 +1822,9 @@ fn unreachable_higher_order(
     _: &[BasesValue],
     _: &EvalContext,
 ) -> Result<BasesValue> {
-    Err(BasesError::new("Internal error: higher-order method reached the value path"))
+    Err(BasesError::new(
+        "Internal error: higher-order method reached the value path",
+    ))
 }
 
 fn define_global(g: &mut GlobalMap, name: &'static str, body: GlobalBody) {
@@ -1491,9 +1832,13 @@ fn define_global(g: &mut GlobalMap, name: &'static str, body: GlobalBody) {
 }
 
 fn define_method(m: &mut MethodMap, receiver: ReceiverType, name: &'static str, f: MethodFn) {
-    m.entry(receiver.key())
-        .or_default()
-        .insert(name, MethodDef { fn_body: f, lambda_arity: None });
+    m.entry(receiver.key()).or_default().insert(
+        name,
+        MethodDef {
+            fn_body: f,
+            lambda_arity: None,
+        },
+    );
 }
 
 fn define_any(m: &mut MethodMap, name: &'static str, f: MethodFn) {
@@ -1642,7 +1987,9 @@ pub fn add_months(d: &BasesDate, months: i64) -> Result<BasesDate> {
         return Err(BasesError::new("Date arithmetic overflowed"));
     };
     let Some(dt) = d.0.offset().from_local_datetime(&shifted).single() else {
-        return Err(BasesError::new("Date arithmetic landed on an ambiguous local time"));
+        return Err(BasesError::new(
+            "Date arithmetic landed on an ambiguous local time",
+        ));
     };
     Ok(BasesDate(dt))
 }

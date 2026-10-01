@@ -37,13 +37,13 @@ pub mod resolve;
 pub mod source;
 pub mod webdav;
 
-pub use fs::{FsVaultSource, content_hash};
-pub use resolve::{PathIndex, fold_key, match_path, points_at};
-pub use source::{FileStat, SourceKind, VaultSource, is_base_path, is_indexable, is_note_path};
+pub use fs::{content_hash, FsVaultSource};
+pub use resolve::{fold_key, match_path, points_at, PathIndex};
+pub use source::{is_base_path, is_indexable, is_note_path, FileStat, SourceKind, VaultSource};
 pub use webdav::{
+    dav_refusal, parse_dav_date, parse_multistatus, vault_path_from_href, vault_relative_path,
     DavOperation, DavRequest, DavRequestOptions, DavResource, DavResponse, Depth, WebdavError,
-    WebdavMethod, WebdavTransport, WebdavVaultOptions, WebdavVaultSource, dav_refusal,
-    parse_dav_date, parse_multistatus, vault_path_from_href, vault_relative_path,
+    WebdavMethod, WebdavTransport, WebdavVaultOptions, WebdavVaultSource,
 };
 
 use std::cell::{Cell, RefCell};
@@ -55,8 +55,8 @@ use chrono::{DateTime, FixedOffset};
 use regex::Regex;
 
 use crate::error::Result;
-use crate::note::{ParsedNote, TaskItem, WikiLink, parse_note_with_embeds};
-use crate::value::{BasesDate, BasesValue, FileAccessors, FileValue, strip_extension};
+use crate::note::{parse_note_with_embeds, ParsedNote, TaskItem, WikiLink};
+use crate::value::{strip_extension, BasesDate, BasesValue, FileAccessors, FileValue};
 
 /// One indexed note, with its frontmatter already coerced.
 #[derive(Debug, Clone)]
@@ -234,22 +234,56 @@ impl Vault {
         // Every accessor is spelled out rather than built by a helper, because each
         // one has a different return type and a helper would have to be generic over
         // a type it cannot name.
-        let tags = { let vault = Rc::clone(self); let path = path.to_string(); Rc::new(move || vault.tags_for(&path)) as _ };
-        let links = { let vault = Rc::clone(self); let path = path.to_string(); Rc::new(move || vault.links_for(&path)) as _ };
-        let embeds = { let vault = Rc::clone(self); let path = path.to_string(); Rc::new(move || vault.embeds_for(&path)) as _ };
-        let backlinks = { let vault = Rc::clone(self); let path = path.to_string(); Rc::new(move || vault.backlinks_for(&path)) as _ };
-        let properties = { let vault = Rc::clone(self); let path = path.to_string(); Rc::new(move || vault.properties_for(&path)) as _ };
+        let tags = {
+            let vault = Rc::clone(self);
+            let path = path.to_string();
+            Rc::new(move || vault.tags_for(&path)) as _
+        };
+        let links = {
+            let vault = Rc::clone(self);
+            let path = path.to_string();
+            Rc::new(move || vault.links_for(&path)) as _
+        };
+        let embeds = {
+            let vault = Rc::clone(self);
+            let path = path.to_string();
+            Rc::new(move || vault.embeds_for(&path)) as _
+        };
+        let backlinks = {
+            let vault = Rc::clone(self);
+            let path = path.to_string();
+            Rc::new(move || vault.backlinks_for(&path)) as _
+        };
+        let properties = {
+            let vault = Rc::clone(self);
+            let path = path.to_string();
+            Rc::new(move || vault.properties_for(&path)) as _
+        };
         // `file.ctime` and `file.mtime` read the SAME value, deliberately: a note's
         // creation time is recorded by neither backend, and a `FileStat` carries one
         // instant. Wired to one accessor rather than two so the coupling is visible
         // here rather than implied by two identical bodies.
-        let mtime = { let vault = Rc::clone(self); let path = path.to_string(); Rc::new(move || vault.instant_for(&path)) as _ };
+        let mtime = {
+            let vault = Rc::clone(self);
+            let path = path.to_string();
+            Rc::new(move || vault.instant_for(&path)) as _
+        };
         let ctime = Rc::clone(&mtime);
-        let size = { let vault = Rc::clone(self); let path = path.to_string(); Rc::new(move || vault.size_for(&path)) as _ };
-        let tasks = { let vault = Rc::clone(self); let path = path.to_string(); Rc::new(move || vault.tasks_for(&path)) as _ };
+        let size = {
+            let vault = Rc::clone(self);
+            let path = path.to_string();
+            Rc::new(move || vault.size_for(&path)) as _
+        };
+        let tasks = {
+            let vault = Rc::clone(self);
+            let path = path.to_string();
+            Rc::new(move || vault.tasks_for(&path)) as _
+        };
         let vault = Rc::clone(self);
         let resolve = Rc::new(move |target: &str| {
-            vault.resolve(target).map(|resolved| vault.file_value(&resolved))
+            vault
+                .resolve(target)
+                .map(|resolved| vault.file_value(&resolved))
         });
 
         let accessors = FileAccessors {
@@ -281,11 +315,20 @@ impl Vault {
     /// prefix -- confirmed against `base:query format=json` on Obsidian 1.13.7,
     /// which emits `"Tags": "#Contacts, #Kontakte"`.
     pub fn tags_for(&self, path: &str) -> Vec<BasesValue> {
-        let Some(note) = self.note(path) else { return Vec::new() };
+        let Some(note) = self.note(path) else {
+            return Vec::new();
+        };
         let mut out: Vec<BasesValue> = Vec::new();
         // `tags` may be a single string or a list.
-        for tag in note.frontmatter.get("tags").map(BasesValue::to_list).unwrap_or_default() {
-            let BasesValue::String(text) = &tag else { continue };
+        for tag in note
+            .frontmatter
+            .get("tags")
+            .map(BasesValue::to_list)
+            .unwrap_or_default()
+        {
+            let BasesValue::String(text) = &tag else {
+                continue;
+            };
             // A frontmatter tag may itself be `business-idea` or `#x`; normalise to
             // the `#`-prefixed display form.
             let clean = text.trim().trim_start_matches('#');
@@ -301,7 +344,9 @@ impl Vault {
 
     /// `file.links` includes links found in frontmatter as well as the body.
     pub fn links_for(&self, path: &str) -> Vec<BasesValue> {
-        let Some(note) = self.note(path) else { return Vec::new() };
+        let Some(note) = self.note(path) else {
+            return Vec::new();
+        };
         let mut out: Vec<BasesValue> = Vec::new();
         for link in &note.parsed.links {
             if link.embedded {
@@ -310,9 +355,13 @@ impl Vault {
             out.push(self.link_value(&link.target, link.display.as_deref()));
         }
         for key in ["link", "links", "related", "projects", "project"] {
-            let Some(value) = note.frontmatter.get(key) else { continue };
+            let Some(value) = note.frontmatter.get(key) else {
+                continue;
+            };
             for item in value.to_list() {
-                let BasesValue::String(text) = &item else { continue };
+                let BasesValue::String(text) = &item else {
+                    continue;
+                };
                 out.push(self.link_value(&strip_brackets(text), None));
             }
         }
@@ -320,7 +369,9 @@ impl Vault {
     }
 
     pub fn embeds_for(&self, path: &str) -> Vec<BasesValue> {
-        let Some(note) = self.note(path) else { return Vec::new() };
+        let Some(note) = self.note(path) else {
+            return Vec::new();
+        };
         note.parsed
             .embeds
             .iter()
@@ -341,7 +392,8 @@ impl Vault {
             // One hit is enough: a note that links here twice is still one
             // backlink, and `any` is what stops at the first.
             if self.links_for(&other).iter().any(|link| {
-                link.link_target().is_some_and(|hit| strip_extension(hit) == target)
+                link.link_target()
+                    .is_some_and(|hit| strip_extension(hit) == target)
             }) {
                 out.push(BasesValue::String(other));
             }
@@ -351,7 +403,9 @@ impl Vault {
 
     /// `file.tasks` is a documented extension, not part of the official surface.
     pub fn tasks_for(&self, path: &str) -> Vec<BasesValue> {
-        let Some(note) = self.note(path) else { return Vec::new() };
+        let Some(note) = self.note(path) else {
+            return Vec::new();
+        };
         note.parsed.tasks.iter().map(task_value).collect()
     }
 
@@ -366,7 +420,9 @@ impl Vault {
 
     /// `file.properties` for a note, or an empty map for one that is not indexed.
     fn properties_for(&self, path: &str) -> BTreeMap<String, BasesValue> {
-        self.note(path).map(|note| (*note.frontmatter).clone()).unwrap_or_default()
+        self.note(path)
+            .map(|note| (*note.frontmatter).clone())
+            .unwrap_or_default()
     }
 
     /// The instant `file.mtime` and `file.ctime` both report, or the epoch for a
@@ -387,7 +443,9 @@ fn register(index: &mut PathIndex, path: &str, key: &str) {
 }
 
 fn epoch() -> DateTime<FixedOffset> {
-    DateTime::from_timestamp_millis(0).expect("the epoch is representable").fixed_offset()
+    DateTime::from_timestamp_millis(0)
+        .expect("the epoch is representable")
+        .fixed_offset()
 }
 
 /// Drop repeats, keeping the first occurrence.
@@ -426,7 +484,9 @@ pub fn coerce_frontmatter(
     data: &BTreeMap<String, BasesValue>,
     vault: &Vault,
 ) -> BTreeMap<String, BasesValue> {
-    data.iter().map(|(key, value)| (key.clone(), coerce_value(value, vault))).collect()
+    data.iter()
+        .map(|(key, value)| (key.clone(), coerce_value(value, vault)))
+        .collect()
 }
 
 fn coerce_value(value: &BasesValue, vault: &Vault) -> BasesValue {
@@ -444,7 +504,11 @@ fn coerce_value(value: &BasesValue, vault: &Vault) -> BasesValue {
                     let bare = target.strip_suffix(".md").unwrap_or(&target);
                     // `mdlink[1] || null` in the original: an EMPTY label is no
                     // label.
-                    let display = if label.is_empty() { None } else { Some(label.as_str()) };
+                    let display = if label.is_empty() {
+                        None
+                    } else {
+                        Some(label.as_str())
+                    };
                     return vault.link_value(bare, display);
                 }
             }
@@ -472,9 +536,14 @@ fn wikilink(text: &str) -> Option<(String, Option<String>)> {
 fn mdlink(text: &str) -> Option<(String, String)> {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     let captures = PATTERN
-        .get_or_init(|| Regex::new(r"^\[([^\]]*)\]\(([^)\s]+)\)$").expect("the mdlink pattern is valid"))
+        .get_or_init(|| {
+            Regex::new(r"^\[([^\]]*)\]\(([^)\s]+)\)$").expect("the mdlink pattern is valid")
+        })
         .captures(text)?;
-    Some((captures.get(1)?.as_str().to_string(), captures.get(2)?.as_str().to_string()))
+    Some((
+        captures.get(1)?.as_str().to_string(),
+        captures.get(2)?.as_str().to_string(),
+    ))
 }
 
 /// Whether a markdown-link target is a URL, which is never a note in this vault.
@@ -483,7 +552,9 @@ fn mdlink(text: &str) -> Option<(String, String)> {
 /// with no `://` at all is not a scheme however word-like it is, which is why the
 /// separator has to be found rather than assumed.
 fn has_scheme(target: &str) -> bool {
-    let Some((scheme, _)) = target.split_once("://") else { return false };
+    let Some((scheme, _)) = target.split_once("://") else {
+        return false;
+    };
     !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphabetic())
 }
 
@@ -503,7 +574,14 @@ fn strip_brackets(text: &str) -> String {
 /// through a query as three fields rather than four.
 pub fn task_value(task: &TaskItem) -> BasesValue {
     let mut out = BTreeMap::new();
-    out.insert("status".to_string(), BasesValue::String(if task.checked { "x".to_string() } else { " ".to_string() }));
+    out.insert(
+        "status".to_string(),
+        BasesValue::String(if task.checked {
+            "x".to_string()
+        } else {
+            " ".to_string()
+        }),
+    );
     out.insert("text".to_string(), BasesValue::String(task.text.clone()));
     out.insert("completed".to_string(), BasesValue::Bool(task.checked));
     BasesValue::Namespace(Rc::new(out))

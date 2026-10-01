@@ -1,4 +1,3 @@
-
 //! The corpus: the testing vault, as `{ path, content }`.
 //!
 //! One definition, shared by every vault-related suite. Two suites that each
@@ -39,7 +38,9 @@ pub struct VaultFile {
 
 /// The testing vault on disk.
 pub fn vault_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("test").join("vault")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test")
+        .join("vault")
 }
 
 /// How many files the testing vault holds, `.obsidian` aside.
@@ -59,7 +60,10 @@ pub fn load_corpus_from(dir: &Path) -> Vec<VaultFile> {
     futures_block_on(async {
         let mut files = Vec::new();
         for path in source.list().await.expect("the testing vault is readable") {
-            let content = source.read_text(&path).await.expect("the testing vault is readable");
+            let content = source
+                .read_text(&path)
+                .await
+                .expect("the testing vault is readable");
             files.push(VaultFile { path, content });
         }
         files
@@ -86,13 +90,17 @@ pub fn futures_block_on<F: std::future::Future>(future: F) -> F::Output {
 /// thing under test: asking it how many files there are would be circular.
 pub fn count_files(dir: &Path) -> usize {
     let mut total = 0;
-    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') {
             continue;
         }
-        let Ok(file_type) = entry.file_type() else { continue };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if file_type.is_dir() {
             total += count_files(&entry.path());
         } else if file_type.is_file() {
@@ -131,6 +139,9 @@ pub fn dotfile_tree() -> Vec<VaultFile> {
         ("Templates/template.md", "# template"),
     ]
     .into_iter()
-    .map(|(path, content)| VaultFile { path: path.to_string(), content: content.to_string() })
+    .map(|(path, content)| VaultFile {
+        path: path.to_string(),
+        content: content.to_string(),
+    })
     .collect()
 }

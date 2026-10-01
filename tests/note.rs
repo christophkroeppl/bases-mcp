@@ -53,15 +53,36 @@ fn kinds(note: &ParsedNote) -> Vec<SegmentKind> {
 #[test]
 fn a_rendered_fence_is_a_base_region_not_prose() {
     let note = parse_note_with_embeds("Host.md", PROJECTION);
-    assert_eq!(kinds(&note), [SegmentKind::Frontmatter, SegmentKind::Prose, SegmentKind::BaseFence, SegmentKind::Prose]);
-    let rendered = serialise(&note.segments.iter().filter(|s| s.kind() == SegmentKind::Prose).cloned().collect::<Vec<_>>());
-    assert!(!rendered.contains("base-rendered"), "the fence leaked into prose: {rendered}");
+    assert_eq!(
+        kinds(&note),
+        [
+            SegmentKind::Frontmatter,
+            SegmentKind::Prose,
+            SegmentKind::BaseFence,
+            SegmentKind::Prose
+        ]
+    );
+    let rendered = serialise(
+        &note
+            .segments
+            .iter()
+            .filter(|s| s.kind() == SegmentKind::Prose)
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
+    assert!(
+        !rendered.contains("base-rendered"),
+        "the fence leaked into prose: {rendered}"
+    );
 }
 
 #[test]
 fn the_fence_keeps_the_base_path_and_view_from_its_info_string() {
     let note = parse_note_with_embeds("Host.md", PROJECTION);
-    let fence = base_regions(&note).pop().expect("the projection has one region").clone();
+    let fence = base_regions(&note)
+        .pop()
+        .expect("the projection has one region")
+        .clone();
 
     assert_eq!(fence.base_path(), Some("Tickets.base"));
     assert_eq!(fence.view_name(), None, "no view was pinned");
@@ -72,7 +93,11 @@ fn the_fence_keeps_the_base_path_and_view_from_its_info_string() {
 #[test]
 fn a_rendered_fence_carries_no_yaml_so_it_is_never_mistaken_for_live() {
     let note = parse_note_with_embeds("Host.md", PROJECTION);
-    let fence = note.segments.iter().find_map(Segment::base_fence).expect("a fence");
+    let fence = note
+        .segments
+        .iter()
+        .find_map(Segment::base_fence)
+        .expect("a fence");
 
     assert_eq!(fence.yaml(), None);
     assert!(matches!(fence, BaseFence::Rendered { .. }));
@@ -86,11 +111,19 @@ fn every_provenance_attribute_survives_the_round_trip_through_the_info_string() 
         "```\n",
     );
     let note = parse_note_with_embeds("Host.md", text);
-    let fence = note.segments.iter().find_map(Segment::base_fence).expect("a fence");
+    let fence = note
+        .segments
+        .iter()
+        .find_map(Segment::base_fence)
+        .expect("a fence");
 
     assert_eq!(fence.base_path(), Some("Tickets.base"));
     assert_eq!(fence.view_name(), Some("All"));
-    assert_eq!(serialise(&note.segments), text, "the region must survive verbatim");
+    assert_eq!(
+        serialise(&note.segments),
+        text,
+        "the region must survive verbatim"
+    );
 }
 
 #[test]
@@ -99,21 +132,37 @@ fn the_language_is_the_first_token_of_the_info_string() {
     // whole info string would make this fence match neither `base` nor
     // `base-rendered`, and the region would degrade to prose.
     let live = parse_note("A.md", "```base extra=\"x\"\nviews: []\n```\n");
-    let fence = live.segments.iter().find_map(Segment::base_fence).expect("a live fence");
+    let fence = live
+        .segments
+        .iter()
+        .find_map(Segment::base_fence)
+        .expect("a live fence");
     assert_eq!(fence.yaml(), Some("views: []\n"));
     assert!(!fence.is_rendered());
     assert_eq!(fence.base_path(), None);
 
     // A language that merely starts with `base` is not a base fence.
     let lookalike = parse_note("A.md", "```base-renderedish\nrow\n```\n");
-    assert!(base_regions(&lookalike).is_empty(), "`base-renderedish` is not a region");
-    assert_eq!(serialise(&lookalike.segments), "```base-renderedish\nrow\n```\n");
+    assert!(
+        base_regions(&lookalike).is_empty(),
+        "`base-renderedish` is not a region"
+    );
+    assert_eq!(
+        serialise(&lookalike.segments),
+        "```base-renderedish\nrow\n```\n"
+    );
 
     assert_eq!(
-        fence_attrs(&format!("{} path=\"T.base\" view=\"All\"", RENDER_FENCE_LANG)),
-        [("path".to_string(), "T.base".to_string()), ("view".to_string(), "All".to_string())]
-            .into_iter()
-            .collect()
+        fence_attrs(&format!(
+            "{} path=\"T.base\" view=\"All\"",
+            RENDER_FENCE_LANG
+        )),
+        [
+            ("path".to_string(), "T.base".to_string()),
+            ("view".to_string(), "All".to_string())
+        ]
+        .into_iter()
+        .collect()
     );
 }
 
@@ -122,8 +171,14 @@ fn an_ordinary_code_fence_is_still_prose() {
     let text = "---\n---\n\n```ts\nconst x = 1;\n```\n";
     let note = parse_note_with_embeds("Host.md", text);
 
-    assert!(base_regions(&note).is_empty(), "a `ts` fence is not a Base region");
-    assert!(!note.segments.iter().any(|s| s.kind() == SegmentKind::BaseFence));
+    assert!(
+        base_regions(&note).is_empty(),
+        "a `ts` fence is not a Base region"
+    );
+    assert!(!note
+        .segments
+        .iter()
+        .any(|s| s.kind() == SegmentKind::BaseFence));
     assert_eq!(serialise(&note.segments), text);
 }
 
@@ -152,7 +207,12 @@ fn a_host_note_carries_one_embed_region() {
 #[test]
 fn an_embed_pins_a_view_and_a_display() {
     let note = parse_note_with_embeds("Host.md", "  ![[Tickets.base#All|the tickets]]\n");
-    let embed = base_regions(&note).pop().expect("an embed").base_embed().expect("an embed").clone();
+    let embed = base_regions(&note)
+        .pop()
+        .expect("an embed")
+        .base_embed()
+        .expect("an embed")
+        .clone();
 
     assert_eq!(embed.base_path, "Tickets.base");
     assert_eq!(embed.view_name.as_deref(), Some("All"));
@@ -162,27 +222,45 @@ fn an_embed_pins_a_view_and_a_display() {
 #[test]
 fn an_embed_in_the_middle_of_a_sentence_is_prose() {
     let note = parse_note_with_embeds("Host.md", "see ![[Tickets.base]] here\n");
-    assert_eq!(kinds(&note), [SegmentKind::Prose], "only a line of its own is a region");
+    assert_eq!(
+        kinds(&note),
+        [SegmentKind::Prose],
+        "only a line of its own is a region"
+    );
 }
 
 #[test]
 fn frontmatter_becomes_properties_the_evaluator_can_read() {
-    let note = parse_note("A.md", "---\ntags: [a, b]\nproject:\n  owner: me\ndone: false\n---\n\nbody\n");
+    let note = parse_note(
+        "A.md",
+        "---\ntags: [a, b]\nproject:\n  owner: me\ndone: false\n---\n\nbody\n",
+    );
 
     assert!(!note.malformed_frontmatter);
-    assert_eq!(note.frontmatter.get("tags"), Some(&BasesValue::List(vec![BasesValue::String("a".into()), BasesValue::String("b".into())])));
+    assert_eq!(
+        note.frontmatter.get("tags"),
+        Some(&BasesValue::List(vec![
+            BasesValue::String("a".into()),
+            BasesValue::String("b".into())
+        ]))
+    );
     assert_eq!(note.frontmatter.get("done"), Some(&BasesValue::Bool(false)));
     assert_eq!(
         note.frontmatter.get("project"),
         Some(&BasesValue::Namespace(std::rc::Rc::new(
-            [("owner".to_string(), BasesValue::String("me".into()))].into_iter().collect()
+            [("owner".to_string(), BasesValue::String("me".into()))]
+                .into_iter()
+                .collect()
         )))
     );
     // The frontmatter segment shares one map with the note rather than copying it.
     let segment = note.segments.first().expect("a frontmatter segment");
     let shared = &segment.frontmatter().expect("frontmatter").data;
     assert!(std::rc::Rc::ptr_eq(shared, &note.frontmatter));
-    assert_eq!(serialise(&note.segments), "---\ntags: [a, b]\nproject:\n  owner: me\ndone: false\n---\n\nbody\n");
+    assert_eq!(
+        serialise(&note.segments),
+        "---\ntags: [a, b]\nproject:\n  owner: me\ndone: false\n---\n\nbody\n"
+    );
 }
 
 #[test]
@@ -192,7 +270,10 @@ fn malformed_frontmatter_degrades_to_no_properties_rather_than_failing_the_note(
     assert!(note.malformed_frontmatter);
     assert!(note.frontmatter.is_empty());
     assert_eq!(kinds(&note), [SegmentKind::Frontmatter, SegmentKind::Prose]);
-    assert_eq!(serialise(&note.segments), "---\ntags: [unclosed\n---\n\n# Scratch\n");
+    assert_eq!(
+        serialise(&note.segments),
+        "---\ntags: [unclosed\n---\n\n# Scratch\n"
+    );
 }
 
 #[test]
@@ -207,9 +288,19 @@ fn frontmatter_must_be_the_first_thing_in_the_file() {
 fn an_unclosed_fence_runs_to_end_of_file_as_obsidian_does() {
     let note = parse_note("A.md", "---\na: 1\n---\n\n```base\nviews: []\n");
     let fence = note.segments.last().expect("a segment");
-    assert_eq!(fence.end(), note.segments.iter().map(Segment::end).max().expect("an end"));
+    assert_eq!(
+        fence.end(),
+        note.segments
+            .iter()
+            .map(Segment::end)
+            .max()
+            .expect("an end")
+    );
     assert_eq!(fence.yaml(), Some("views: []\n"));
-    assert_eq!(serialise(&note.segments), "---\na: 1\n---\n\n```base\nviews: []\n");
+    assert_eq!(
+        serialise(&note.segments),
+        "---\na: 1\n---\n\n```base\nviews: []\n"
+    );
 }
 
 #[test]
@@ -217,22 +308,32 @@ fn a_fence_that_is_not_at_a_line_start_is_prose() {
     let text = "text ```ts\nx\n```\n";
     let note = parse_note("A.md", text);
 
-    assert!(base_regions(&note).is_empty(), "a fence only opens at a line start");
+    assert!(
+        base_regions(&note).is_empty(),
+        "a fence only opens at a line start"
+    );
     assert_eq!(serialise(&note.segments), text);
 }
 
 #[test]
 fn a_closing_fence_must_repeat_the_opener_exactly() {
-    let closing = |text: &str| {
-        parse_note("A.md", text).segments[0].end()
-    };
+    let closing = |text: &str| parse_note("A.md", text).segments[0].end();
     // A blockquoted line closes the fence: Obsidian allows `> ` before the run.
     assert_eq!(closing("```ts\n> ```\nafter\n"), "```ts\n> ```".len());
     // Trailing spacing is part of the closing fence, a different number of
     // backticks is not a closing fence at all, so that fence runs to the end.
-    assert_eq!(closing("```ts\nx\n```   \nafter\n"), "```ts\nx\n```   ".len());
-    assert_eq!(closing("```ts\nx\n````\nafter\n"), "```ts\nx\n````\nafter\n".len());
-    assert_eq!(closing("````ts\nx\n```\nafter\n"), "````ts\nx\n```\nafter\n".len());
+    assert_eq!(
+        closing("```ts\nx\n```   \nafter\n"),
+        "```ts\nx\n```   ".len()
+    );
+    assert_eq!(
+        closing("```ts\nx\n````\nafter\n"),
+        "```ts\nx\n````\nafter\n".len()
+    );
+    assert_eq!(
+        closing("````ts\nx\n```\nafter\n"),
+        "````ts\nx\n```\nafter\n".len()
+    );
 }
 
 /// A line that LOOKS like a fence opening but cannot be one.
@@ -253,8 +354,17 @@ fn an_indented_fence_is_prose_rather_than_an_infinite_loop() {
 fn links_are_extracted_in_document_order_with_byte_offsets() {
     let text = "[[A]] [[B#sub|C]] ![[Tickets.base]] [D](Target.md) [E](https://x.y) [F](#anchor)\n";
     let links = extract_links(text);
-    let targets: Vec<(&str, Option<&str>, Option<&str>, bool)> =
-        links.iter().map(|l| (l.target.as_str(), l.subpath.as_deref(), l.display.as_deref(), l.embedded)).collect();
+    let targets: Vec<(&str, Option<&str>, Option<&str>, bool)> = links
+        .iter()
+        .map(|l| {
+            (
+                l.target.as_str(),
+                l.subpath.as_deref(),
+                l.display.as_deref(),
+                l.embedded,
+            )
+        })
+        .collect();
 
     assert_eq!(
         targets,
@@ -268,22 +378,43 @@ fn links_are_extracted_in_document_order_with_byte_offsets() {
     // A span covers the link syntax, not just the target, and offsets are bytes.
     for link in &links {
         let source = &text[link.start..link.end];
-        assert!(source.starts_with('[') || source.starts_with('!'), "a span starts at the link: {source}");
-        assert!(source.ends_with("]]") || source.ends_with(')'), "a span ends at the link: {source}");
+        assert!(
+            source.starts_with('[') || source.starts_with('!'),
+            "a span starts at the link: {source}"
+        );
+        assert!(
+            source.ends_with("]]") || source.ends_with(')'),
+            "a span ends at the link: {source}"
+        );
     }
 }
 
 #[test]
 fn tasks_come_from_the_body_and_not_from_the_properties() {
-    let note = parse_note("A.md", "---\ntasks: [x]\n---\n\n- [ ] one\n* [x] two\n+ [-] three\n");
+    let note = parse_note(
+        "A.md",
+        "---\ntasks: [x]\n---\n\n- [ ] one\n* [x] two\n+ [-] three\n",
+    );
     let tasks: Vec<TaskItem> = note.tasks.clone();
 
     assert_eq!(
         tasks,
         [
-            TaskItem { checked: false, text: "one".into(), line: 1 },
-            TaskItem { checked: true, text: "two".into(), line: 2 },
-            TaskItem { checked: false, text: "three".into(), line: 3 },
+            TaskItem {
+                checked: false,
+                text: "one".into(),
+                line: 1
+            },
+            TaskItem {
+                checked: true,
+                text: "two".into(),
+                line: 2
+            },
+            TaskItem {
+                checked: false,
+                text: "three".into(),
+                line: 3
+            },
         ]
     );
     assert_eq!(extract_tasks("- [x] only\n").len(), 1);
@@ -291,7 +422,10 @@ fn tasks_come_from_the_body_and_not_from_the_properties() {
 
 #[test]
 fn inline_tags_skip_code_and_look_like_tag_fragments() {
-    assert_eq!(extract_inline_tags("a #real and `#FFF` and #tag/child and ##not and #2024\n"), ["real", "tag/child"]);
+    assert_eq!(
+        extract_inline_tags("a #real and `#FFF` and #tag/child and ##not and #2024\n"),
+        ["real", "tag/child"]
+    );
     // Repeated tags are reported once.
     assert_eq!(extract_inline_tags("#a #a #b\n"), ["a", "b"]);
 }
@@ -304,7 +438,10 @@ fn byte_offsets_survive_text_that_is_not_ascii() {
 
     assert_eq!(embed.raw(), "![[Tickets.base]]");
     assert_eq!(&text[embed.start()..embed.end()], embed.raw());
-    assert!(embed.start() > "ä".len(), "the span is a byte offset, not a character one");
+    assert!(
+        embed.start() > "ä".len(),
+        "the span is a byte offset, not a character one"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +467,11 @@ fn vault_notes() -> Vec<(String, String)> {
 
     let mut files = Vec::new();
     walk(Path::new("test/vault"), &mut files);
-    assert!(files.len() >= 7, "expected the testing vault's notes, found {}", files.len());
+    assert!(
+        files.len() >= 7,
+        "expected the testing vault's notes, found {}",
+        files.len()
+    );
     files
         .into_iter()
         .map(|path| {
@@ -344,7 +485,10 @@ fn vault_notes() -> Vec<(String, String)> {
 #[test]
 fn segments_concatenate_back_to_the_note_exactly() {
     for (path, text) in vault_notes() {
-        for note in [parse_note(&path, &text), parse_note_with_embeds(&path, &text)] {
+        for note in [
+            parse_note(&path, &text),
+            parse_note_with_embeds(&path, &text),
+        ] {
             // The whole note, byte for byte.
             assert_eq!(serialise(&note.segments), text, "{path} did not round-trip");
 
@@ -353,8 +497,16 @@ fn segments_concatenate_back_to_the_note_exactly() {
             // where the previous one ended.
             let mut cursor = 0;
             for segment in &note.segments {
-                assert_eq!(segment.start(), cursor, "{path}: a gap or overlap at {cursor}");
-                assert_eq!(&text[segment.start()..segment.end()], segment.raw(), "{path}: span and text disagree");
+                assert_eq!(
+                    segment.start(),
+                    cursor,
+                    "{path}: a gap or overlap at {cursor}"
+                );
+                assert_eq!(
+                    &text[segment.start()..segment.end()],
+                    segment.raw(),
+                    "{path}: span and text disagree"
+                );
                 cursor = segment.end();
             }
             assert_eq!(cursor, text.len(), "{path}: the last segment stops short");
@@ -374,7 +526,17 @@ fn the_testing_vault_has_the_base_regions_it_is_a_fixture_for() {
         }
     }
 
-    let embeds = regions.iter().filter(|(_, raw)| raw.contains(".base")).count();
-    let fences = regions.iter().filter(|(_, raw)| raw.starts_with("```base\n")).count();
-    assert_eq!((embeds, fences), (3, 1), "the vault's regions moved: {regions:?}");
+    let embeds = regions
+        .iter()
+        .filter(|(_, raw)| raw.contains(".base"))
+        .count();
+    let fences = regions
+        .iter()
+        .filter(|(_, raw)| raw.starts_with("```base\n"))
+        .count();
+    assert_eq!(
+        (embeds, fences),
+        (3, 1),
+        "the vault's regions moved: {regions:?}"
+    );
 }

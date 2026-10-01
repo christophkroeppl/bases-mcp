@@ -47,14 +47,14 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use bases_mcp::base::{
-    BaseFile, Direction, FilterNode, QueryOptions, QueryResult, SortEntry, order_formulas,
-    parse_base, query_base,
+    order_formulas, parse_base, query_base, BaseFile, Direction, FilterNode, QueryOptions,
+    QueryResult, SortEntry,
 };
 use bases_mcp::error::BasesError;
 use bases_mcp::labels::{canonical_id_of, display_name_for, label_for_id, strip_namespace};
 use bases_mcp::value::BasesValue;
 use bases_mcp::vault::{FsVaultSource, Vault};
-use common::{CORPUS_SIZE, count_files, futures_block_on, vault_dir};
+use common::{count_files, futures_block_on, vault_dir, CORPUS_SIZE};
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -78,7 +78,9 @@ fn load(dir: impl AsRef<Path>) -> Rc<Vault> {
 }
 
 fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("test").join("fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test")
+        .join("fixtures")
 }
 
 /// Parse a `.base` out of the testing vault by name.
@@ -129,7 +131,13 @@ fn cells(result: &QueryResult) -> Vec<(String, BTreeMap<String, String>)> {
         .rows
         .iter()
         .map(|row| {
-            (row.path.clone(), row.values.iter().map(|(id, v)| (id.clone(), v.to_display_string())).collect())
+            (
+                row.path.clone(),
+                row.values
+                    .iter()
+                    .map(|(id, v)| (id.clone(), v.to_display_string()))
+                    .collect(),
+            )
         })
         .collect()
 }
@@ -140,7 +148,10 @@ fn groups(result: &QueryResult) -> Option<Vec<(String, Vec<String>)>> {
         groups
             .iter()
             .map(|group| {
-                (group.key.clone(), group.rows.iter().map(|row| row.path.clone()).collect())
+                (
+                    group.key.clone(),
+                    group.rows.iter().map(|row| row.path.clone()).collect(),
+                )
             })
             .collect()
     })
@@ -164,11 +175,16 @@ fn paths(result: &QueryResult) -> Vec<&str> {
 /// The cell a row holds, or a panic naming the row -- a failure that says which
 /// row disagreed is actable, one that says only "left != right" is not.
 fn cell<'a>(result: &'a QueryResult, path: &str, id: &str) -> &'a BasesValue {
-    let row = result.rows.iter().find(|row| row.path == path).unwrap_or_else(|| {
-        panic!("no row for {path}; the result has {:?}", paths(result))
-    });
+    let row = result
+        .rows
+        .iter()
+        .find(|row| row.path == path)
+        .unwrap_or_else(|| panic!("no row for {path}; the result has {:?}", paths(result)));
     row.values.get(id).unwrap_or_else(|| {
-        panic!("row {path} has no cell {id}; it has {:?}", row.values.keys().collect::<Vec<_>>())
+        panic!(
+            "row {path} has no cell {id}; it has {:?}",
+            row.values.keys().collect::<Vec<_>>()
+        )
     })
 }
 
@@ -181,10 +197,16 @@ fn grouped<'a>(result: &'a QueryResult, group_key: &str, path: &str, id: &str) -
         .iter()
         .find(|group| group.key == group_key)
         .unwrap_or_else(|| panic!("no group {group_key:?}"));
-    let row = group.rows.iter().find(|row| row.path == path).unwrap_or_else(|| {
-        panic!("no row {path} in group {group_key:?}");
-    });
-    row.values.get(id).unwrap_or_else(|| panic!("row {path} has no cell {id}"))
+    let row = group
+        .rows
+        .iter()
+        .find(|row| row.path == path)
+        .unwrap_or_else(|| {
+            panic!("no row {path} in group {group_key:?}");
+        });
+    row.values
+        .get(id)
+        .unwrap_or_else(|| panic!("row {path} has no cell {id}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -250,7 +272,9 @@ fn a_composite_key_joined_by_us_is_preserved_byte_for_byte() {
     let view = &base.views[0];
     let composite = "formula.priority_display\u{1f}note.type";
 
-    let card_orders = view.extra["cardOrders"].as_mapping().expect("cardOrders is a mapping");
+    let card_orders = view.extra["cardOrders"]
+        .as_mapping()
+        .expect("cardOrders is a mapping");
     assert!(
         card_orders.contains_key(serde_yaml::Value::String(composite.into())),
         "cardOrders lost the composite key; it holds {:?}",
@@ -261,11 +285,19 @@ fn a_composite_key_joined_by_us_is_preserved_byte_for_byte() {
     assert!(card_orders.contains_key(serde_yaml::Value::String("file.file".into())));
     assert!(card_orders.contains_key(serde_yaml::Value::String("formula.priority_display".into())));
 
-    let swimlanes = view.extra["swimlaneOrders"].as_mapping().expect("swimlaneOrders is a mapping");
+    let swimlanes = view.extra["swimlaneOrders"]
+        .as_mapping()
+        .expect("swimlaneOrders is a mapping");
     let orders = swimlanes[serde_yaml::Value::String(composite.into())]
         .as_sequence()
         .expect("a lane order is a list");
-    assert_eq!(orders, &[serde_yaml::Value::String("task".into()), serde_yaml::Value::String("Uncategorized".into())]);
+    assert_eq!(
+        orders,
+        &[
+            serde_yaml::Value::String("task".into()),
+            serde_yaml::Value::String("Uncategorized".into())
+        ]
+    );
 }
 
 #[test]
@@ -274,27 +306,51 @@ fn a_composite_key_survives_a_round_trip_through_the_pipeline() {
     // interprets them either. `order` here is the plain two-column list, and the
     // composite keys are NOT in it, so no column is fabricated from them.
     let vault = testing_vault();
-    let result = query(&vault, "Tickets.base", Some("All"), Some("Projects/SomeProject.md"));
-    assert!(result.view.order.as_ref().is_some_and(|order| order == &["file.name".to_string(), "status".to_string(), "formula.priority_display".to_string(), "type".to_string()]));
-    assert!(!result.view.order.as_ref().is_some_and(|order| order.iter().any(|id| id.contains('\u{1f}'))));
+    let result = query(
+        &vault,
+        "Tickets.base",
+        Some("All"),
+        Some("Projects/SomeProject.md"),
+    );
+    assert!(result.view.order.as_ref().is_some_and(|order| order
+        == &[
+            "file.name".to_string(),
+            "status".to_string(),
+            "formula.priority_display".to_string(),
+            "type".to_string()
+        ]));
+    assert!(!result
+        .view
+        .order
+        .as_ref()
+        .is_some_and(|order| order.iter().any(|id| id.contains('\u{1f}'))));
 }
 
 #[test]
 fn unrecognised_top_level_keys_are_preserved() {
     let vault = testing_vault();
     let base = base_of(&vault, "Tickets.base");
-    assert!(base.extra.is_empty(), "Tickets.base has no unknown top-level keys");
-    assert_eq!(base.properties.keys().collect::<Vec<_>>(), ["formula.priority_display"]);
+    assert!(
+        base.extra.is_empty(),
+        "Tickets.base has no unknown top-level keys"
+    );
+    assert_eq!(
+        base.properties.keys().collect::<Vec<_>>(),
+        ["formula.priority_display"]
+    );
 
     let parsed = parse_base(
         "T.base",
         "myPluginState: {a: 1}\nviews:\n  - type: table\n    name: V\n",
     )
     .expect("parses");
-    assert_eq!(parsed.extra["myPluginState"], serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
-        serde_yaml::Value::String("a".into()),
-        serde_yaml::Value::Number(1.into()),
-    )])));
+    assert_eq!(
+        parsed.extra["myPluginState"],
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
+            serde_yaml::Value::String("a".into()),
+            serde_yaml::Value::Number(1.into()),
+        )]))
+    );
 }
 
 #[test]
@@ -305,7 +361,11 @@ fn the_core_view_keys_are_read_rather_than_preserved() {
     let view = &base_of(&vault, "AllNotes.base").views[0];
     assert_eq!(view.view_type, "table");
     assert_eq!(view.name, "All");
-    assert!(view.extra.is_empty(), "every key of view `All` is a core key: {:?}", view.extra);
+    assert!(
+        view.extra.is_empty(),
+        "every key of view `All` is a core key: {:?}",
+        view.extra
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +381,10 @@ fn sort_accepts_the_legacy_column_spelling() {
     let parsed = parse_base("T.base", yaml).expect("parses");
     assert_eq!(
         parsed.views[0].sort,
-        Some(vec![SortEntry { property: "note.status".into(), direction: Direction::Desc }])
+        Some(vec![SortEntry {
+            property: "note.status".into(),
+            direction: Direction::Desc
+        }])
     );
 }
 
@@ -329,7 +392,13 @@ fn sort_accepts_the_legacy_column_spelling() {
 fn sort_prefers_property_over_column_when_both_are_written() {
     let yaml = "views:\n  - type: table\n    name: V\n    sort:\n      - property: note.status\n        column: file.name\n";
     let parsed = parse_base("T.base", yaml).expect("parses");
-    assert_eq!(parsed.views[0].sort.as_ref().map(|s| s[0].property.as_str()), Some("note.status"));
+    assert_eq!(
+        parsed.views[0]
+            .sort
+            .as_ref()
+            .map(|s| s[0].property.as_str()),
+        Some("note.status")
+    );
 }
 
 #[test]
@@ -339,7 +408,10 @@ fn a_sort_entry_without_a_usable_property_is_dropped_rather_than_failing_the_vie
     let parsed = parse_base("T.base", yaml).expect("parses");
     assert_eq!(
         parsed.views[0].sort,
-        Some(vec![SortEntry { property: "file.name".into(), direction: Direction::Asc }])
+        Some(vec![SortEntry {
+            property: "file.name".into(),
+            direction: Direction::Asc
+        }])
     );
 }
 
@@ -349,19 +421,37 @@ fn a_missing_or_lowercase_direction_is_ascending() {
     // misspelling: refusing would lose a view over a one-character typo.
     for direction in ["DESC", "desc", "Desc"] {
         let yaml = format!("views:\n  - type: table\n    name: V\n    sort:\n      - property: file.name\n        direction: {direction}\n");
-        assert_eq!(parse_base("T.base", &yaml).unwrap().views[0].sort.as_ref().unwrap()[0].direction, Direction::Desc);
+        assert_eq!(
+            parse_base("T.base", &yaml).unwrap().views[0]
+                .sort
+                .as_ref()
+                .unwrap()[0]
+                .direction,
+            Direction::Desc
+        );
     }
     for direction in ["", "ASC", "ascending", "ASCENDING", "nonsense"] {
         let yaml = format!("views:\n  - type: table\n    name: V\n    sort:\n      - property: file.name\n        direction: {direction}\n");
-        assert_eq!(parse_base("T.base", &yaml).unwrap().views[0].sort.as_ref().unwrap()[0].direction, Direction::Asc);
+        assert_eq!(
+            parse_base("T.base", &yaml).unwrap().views[0]
+                .sort
+                .as_ref()
+                .unwrap()[0]
+                .direction,
+            Direction::Asc
+        );
     }
 }
 
 #[test]
 fn a_non_string_in_order_is_dropped_rather_than_failing_the_view() {
-    let yaml = "views:\n  - type: table\n    name: V\n    order: [file.name, 7, status, null, true]\n";
+    let yaml =
+        "views:\n  - type: table\n    name: V\n    order: [file.name, 7, status, null, true]\n";
     let parsed = parse_base("T.base", yaml).expect("parses");
-    assert_eq!(parsed.views[0].order, Some(vec!["file.name".to_string(), "status".to_string()]));
+    assert_eq!(
+        parsed.views[0].order,
+        Some(vec!["file.name".to_string(), "status".to_string()])
+    );
 }
 
 #[test]
@@ -369,7 +459,9 @@ fn a_group_by_without_a_property_is_ignored() {
     // A groupBy with nothing to group on cannot produce groups. Inventing a
     // property name would put every row in a bucket the author never asked for.
     let yaml = "views:\n  - type: cards\n    name: V\n    groupBy:\n      direction: ASC\n";
-    assert!(parse_base("T.base", yaml).unwrap().views[0].group_by.is_none());
+    assert!(parse_base("T.base", yaml).unwrap().views[0]
+        .group_by
+        .is_none());
 }
 
 #[test]
@@ -388,10 +480,22 @@ fn a_view_with_no_name_is_numbered_by_position() {
 fn a_base_must_be_a_mapping_with_views() {
     let cases = [
         ("- a\n", "A base file must be a YAML mapping: T.base"),
-        ("just a string\n", "A base file must be a YAML mapping: T.base"),
-        ("formulas: {}\n", "A base file must define a \"views\" list: T.base"),
-        ("views: {}\n", "A base file must define a \"views\" list: T.base"),
-        ("views: []\n", "A base file must define at least one view: T.base"),
+        (
+            "just a string\n",
+            "A base file must be a YAML mapping: T.base",
+        ),
+        (
+            "formulas: {}\n",
+            "A base file must define a \"views\" list: T.base",
+        ),
+        (
+            "views: {}\n",
+            "A base file must define a \"views\" list: T.base",
+        ),
+        (
+            "views: []\n",
+            "A base file must define at least one view: T.base",
+        ),
     ];
     for (yaml, expected) in cases {
         let error = refusal_from(yaml, QueryOptions::default());
@@ -403,17 +507,33 @@ fn a_base_must_be_a_mapping_with_views() {
 #[test]
 fn invalid_yaml_names_the_file() {
     let error = refusal_from("views: [\n  - type: table\n", QueryOptions::default());
-    assert!(error.message().starts_with("Invalid YAML in T.base: "), "got {:?}", error.message());
+    assert!(
+        error.message().starts_with("Invalid YAML in T.base: "),
+        "got {:?}",
+        error.message()
+    );
     assert_eq!(error.note(), Some("T.base"));
 }
 
 #[test]
 fn a_view_must_be_a_mapping_with_a_type() {
     let cases = [
-        ("views:\n  - just a string\n", "views[0] must be a mapping in T.base"),
-        ("views:\n  - name: V\n", "views[0] is missing a \"type\" in T.base"),
-        ("views:\n  - type: \"\"\n", "views[0] is missing a \"type\" in T.base"),
-        ("views:\n  - type: table\n    name: V\n  - type: 7\n", "views[1] is missing a \"type\" in T.base"),
+        (
+            "views:\n  - just a string\n",
+            "views[0] must be a mapping in T.base",
+        ),
+        (
+            "views:\n  - name: V\n",
+            "views[0] is missing a \"type\" in T.base",
+        ),
+        (
+            "views:\n  - type: \"\"\n",
+            "views[0] is missing a \"type\" in T.base",
+        ),
+        (
+            "views:\n  - type: table\n    name: V\n  - type: 7\n",
+            "views[1] is missing a \"type\" in T.base",
+        ),
     ];
     for (yaml, expected) in cases {
         let error = refusal_from(yaml, QueryOptions::default());
@@ -427,11 +547,14 @@ fn an_escaped_pipe_is_unescaped_before_parsing() {
     // Obsidian's own writer escapes `|` inside filter expressions, which YAML
     // would otherwise read as a block scalar indicator and turn the rest of the
     // file into a string.
-    let yaml = "filters:\n  and:\n    - 'status == \"a\\|b\"'\nviews:\n  - type: table\n    name: V\n";
+    let yaml =
+        "filters:\n  and:\n    - 'status == \"a\\|b\"'\nviews:\n  - type: table\n    name: V\n";
     let parsed = parse_base("T.base", yaml).expect("parses");
     assert_eq!(
         parsed.filters,
-        Some(FilterNode::And(vec![FilterNode::Expression("status == \"a|b\"".into())]))
+        Some(FilterNode::And(vec![FilterNode::Expression(
+            "status == \"a|b\"".into()
+        )]))
     );
 }
 
@@ -450,7 +573,10 @@ fn a_filter_object_with_sibling_group_keys_is_refused_with_obsidians_wording() {
     ] {
         let yaml = format!("views:\n  - type: table\n    name: V\n    filters:\n{siblings}");
         let error = refusal_from(&yaml, QueryOptions::default());
-        assert_eq!(error.message(), "\"filters\" may only have one of an \"and\", \"or\", or \"not\" keys.");
+        assert_eq!(
+            error.message(),
+            "\"filters\" may only have one of an \"and\", \"or\", or \"not\" keys."
+        );
         assert_eq!(error.note(), Some("T.base"));
     }
 }
@@ -459,16 +585,23 @@ fn a_filter_object_with_sibling_group_keys_is_refused_with_obsidians_wording() {
 fn a_sibling_group_key_counts_even_when_its_value_is_null() {
     // The author wrote two group keys. Which one they meant is a question we
     // cannot answer, and silently honouring one is the wrong answer.
-    let yaml = "views:\n  - type: table\n    name: V\n    filters:\n      and:\n        - a\n      or:\n";
+    let yaml =
+        "views:\n  - type: table\n    name: V\n    filters:\n      and:\n        - a\n      or:\n";
     let error = refusal_from(yaml, QueryOptions::default());
-    assert_eq!(error.message(), "\"filters\" may only have one of an \"and\", \"or\", or \"not\" keys.");
+    assert_eq!(
+        error.message(),
+        "\"filters\" may only have one of an \"and\", \"or\", or \"not\" keys."
+    );
 }
 
 #[test]
 fn a_sibling_refusal_also_applies_to_the_top_level_filters() {
     let yaml = "filters:\n  and:\n    - a\n  not:\n    - b\nviews:\n  - type: table\n    name: V\n";
     let error = refusal_from(yaml, QueryOptions::default());
-    assert_eq!(error.message(), "\"filters\" may only have one of an \"and\", \"or\", or \"not\" keys.");
+    assert_eq!(
+        error.message(),
+        "\"filters\" may only have one of an \"and\", \"or\", or \"not\" keys."
+    );
 }
 
 #[test]
@@ -495,28 +628,56 @@ fn a_bare_list_under_filters_is_refused() {
 
 #[test]
 fn a_scalar_filter_that_is_not_a_string_is_refused() {
-    let error = refusal_from("views:\n  - type: table\n    name: V\n    filters: 7\n", QueryOptions::default());
-    assert_eq!(error.message(), "Invalid filter at views[0].filters in T.base");
+    let error = refusal_from(
+        "views:\n  - type: table\n    name: V\n    filters: 7\n",
+        QueryOptions::default(),
+    );
+    assert_eq!(
+        error.message(),
+        "Invalid filter at views[0].filters in T.base"
+    );
 }
 
 #[test]
 fn a_group_that_is_not_a_list_is_refused() {
-    let error = refusal_from("views:\n  - type: table\n    name: V\n    filters:\n      and: 7\n", QueryOptions::default());
-    assert_eq!(error.message(), "Filter group \"views[0].filters.and\" in T.base must be a list");
+    let error = refusal_from(
+        "views:\n  - type: table\n    name: V\n    filters:\n      and: 7\n",
+        QueryOptions::default(),
+    );
+    assert_eq!(
+        error.message(),
+        "Filter group \"views[0].filters.and\" in T.base must be a list"
+    );
 }
 
 #[test]
 fn a_bare_string_is_a_whole_filter_expression() {
-    let parsed = parse_base("T.base", "filters: 'status == \"active\"'\nviews:\n  - type: table\n    name: V\n").unwrap();
-    assert_eq!(parsed.filters, Some(FilterNode::Expression("status == \"active\"".into())));
+    let parsed = parse_base(
+        "T.base",
+        "filters: 'status == \"active\"'\nviews:\n  - type: table\n    name: V\n",
+    )
+    .unwrap();
+    assert_eq!(
+        parsed.filters,
+        Some(FilterNode::Expression("status == \"active\"".into()))
+    );
 }
 
 #[test]
 fn a_not_group_accepts_a_single_scalar() {
     // `not: file.hasTag("x")` is what people write; requiring a list for it would
     // refuse a spelling Obsidian accepts.
-    let parsed = parse_base("T.base", "filters:\n  not: 'file.hasTag(\"x\")'\nviews:\n  - type: table\n    name: V\n").unwrap();
-    assert_eq!(parsed.filters, Some(FilterNode::Not(vec![FilterNode::Expression("file.hasTag(\"x\")".into())])));
+    let parsed = parse_base(
+        "T.base",
+        "filters:\n  not: 'file.hasTag(\"x\")'\nviews:\n  - type: table\n    name: V\n",
+    )
+    .unwrap();
+    assert_eq!(
+        parsed.filters,
+        Some(FilterNode::Not(vec![FilterNode::Expression(
+            "file.hasTag(\"x\")".into()
+        )]))
+    );
 }
 
 #[test]
@@ -571,7 +732,10 @@ fn formulas_are_topologically_ordered() {
         ("y".to_string(), "x + 1".to_string()),
         ("x".to_string(), "1".to_string()),
     ]);
-    assert_eq!(order_formulas(&formulas).expect("no cycle"), ["x", "y", "z"]);
+    assert_eq!(
+        order_formulas(&formulas).expect("no cycle"),
+        ["x", "y", "z"]
+    );
 }
 
 #[test]
@@ -582,8 +746,8 @@ fn a_formula_sees_the_formula_it_references() {
     // the TypeScript side, so the two cannot disagree about it.
     let vault = fixture_vault("formula-chain");
     let base = base_of(&vault, "Chained.base");
-    let result = query_base(&vault, "Chained.base", &base, &QueryOptions::default())
-        .expect("queries");
+    let result =
+        query_base(&vault, "Chained.base", &base, &QueryOptions::default()).expect("queries");
     let values = &result.rows[0].values;
     assert_eq!(values["formula.base_value"].as_number(), Some(41.0));
     assert_eq!(values["formula.doubled"].as_number(), Some(82.0));
@@ -631,7 +795,12 @@ fn an_unsorted_view_orders_by_file_name_not_by_path() {
     assert_eq!(names, sorted, "rows must be in file.name order");
     assert_eq!(
         names,
-        ["Add offline mode", "Fix login redirect", "Invoice export", "Root Ticket"]
+        [
+            "Add offline mode",
+            "Fix login redirect",
+            "Invoice export",
+            "Root Ticket"
+        ]
     );
 }
 
@@ -640,11 +809,21 @@ fn a_formula_column_is_evaluated_once_per_note_and_ordered() {
     let vault = testing_vault();
     let result = query(&vault, "AllNotes.base", Some("All"), None);
     assert_eq!(
-        cell(&result, "Tickets/Add offline mode.md", "formula.priority_display").to_display_string(),
+        cell(
+            &result,
+            "Tickets/Add offline mode.md",
+            "formula.priority_display"
+        )
+        .to_display_string(),
         "2 – normal"
     );
     assert_eq!(
-        cell(&result, "Tickets/Fix login redirect.md", "formula.priority_display").to_display_string(),
+        cell(
+            &result,
+            "Tickets/Fix login redirect.md",
+            "formula.priority_display"
+        )
+        .to_display_string(),
         "1 – high"
     );
 }
@@ -661,7 +840,13 @@ fn grouped_results_keep_group_order_and_are_reachable_by_key() {
         .collect();
     assert_eq!(grouped_keys, ["1 – high", "2 – normal", "3 – low"]);
     assert_eq!(
-        grouped(&result, "1 – high", "Tickets/Fix login redirect.md", "file.name").to_display_string(),
+        grouped(
+            &result,
+            "1 – high",
+            "Tickets/Fix login redirect.md",
+            "file.name"
+        )
+        .to_display_string(),
         "Fix login redirect"
     );
 }
@@ -694,10 +879,26 @@ fn a_this_scoped_base_raises_rather_than_returning_an_empty_result() {
 #[test]
 fn the_same_base_scopes_itself_to_the_host_note() {
     let vault = testing_vault();
-    let some = query(&vault, "Tickets.base", Some("All"), Some("Projects/SomeProject.md"));
-    assert_eq!(paths(&some), ["Tickets/Add offline mode.md", "Tickets/Fix login redirect.md"]);
+    let some = query(
+        &vault,
+        "Tickets.base",
+        Some("All"),
+        Some("Projects/SomeProject.md"),
+    );
+    assert_eq!(
+        paths(&some),
+        [
+            "Tickets/Add offline mode.md",
+            "Tickets/Fix login redirect.md"
+        ]
+    );
 
-    let other = query(&vault, "Tickets.base", Some("All"), Some("Projects/OtherProject.md"));
+    let other = query(
+        &vault,
+        "Tickets.base",
+        Some("All"),
+        Some("Projects/OtherProject.md"),
+    );
     assert_eq!(paths(&other), ["Tickets/Invoice export.md"]);
 
     let root = query(&vault, "Tickets.base", Some("All"), Some("Root Project.md"));
@@ -716,7 +917,10 @@ fn a_context_that_is_not_a_note_is_refused_by_what_it_is() {
         let error = refusal(
             &vault,
             "Tickets.base",
-            QueryOptions { context: Some(context.into()), view: None },
+            QueryOptions {
+                context: Some(context.into()),
+                view: None,
+            },
         );
         assert!(
             error.message().contains(expected),
@@ -756,9 +960,16 @@ fn an_unknown_view_name_says_so() {
     let error = refusal(
         &vault,
         "AllNotes.base",
-        QueryOptions { context: None, view: Some("NoSuchView".into()) },
+        QueryOptions {
+            context: None,
+            view: Some("NoSuchView".into()),
+        },
     );
-    assert!(error.message().contains("NoSuchView"), "got: {}", error.message());
+    assert!(
+        error.message().contains("NoSuchView"),
+        "got: {}",
+        error.message()
+    );
 }
 
 // ---------------------------------------------------------------------------

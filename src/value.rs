@@ -62,7 +62,11 @@ impl BasesDate {
 
 impl fmt::Display for BasesDate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        write!(
+            f,
+            "{}",
+            self.0.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        )
     }
 }
 
@@ -81,10 +85,18 @@ pub struct Duration {
 }
 
 impl Duration {
-    pub const ZERO: Duration = Duration { millis: 0, months: 0, years: 0 };
+    pub const ZERO: Duration = Duration {
+        millis: 0,
+        months: 0,
+        years: 0,
+    };
 
     pub fn from_millis(millis: i64) -> Self {
-        Self { millis, months: 0, years: 0 }
+        Self {
+            millis,
+            months: 0,
+            years: 0,
+        }
     }
 
     /// Whole days in the span. `M`/month is a CALENDAR field, not this.
@@ -309,7 +321,9 @@ impl BasesValue {
                 .map(|i| i.to_display_string())
                 .collect::<Vec<_>>()
                 .join(", "),
-            BasesValue::Link { target, display, .. } => match display {
+            BasesValue::Link {
+                target, display, ..
+            } => match display {
                 Some(d) => format!("[[{target}|{d}]]"),
                 None => format!("[[{target}]]"),
             },
@@ -334,17 +348,15 @@ impl BasesValue {
 
     /// An empty namespace, used where a namespace is required but absent.
     pub fn empty_namespace() -> Self {
-        BasesValue::Namespace(std::rc::Rc::new(
-            std::collections::BTreeMap::new(),
-        ))
+        BasesValue::Namespace(std::rc::Rc::new(std::collections::BTreeMap::new()))
     }
 
     /// A link's resolved target, for link equality.
     pub fn link_target(&self) -> Option<&str> {
         match self {
-            BasesValue::Link { target, resolved, .. } => {
-                Some(resolved.as_deref().unwrap_or(target))
-            }
+            BasesValue::Link {
+                target, resolved, ..
+            } => Some(resolved.as_deref().unwrap_or(target)),
             _ => None,
         }
     }
@@ -396,9 +408,7 @@ pub fn compare(a: &BasesValue, b: &BasesValue) -> Option<std::cmp::Ordering> {
         (File(x), File(y)) => Some(x.path.cmp(&y.path)),
         // Namespaces compare by rendered content: `BasesValue` is not `Ord`, and
         // a namespace only ever reaches here when a filter sorts on it.
-        (Namespace(x), Namespace(y)) => {
-            Some(render_namespace(x).cmp(&render_namespace(y)))
-        }
+        (Namespace(x), Namespace(y)) => Some(render_namespace(x).cmp(&render_namespace(y))),
         // A number and the string that spells it compare equal, which is what
         // makes `file.size == 42` and `status == "active"` both behave.
         (Number(n), String(s)) | (String(s), Number(n)) => {

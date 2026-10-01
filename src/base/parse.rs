@@ -119,8 +119,16 @@ const BASE_CORE_KEYS: [&str; 5] = ["filters", "formulas", "properties", "summari
 
 /// View-level keys the engine reads. Everything else lands in
 /// [`BaseView::extra`].
-const VIEW_CORE_KEYS: [&str; 8] =
-    ["type", "name", "limit", "filters", "order", "groupBy", "sort", "summaries"];
+const VIEW_CORE_KEYS: [&str; 8] = [
+    "type",
+    "name",
+    "limit",
+    "filters",
+    "order",
+    "groupBy",
+    "sort",
+    "summaries",
+];
 
 /// Parse `.base` YAML into a [`BaseFile`].
 ///
@@ -130,11 +138,13 @@ pub fn parse_base(path: &str, text: &str) -> Result<BaseFile> {
     // Obsidian's own writer escapes `|` inside filter expressions, which would
     // otherwise be read as a YAML block scalar indicator.
     let unescaped = text.replace("\\|", "|");
-    let raw: Yaml = serde_yaml::from_str(&unescaped)
-        .map_err(|error| BasesError::new(format!("Invalid YAML in {path}: {error}")).with_note(path))?;
+    let raw: Yaml = serde_yaml::from_str(&unescaped).map_err(|error| {
+        BasesError::new(format!("Invalid YAML in {path}: {error}")).with_note(path)
+    })?;
     let Some(root) = raw.as_mapping() else {
-        return Err(BasesError::new(format!("A base file must be a YAML mapping: {path}"))
-            .with_note(path));
+        return Err(
+            BasesError::new(format!("A base file must be a YAML mapping: {path}")).with_note(path),
+        );
     };
 
     let Some(views_raw) = present(root, "views").and_then(Yaml::as_sequence) else {
@@ -169,15 +179,19 @@ pub fn parse_base(path: &str, text: &str) -> Result<BaseFile> {
 fn parse_view(raw: &Yaml, index: usize, path: &str) -> Result<BaseView> {
     let Some(view) = raw.as_mapping() else {
         return Err(
-            BasesError::new(format!("views[{index}] must be a mapping in {path}")).with_note(path)
+            BasesError::new(format!("views[{index}] must be a mapping in {path}")).with_note(path),
         );
     };
     // A view with no type is unusable, and guessing one would silently render
     // the wrong layout.
-    let Some(view_type) = present(view, "type").and_then(Yaml::as_str).filter(|t| !t.is_empty())
+    let Some(view_type) = present(view, "type")
+        .and_then(Yaml::as_str)
+        .filter(|t| !t.is_empty())
     else {
-        return Err(BasesError::new(format!("views[{index}] is missing a \"type\" in {path}"))
-            .with_note(path));
+        return Err(
+            BasesError::new(format!("views[{index}] is missing a \"type\" in {path}"))
+                .with_note(path),
+        );
     };
 
     let mut parsed = BaseView {
@@ -186,7 +200,11 @@ fn parse_view(raw: &Yaml, index: usize, path: &str) -> Result<BaseView> {
             .and_then(Yaml::as_str)
             .map_or_else(|| format!("View {}", index + 1), str::to_string),
         limit: present(view, "limit").and_then(Yaml::as_f64),
-        filters: normalise_filters(present(view, "filters"), path, &format!("views[{index}].filters"))?,
+        filters: normalise_filters(
+            present(view, "filters"),
+            path,
+            &format!("views[{index}].filters"),
+        )?,
         order: None,
         group_by: None,
         sort: None,
@@ -222,7 +240,8 @@ fn parse_view(raw: &Yaml, index: usize, path: &str) -> Result<BaseView> {
                     // Obsidian 1.9 wrote `column:`; it is `property:` now. Both
                     // occur in the wild -- TaskNotes still emits `column:` -- so
                     // accept either.
-                    let property = present(entry, "property").or_else(|| present(entry, "column"))?;
+                    let property =
+                        present(entry, "property").or_else(|| present(entry, "column"))?;
                     let property = property.as_str()?;
                     Some(SortEntry {
                         property: property.to_string(),
@@ -234,8 +253,11 @@ fn parse_view(raw: &Yaml, index: usize, path: &str) -> Result<BaseView> {
     }
 
     if present(view, "summaries").is_some() {
-        parsed.summaries =
-            Some(string_map(present(view, "summaries"), &format!("views[{index}].summaries"), path)?);
+        parsed.summaries = Some(string_map(
+            present(view, "summaries"),
+            &format!("views[{index}].summaries"),
+            path,
+        )?);
     }
 
     Ok(parsed)
@@ -255,7 +277,9 @@ fn read_direction(value: Option<&Yaml>) -> Direction {
 /// Refusing would break a base Obsidian opens happily, and a non-string formula
 /// has no meaning we could report usefully.
 fn string_map(value: Option<&Yaml>, what: &str, path: &str) -> Result<BTreeMap<String, String>> {
-    let Some(raw) = value else { return Ok(BTreeMap::new()) };
+    let Some(raw) = value else {
+        return Ok(BTreeMap::new());
+    };
     let Some(entries) = raw.as_mapping() else {
         return Err(BasesError::new(format!("{what} must be a mapping in {path}")).with_note(path));
     };
@@ -271,10 +295,12 @@ fn string_map(value: Option<&Yaml>, what: &str, path: &str) -> Result<BTreeMap<S
 /// nothing about how to display `note.x`, and refusing the file over it would
 /// lose the views that are perfectly readable.
 fn property_configs(value: Option<&Yaml>, path: &str) -> Result<BTreeMap<String, PropertyConfig>> {
-    let Some(raw) = value else { return Ok(BTreeMap::new()) };
+    let Some(raw) = value else {
+        return Ok(BTreeMap::new());
+    };
     let Some(entries) = raw.as_mapping() else {
         return Err(
-            BasesError::new(format!("properties must be a mapping in {path}")).with_note(path)
+            BasesError::new(format!("properties must be a mapping in {path}")).with_note(path),
         );
     };
     Ok(entries
@@ -282,7 +308,9 @@ fn property_configs(value: Option<&Yaml>, path: &str) -> Result<BTreeMap<String,
         .filter_map(|(key, value)| {
             let fields = value.as_mapping()?;
             let mut config = PropertyConfig {
-                display_name: present(fields, "displayName").and_then(Yaml::as_str).map(str::to_string),
+                display_name: present(fields, "displayName")
+                    .and_then(Yaml::as_str)
+                    .map(str::to_string),
                 extra: Mapping::new(),
             };
             config.extra = extras(fields, &["displayName"]);
@@ -296,7 +324,11 @@ fn property_configs(value: Option<&Yaml>, path: &str) -> Result<BTreeMap<String,
 /// A filter object may contain exactly ONE of `and`/`or`/`not`; siblings are an
 /// error, not a silent merge. Obsidian's own wording for that case is
 /// `"filters" may only have one of an "and", "or", or "not" keys.`
-pub fn normalise_filters(value: Option<&Yaml>, path: &str, where_: &str) -> Result<Option<FilterNode>> {
+pub fn normalise_filters(
+    value: Option<&Yaml>,
+    path: &str,
+    where_: &str,
+) -> Result<Option<FilterNode>> {
     let Some(raw) = value else { return Ok(None) };
 
     if let Some(expression) = raw.as_str() {
@@ -312,14 +344,16 @@ pub fn normalise_filters(value: Option<&Yaml>, path: &str, where_: &str) -> Resu
     }
     let Some(entries) = raw.as_mapping() else {
         return Err(
-            BasesError::new(format!("Invalid filter at {where_} in {path}")).with_note(path)
+            BasesError::new(format!("Invalid filter at {where_} in {path}")).with_note(path),
         );
     };
 
     // A key present with a null value still counts as a sibling: the author wrote
     // two group keys, and which of them they meant is a question we cannot answer.
-    let present_keys: Vec<FilterGroup> =
-        FilterGroup::ALL.into_iter().filter(|group| contains(entries, group.key())).collect();
+    let present_keys: Vec<FilterGroup> = FilterGroup::ALL
+        .into_iter()
+        .filter(|group| contains(entries, group.key()))
+        .collect();
     let [group] = present_keys.as_slice() else {
         let refusal = if present_keys.is_empty() {
             format!(
@@ -374,10 +408,10 @@ fn normalise_list(value: Option<&Yaml>, path: &str, where_: &str) -> Result<Vec<
         return Ok(vec![FilterNode::Expression(expression.to_string())]);
     }
     let Some(items) = value.and_then(Yaml::as_sequence) else {
-        return Err(
-            BasesError::new(format!("Filter group \"{where_}\" in {path} must be a list"))
-                .with_note(path),
-        );
+        return Err(BasesError::new(format!(
+            "Filter group \"{where_}\" in {path} must be a list"
+        ))
+        .with_note(path));
     };
     items
         .iter()
@@ -397,8 +431,12 @@ pub fn select_view<'a>(base: &'a BaseFile, view_name: Option<&str>) -> Result<&'
         .iter()
         .find(|view| view.name == name)
         .ok_or_else(|| {
-            let available =
-                base.views.iter().map(|view| view.name.as_str()).collect::<Vec<_>>().join(", ");
+            let available = base
+                .views
+                .iter()
+                .map(|view| view.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             BasesError::new(format!(
                 "No view named \"{name}\" in this base. Available views: {available}"
             ))
@@ -416,7 +454,9 @@ pub fn select_view<'a>(base: &'a BaseFile, view_name: Option<&str>) -> Result<&'
 /// leave the field unset -- so they are one case here rather than two that could
 /// disagree.
 fn present<'a>(entries: &'a Mapping, key: &str) -> Option<&'a Yaml> {
-    entries.get(Yaml::String(key.to_string())).filter(|value| !value.is_null())
+    entries
+        .get(Yaml::String(key.to_string()))
+        .filter(|value| !value.is_null())
 }
 
 /// Whether a mapping has the key at all, whatever its value.
@@ -446,8 +486,7 @@ fn extras(entries: &Mapping, core: &[&str]) -> Mapping {
 fn yaml_key(key: &Yaml) -> String {
     match key {
         Yaml::String(text) => text.clone(),
-        other => serde_yaml::to_string(other).map_or_else(|_| String::new(), |text| {
-            text.trim_end().to_string()
-        }),
+        other => serde_yaml::to_string(other)
+            .map_or_else(|_| String::new(), |text| text.trim_end().to_string()),
     }
 }

@@ -62,13 +62,13 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{Map, Value as Json, json};
+use serde_json::{json, Map, Value as Json};
 
 use crate::base::{QueryOptions, QueryResult};
-use crate::drafts::{AddNoteOptions, AddNoteToBaseResult, iso_millis};
+use crate::drafts::{iso_millis, AddNoteOptions, AddNoteToBaseResult};
 use crate::error::BasesError;
-use crate::render::markdown::{RenderStyle, render_markdown};
-use crate::service::{NoteOptions, Resolver, json_rows};
+use crate::render::markdown::{render_markdown, RenderStyle};
+use crate::service::{json_rows, NoteOptions, Resolver};
 
 /// The server name a client sees.
 pub const SERVER_NAME: &str = "bases-mcp";
@@ -138,7 +138,9 @@ impl ToolSurface {
             "add_note_to_base" => Ok(attempt(self.add_note_to_base(arguments)).await),
             "backlinks" => Ok(attempt(self.backlinks(arguments)).await),
             other => Err(McpError::invalid_params(
-                format!("Unknown tool \"{other}\". Call tools/list for the six this server serves."),
+                format!(
+                    "Unknown tool \"{other}\". Call tools/list for the six this server serves."
+                ),
                 None,
             )),
         }
@@ -162,10 +164,18 @@ impl ToolSurface {
                 .collect::<Vec<_>>(),
             "health": Health::Ok.as_str(),
         });
-        Ok(data(payload, Some(format!("Every base queries the whole vault. {count} base(s) found."))))
+        Ok(data(
+            payload,
+            Some(format!(
+                "Every base queries the whole vault. {count} base(s) found."
+            )),
+        ))
     }
 
-    async fn resolve_base(&self, arguments: &Map<String, Json>) -> Result<CallToolResult, BasesError> {
+    async fn resolve_base(
+        &self,
+        arguments: &Map<String, Json>,
+    ) -> Result<CallToolResult, BasesError> {
         let args: ResolveBaseArgs = parse_args(arguments)?;
         let path = self.resolver.resolve_base_path(&args.base)?;
         let base = self.resolver.load_base(&path).await?;
@@ -173,7 +183,10 @@ impl ToolSurface {
         // is inlined so the `QueryResult` survives to the health field, where its
         // warnings decide ok vs partial-with-errors. The markdown is
         // byte-identical either way.
-        let options = QueryOptions { context: args.context.clone(), view: args.view.clone() };
+        let options = QueryOptions {
+            context: args.context.clone(),
+            view: args.view.clone(),
+        };
         let result = self.resolver.query(&path, &options).await?;
         let health = health_of(&result);
 
@@ -196,7 +209,10 @@ impl ToolSurface {
         };
         let mut payload = summarise(&result, health);
         if let Json::Object(fields) = &mut payload {
-            fields.insert("rows".to_string(), Json::Array(json_rows(&base, &result, &extra)));
+            fields.insert(
+                "rows".to_string(),
+                Json::Array(json_rows(&base, &result, &extra)),
+            );
         }
         Ok(data(payload, None))
     }
@@ -205,7 +221,13 @@ impl ToolSurface {
         let args: GetNoteArgs = parse_args(arguments)?;
         let note = self
             .resolver
-            .read_note(&args.path, NoteOptions { raw: args.raw, ..NoteOptions::default() })
+            .read_note(
+                &args.path,
+                NoteOptions {
+                    raw: args.raw,
+                    ..NoteOptions::default()
+                },
+            )
             .await?;
         let payload = json!({
             "path": note.path,
@@ -224,11 +246,21 @@ impl ToolSurface {
         Ok(data(payload, warning))
     }
 
-    async fn write_note(&self, arguments: &Map<String, Json>) -> Result<CallToolResult, BasesError> {
+    async fn write_note(
+        &self,
+        arguments: &Map<String, Json>,
+    ) -> Result<CallToolResult, BasesError> {
         let args: WriteNoteArgs = parse_args(arguments)?;
-        let before = self.resolver.read_note(&args.path, NoteOptions::raw()).await?;
+        let before = self
+            .resolver
+            .read_note(&args.path, NoteOptions::raw())
+            .await?;
         let result = self.resolver.write_note(&args.path, &args.content).await?;
-        let health = if result.refused.is_empty() { Health::Ok } else { Health::PartialWithErrors };
+        let health = if result.refused.is_empty() {
+            Health::Ok
+        } else {
+            Health::PartialWithErrors
+        };
         let payload = json!({
             "path": result.path,
             "applied": change_summary(&before.raw, &result.text),
@@ -245,10 +277,16 @@ impl ToolSurface {
             "removedRegion": result.removed_region,
             "health": health.as_str(),
         });
-        Ok(data(payload, refusal_note(result.refused.len(), result.removed_region)))
+        Ok(data(
+            payload,
+            refusal_note(result.refused.len(), result.removed_region),
+        ))
     }
 
-    async fn add_note_to_base(&self, arguments: &Map<String, Json>) -> Result<CallToolResult, BasesError> {
+    async fn add_note_to_base(
+        &self,
+        arguments: &Map<String, Json>,
+    ) -> Result<CallToolResult, BasesError> {
         let args: AddNoteOptions = parse_args(arguments)?;
         let result = self.resolver.add_note_to_base(&args).await?;
         let payload = match &result {
@@ -285,7 +323,10 @@ impl ToolSurface {
                 .collect::<Vec<_>>(),
             "health": Health::Ok.as_str(),
         });
-        Ok(data(payload, Some(format!("{count} note(s) link to {path}."))))
+        Ok(data(
+            payload,
+            Some(format!("{count} note(s) link to {path}.")),
+        ))
     }
 }
 
@@ -309,7 +350,11 @@ impl ServerHandler for ToolSurface {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResponse, McpError>> + '_ {
         let arguments = request.arguments.unwrap_or_default();
-        async move { self.dispatch(&request.name, &arguments).await.map(CallToolResponse::from) }
+        async move {
+            self.dispatch(&request.name, &arguments)
+                .await
+                .map(CallToolResponse::from)
+        }
     }
 }
 
@@ -405,7 +450,11 @@ fn summarise(result: &QueryResult, health: Health) -> Json {
 
 /// Warnings demote a result rather than failing it.
 fn health_of(result: &QueryResult) -> Health {
-    if result.warnings.is_empty() { Health::Ok } else { Health::PartialWithErrors }
+    if result.warnings.is_empty() {
+        Health::Ok
+    } else {
+        Health::PartialWithErrors
+    }
 }
 
 /// A one-line read of the health field, for a reader who sees only the text.
@@ -424,7 +473,12 @@ fn health_note(result: &QueryResult, health: Health) -> String {
         health = health.as_str(),
         rows = result.rows.len(),
         total = result.total,
-        warnings = result.warnings.iter().map(|warning| format!("- {warning}")).collect::<Vec<_>>().join("\n")
+        warnings = result
+            .warnings
+            .iter()
+            .map(|warning| format!("- {warning}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     )
 }
 
@@ -457,7 +511,9 @@ fn surplus(
     from: &std::collections::HashMap<&str, usize>,
     against: &std::collections::HashMap<&str, usize>,
 ) -> usize {
-    from.iter().map(|(line, count)| count.saturating_sub(against.get(line).copied().unwrap_or(0))).sum()
+    from.iter()
+        .map(|(line, count)| count.saturating_sub(against.get(line).copied().unwrap_or(0)))
+        .sum()
 }
 
 /// The refusal count, stated plainly, so it cannot be skimmed past.
@@ -469,7 +525,8 @@ fn refusal_note(count: usize, removed: bool) -> Option<String> {
     if removed {
         parts.push("One of them had been deleted outright.".to_string());
     }
-    parts.push("Rows come from notes: use add_note_to_base to create one that matches.".to_string());
+    parts
+        .push("Rows come from notes: use add_note_to_base to create one that matches.".to_string());
     Some(parts.join(" "))
 }
 
@@ -518,7 +575,10 @@ fn data(payload: Json, warning: Option<String>) -> CallToolResult {
 /// without scraping the prose.
 fn failure(error: &BasesError) -> CallToolResult {
     let mut detail = context_of(error);
-    detail.insert("message".to_string(), Json::String(error.message().to_string()));
+    detail.insert(
+        "message".to_string(),
+        Json::String(error.message().to_string()),
+    );
 
     let mut call = CallToolResult::error(vec![ContentBlock::text(error.message())]);
     call.structured_content =
@@ -586,20 +646,20 @@ pub fn tool_definitions() -> Vec<Tool> {
             concat!(
                 "Resolve one view of a base into rows. Two surfaces, and the difference \
                  matters:\n",
-                 "- format=markdown is the FLAT, CLI-parity surface: byte-comparable with ",
-                 "`obsidian base:query format=md`, which collapses EVERY view type into one \
+                "- format=markdown is the FLAT, CLI-parity surface: byte-comparable with ",
+                "`obsidian base:query format=md`, which collapses EVERY view type into one \
                  centred table and drops group headers and summaries.\n",
-                 "- Bases embedded in a note are the opposite -- get_note renders them \
+                "- Bases embedded in a note are the opposite -- get_note renders them \
                  STRUCTURED, with group headers and a summaries footer. Use markdown here to \
                  read a whole table; use get_note to read a base in the note it lives in.\n",
-                 "`context` is the host note that binds `this`. A base whose filter references \
+                "`context` is the host note that binds `this`. A base whose filter references \
                  `this` REQUIRES it: with no host note this tool fails rather than returning the \
                  empty result the Obsidian CLI returns, because an empty result is \
                  indistinguishable from a base that genuinely matches nothing.\n",
-                 "`includeAllFormulas` adds a column for every formula the base declares, not \
+                "`includeAllFormulas` adds a column for every formula the base declares, not \
                  just those in the view's `order`. It applies to format=json only -- markdown is \
                  the parity surface and shows exactly `order`.\n",
-                 "`health` is `ok`, `partial-with-errors` (rows resolved, but the base reported \
+                "`health` is `ok`, `partial-with-errors` (rows resolved, but the base reported \
                  warnings) or `failed`."
             ),
             json!({
@@ -641,10 +701,10 @@ pub fn tool_definitions() -> Vec<Tool> {
                  lists that provenance -- one entry per base region, in document order. Each \
                  embedded base binds `this` to the note it lives in, so no host note has to be \
                  supplied here.\n",
-                 "This Projection is NEVER written back to disk. Obsidian treats a `base` fence \
+                "This Projection is NEVER written back to disk. Obsidian treats a `base` fence \
                  as live YAML and would reject rendered markdown inside one. To edit a note, read \
                  it with raw=true, edit THAT, and send it to write_note.\n",
-                 "`raw: true` returns the stored text untouched and an empty `regions`."
+                "`raw: true` returns the stored text untouched and an empty `regions`."
             ),
             json!({
                 "type": "object",
@@ -667,11 +727,11 @@ pub fn tool_definitions() -> Vec<Tool> {
                  restored byte-for-byte, and any attempt to change, insert or delete one is \
                  REFUSED and reported in `refused` -- each entry carries a reason and guidance \
                  for what to do instead.\n",
-                 "A refusal means that part of your edit did NOT land: the base region was put \
+                "A refusal means that part of your edit did NOT land: the base region was put \
                  back as it was, while the rest of your edit was applied. `health` is \
                  `partial-with-errors` whenever anything was refused, and `isError` stays false \
                  because the write itself succeeded.\n",
-                 "Rows come from notes, not from the base file. To add a row, use \
+                "Rows come from notes, not from the base file. To add a row, use \
                  add_note_to_base -- it authors a note whose properties satisfy the base's \
                  filter."
             ),
@@ -693,15 +753,15 @@ pub fn tool_definitions() -> Vec<Tool> {
             concat!(
                 "Add a row to a base by creating a note its filter actually matches. A row IS a \
                  note, so this is a TWO-CALL HANDSHAKE, never one:\n",
-                 "1. Call with `base` and `path` (plus `context` when the base references `this`). \
+                "1. Call with `base` and `path` (plus `context` when the base references `this`). \
                  You get back a proposed note and a `draft_id`. NOTHING has been written.\n",
-                 "2. Edit the proposed note, then call again with ONLY `draft_id` and `content`.\n",
-                 "The second call runs the base's real filter against your frontmatter and writes \
+                "2. Edit the proposed note, then call again with ONLY `draft_id` and `content`.\n",
+                "The second call runs the base's real filter against your frontmatter and writes \
                  only on a match, so a note that could never be a row is never created. On a \
                  mismatch the error names the expressions that failed and inlines the base's own \
                  filter; nothing is written and the draft stays live for 30 minutes, so you can \
                  correct the frontmatter and resend the same `draft_id`.\n",
-                 "Branch on the result: `written` present means the note was created; absent means \
+                "Branch on the result: `written` present means the note was created; absent means \
                  you are holding a draft to edit."
             ),
             json!({

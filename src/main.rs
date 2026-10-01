@@ -22,10 +22,10 @@
 
 use std::process::ExitCode;
 
-use rmcp::ServiceExt;
 use rmcp::transport::stdio;
+use rmcp::ServiceExt;
 
-use bases_mcp::config::{ConfigResult, NAME, open_source, parse_config, process_env};
+use bases_mcp::config::{open_source, parse_config, process_env, ConfigResult, NAME};
 use bases_mcp::service::Resolver;
 use bases_mcp::tools::ToolSurface;
 
@@ -62,14 +62,19 @@ async fn run() -> Result<(), String> {
     // would otherwise index as a vault with no notes, and every Base would come
     // back with zero rows. See `config::open_source`.
     let source = open_source(&config).map_err(|error| error.message().to_string())?;
-    let resolver = Resolver::open(source).await.map_err(|error| error.message().to_string())?;
+    let resolver = Resolver::open(source)
+        .await
+        .map_err(|error| error.message().to_string())?;
 
     // Past this line, silence. The transport owns stdout from here on.
     let server = ToolSurface::new(std::rc::Rc::new(resolver));
     let transport = stdio();
     tokio::task::LocalSet::new()
         .run_until(async move {
-            let service = server.serve(transport).await.map_err(|error| error.to_string())?;
+            let service = server
+                .serve(transport)
+                .await
+                .map_err(|error| error.to_string())?;
             let reason = service.waiting().await.map_err(|error| error.to_string())?;
             warn(&format!("disconnected: {reason:?}"));
             Ok(())

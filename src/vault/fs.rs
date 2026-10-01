@@ -19,7 +19,7 @@ use chrono::{DateTime, Local};
 use sha2::{Digest, Sha256};
 
 use crate::error::{BasesError, Result};
-use crate::vault::source::{FileStat, SourceKind, VaultSource, is_indexable};
+use crate::vault::source::{is_indexable, FileStat, SourceKind, VaultSource};
 
 /// The content hash every backend must compute identically.
 ///
@@ -48,7 +48,9 @@ pub struct FsVaultSource {
 
 impl std::fmt::Debug for FsVaultSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FsVaultSource").field("root", &self.root).finish()
+        f.debug_struct("FsVaultSource")
+            .field("root", &self.root)
+            .finish()
     }
 }
 
@@ -107,7 +109,11 @@ impl FsVaultSource {
     /// and no reason. `src/main.rs` compensates here by stat-ing the directory
     /// before opening it, and `tests/vault_equivalence.rs` pins both halves.
     async fn walk(&self, rel: &str, out: &mut Vec<String>) {
-        let abs = if rel.is_empty() { self.root.clone() } else { self.root.join(rel) };
+        let abs = if rel.is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(rel)
+        };
         let mut entries = match tokio::fs::read_dir(&abs).await {
             Ok(entries) => entries,
             Err(_) => return,
@@ -118,7 +124,11 @@ impl FsVaultSource {
                 Ok(None) | Err(_) => return,
             };
             let name = entry.file_name().to_string_lossy().into_owned();
-            let child_rel = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+            let child_rel = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
             let file_type = match entry.file_type().await {
                 Ok(file_type) => file_type,
                 // Node's `Dirent.isDirectory()` reads a type cached at `readdir`
@@ -222,9 +232,13 @@ impl VaultSource for FsVaultSource {
         // `Buffer.toString("utf8")` behaves the same way. A note that is not
         // valid UTF-8 has to read the same on both backends or the equivalence
         // suite is comparing a decoding policy rather than a backend.
-        let bytes = tokio::fs::read(&abs).await.map_err(|e| io("read", &abs, e))?;
+        let bytes = tokio::fs::read(&abs)
+            .await
+            .map_err(|e| io("read", &abs, e))?;
         let text = String::from_utf8_lossy(&bytes).into_owned();
-        self.text_cache.borrow_mut().insert(rel.to_string(), text.clone());
+        self.text_cache
+            .borrow_mut()
+            .insert(rel.to_string(), text.clone());
         Ok(text)
     }
 
@@ -238,7 +252,9 @@ impl VaultSource for FsVaultSource {
         tokio::fs::write(&abs, data.as_bytes())
             .await
             .map_err(|e| io("write", &abs, e))?;
-        self.text_cache.borrow_mut().insert(rel.to_string(), data.to_string());
+        self.text_cache
+            .borrow_mut()
+            .insert(rel.to_string(), data.to_string());
         self.hash_cache.borrow_mut().remove(rel);
         *self.files.borrow_mut() = None;
         Ok(())
@@ -246,12 +262,17 @@ impl VaultSource for FsVaultSource {
 
     async fn stat(&self, rel: &str) -> Result<FileStat> {
         let abs = self.abs(rel)?;
-        let meta = tokio::fs::metadata(&abs).await.map_err(|e| io("stat", &abs, e))?;
+        let meta = tokio::fs::metadata(&abs)
+            .await
+            .map_err(|e| io("stat", &abs, e))?;
         let mtime = meta
             .modified()
             .map(DateTime::<Local>::from)
             .map_err(|e| io("read mtime of", &abs, e))?;
-        Ok(FileStat { size: meta.len(), mtime: mtime.fixed_offset() })
+        Ok(FileStat {
+            size: meta.len(),
+            mtime: mtime.fixed_offset(),
+        })
     }
 
     async fn hash(&self, rel: &str) -> Result<String> {
@@ -259,13 +280,17 @@ impl VaultSource for FsVaultSource {
             return Ok(hash.clone());
         }
         let hash = content_hash(&self.read_text(rel).await?);
-        self.hash_cache.borrow_mut().insert(rel.to_string(), hash.clone());
+        self.hash_cache
+            .borrow_mut()
+            .insert(rel.to_string(), hash.clone());
         Ok(hash)
     }
 
     async fn ensure_dir(&self, rel: &str) -> Result<()> {
         let abs = self.abs(rel)?;
-        tokio::fs::create_dir_all(&abs).await.map_err(|e| io("create directory", &abs, e))
+        tokio::fs::create_dir_all(&abs)
+            .await
+            .map_err(|e| io("create directory", &abs, e))
     }
 
     /// Remove a file, reporting success for one that was never there.

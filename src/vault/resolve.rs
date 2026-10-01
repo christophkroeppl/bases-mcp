@@ -89,7 +89,10 @@ impl PathIndex {
 
     /// Every registration, in registration order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.keys.iter().zip(self.paths.iter()).map(|(k, p)| (k.as_str(), p.as_str()))
+        self.keys
+            .iter()
+            .zip(self.paths.iter())
+            .map(|(k, p)| (k.as_str(), p.as_str()))
     }
 }
 

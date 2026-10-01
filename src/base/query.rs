@@ -15,13 +15,13 @@ use std::rc::Rc;
 
 use crate::ast::Node;
 use crate::error::{BasesError, Result};
-use crate::evaluator::{EvalContext, ThisContext, evaluate, evaluate_expression};
+use crate::evaluator::{evaluate, evaluate_expression, EvalContext, ThisContext};
 use crate::parser::{parse, try_parse};
-use crate::value::{BasesValue, compare};
-use crate::vault::Vault;
+use crate::value::{compare, BasesValue};
 use crate::vault::source::BASE_EXT;
+use crate::vault::Vault;
 
-use super::parse::{BaseFile, BaseView, Direction, FilterNode, SortEntry, select_view};
+use super::parse::{select_view, BaseFile, BaseView, Direction, FilterNode, SortEntry};
 
 /// One note that matched, with everything the pipeline computed for it.
 #[derive(Debug, Clone, PartialEq)]
@@ -120,7 +120,11 @@ pub fn query_base(
                 continue;
             }
         }
-        rows.push(ResolvedRow { path: note_path, formula: ctx.formula, values: BTreeMap::new() });
+        rows.push(ResolvedRow {
+            path: note_path,
+            formula: ctx.formula,
+            values: BTreeMap::new(),
+        });
     }
 
     let total = rows.len();
@@ -145,7 +149,10 @@ pub fn query_base(
 
     // Limit is a TOTAL across all groups, matching the UI, so groups are trimmed in
     // order until the budget runs out rather than each getting the full limit.
-    let budget = view.limit.filter(|limit| *limit >= 0.0).map(|limit| limit as usize);
+    let budget = view
+        .limit
+        .filter(|limit| *limit >= 0.0)
+        .map(|limit| limit as usize);
     let (rows, groups) = apply_limit(rows, groups, budget);
 
     Ok(QueryResult {
@@ -171,18 +178,19 @@ pub fn query_base(
 /// a note, and each way of failing to is named for what it actually is: a
 /// `.base` and a folder both EXIST in the vault, so reporting either as missing
 /// sends the agent hunting for a typo in a file it can already see.
-pub fn resolve_host_note(
-    vault: &Rc<Vault>,
-    context: Option<&str>,
-) -> Result<Option<ThisContext>> {
-    let Some(context) = context else { return Ok(None) };
+pub fn resolve_host_note(vault: &Rc<Vault>, context: Option<&str>) -> Result<Option<ThisContext>> {
+    let Some(context) = context else {
+        return Ok(None);
+    };
     if context.trim().is_empty() {
         return Err(bad_context(context, "is empty"));
     }
 
     // `resolve` indexes notes only, so a value that lands here resolved to
     // nothing: it is a path, but not to a note.
-    let resolved = vault.resolve(context).filter(|path| vault.note(path).is_some());
+    let resolved = vault
+        .resolve(context)
+        .filter(|path| vault.note(path).is_some());
     let Some(resolved) = resolved else {
         return Err(bad_context(context, &describe_non_note(vault, context)));
     };
@@ -257,18 +265,24 @@ fn compile_filter(
 ) -> Result<Option<CompiledFilter>> {
     let Some(node) = node else { return Ok(None) };
     Ok(Some(match node {
-        FilterNode::Expression(source) => CompiledFilter::Expression(
-            parse(source).map_err(|error| {
+        FilterNode::Expression(source) => {
+            CompiledFilter::Expression(parse(source).map_err(|error| {
                 BasesError::new(format!(
                     "Filter at {where_} failed to parse: {}",
                     error.display_message()
                 ))
                 .with_note(base_path)
-            })?,
-        ),
-        FilterNode::And(children) => CompiledFilter::And(compile_children(children, where_, base_path)?),
-        FilterNode::Or(children) => CompiledFilter::Or(compile_children(children, where_, base_path)?),
-        FilterNode::Not(children) => CompiledFilter::Not(compile_children(children, where_, base_path)?),
+            })?)
+        }
+        FilterNode::And(children) => {
+            CompiledFilter::And(compile_children(children, where_, base_path)?)
+        }
+        FilterNode::Or(children) => {
+            CompiledFilter::Or(compile_children(children, where_, base_path)?)
+        }
+        FilterNode::Not(children) => {
+            CompiledFilter::Not(compile_children(children, where_, base_path)?)
+        }
     }))
 }
 
@@ -412,7 +426,12 @@ fn collect_properties(base: &BaseFile, view: &BaseView) -> BTreeSet<String> {
         needed.insert(canonical(&group.property));
     }
     needed.extend(view.summaries.iter().flatten().map(|(id, _)| canonical(id)));
-    needed.extend(view.sort.iter().flatten().map(|entry| canonical(&entry.property)));
+    needed.extend(
+        view.sort
+            .iter()
+            .flatten()
+            .map(|entry| canonical(&entry.property)),
+    );
     needed.insert("file.name".to_string());
     needed.insert("file.path".to_string());
     needed
@@ -474,7 +493,12 @@ fn sort_spec(view: &BaseView) -> Vec<SortEntry> {
     view.sort
         .clone()
         .filter(|entries| !entries.is_empty())
-        .unwrap_or_else(|| vec![SortEntry { property: "file.name".to_string(), direction: Direction::Asc }])
+        .unwrap_or_else(|| {
+            vec![SortEntry {
+                property: "file.name".to_string(),
+                direction: Direction::Asc,
+            }]
+        })
 }
 
 fn sort_rows(rows: &mut [ResolvedRow], sort: &[SortEntry]) {
@@ -508,7 +532,9 @@ fn group_rows(rows: &[ResolvedRow], property: &str, direction: Direction) -> Vec
     // order is therefore irrelevant: the sort is total over distinct keys.
     let mut map: BTreeMap<String, Vec<ResolvedRow>> = BTreeMap::new();
     for row in rows {
-        map.entry(group_key(row.values.get(&id))).or_default().push(row.clone());
+        map.entry(group_key(row.values.get(&id)))
+            .or_default()
+            .push(row.clone());
     }
     let mut groups: Vec<QueryGroup> = map
         .into_iter()
@@ -530,22 +556,27 @@ fn group_rows(rows: &[ResolvedRow], property: &str, direction: Direction) -> Vec
 /// land on the same key: they are both "this row has no value here", and putting
 /// them in different groups would show one bucket with a header and one without.
 fn group_key(value: Option<&BasesValue>) -> String {
-    let Some(value) = value else { return "(empty)".to_string() };
+    let Some(value) = value else {
+        return "(empty)".to_string();
+    };
     match value {
         BasesValue::Null => "(empty)".to_string(),
         BasesValue::String(text) if text.is_empty() => "(empty)".to_string(),
         BasesValue::List(items) if items.is_empty() => "(empty)".to_string(),
         BasesValue::List(items) => {
-            let mut keys = items.iter().map(|item| group_key(Some(item))).collect::<Vec<_>>();
+            let mut keys = items
+                .iter()
+                .map(|item| group_key(Some(item)))
+                .collect::<Vec<_>>();
             keys.sort();
             keys.join(", ")
         }
         // A link groups by where it points, so two spellings of one target share a
         // group. Falling back to the written target when unresolved keeps the row
         // somewhere rather than dropping it into "(empty)".
-        BasesValue::Link { target, resolved, .. } => {
-            resolved.clone().unwrap_or_else(|| target.clone())
-        }
+        BasesValue::Link {
+            target, resolved, ..
+        } => resolved.clone().unwrap_or_else(|| target.clone()),
         // A namespace has no label of its own, so it renders as its content. The
         // TypeScript original stringified it as `[object Object]`, which is a
         // property of `Object.prototype.toString` rather than a decision; the same
@@ -568,7 +599,9 @@ fn apply_limit(
     groups: Option<Vec<QueryGroup>>,
     budget: Option<usize>,
 ) -> (Vec<ResolvedRow>, Option<Vec<QueryGroup>>) {
-    let Some(budget) = budget else { return (rows, groups) };
+    let Some(budget) = budget else {
+        return (rows, groups);
+    };
     let Some(groups) = groups else {
         return (rows.into_iter().take(budget).collect(), None);
     };
@@ -579,13 +612,18 @@ fn apply_limit(
         if used >= budget {
             break;
         }
-        let kept_rows: Vec<ResolvedRow> =
-            group.rows.into_iter().take(budget - used).collect();
+        let kept_rows: Vec<ResolvedRow> = group.rows.into_iter().take(budget - used).collect();
         used += kept_rows.len();
         if !kept_rows.is_empty() {
-            kept.push(QueryGroup { key: group.key, rows: kept_rows });
+            kept.push(QueryGroup {
+                key: group.key,
+                rows: kept_rows,
+            });
         }
     }
-    let flattened = kept.iter().flat_map(|group| group.rows.iter().cloned()).collect();
+    let flattened = kept
+        .iter()
+        .flat_map(|group| group.rows.iter().cloned())
+        .collect();
     (flattened, Some(kept))
 }

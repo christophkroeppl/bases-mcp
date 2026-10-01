@@ -47,17 +47,17 @@ use std::os::unix::fs::PermissionsExt;
 use std::rc::Rc;
 
 use bases_mcp::error::BasesError;
-use bases_mcp::vault::{
-    FileStat, FsVaultSource, PathIndex, SourceKind, Vault, VaultSource, coerce_frontmatter,
-    content_hash, fold_key, is_indexable, match_path, points_at,
-};
 use bases_mcp::value::BasesValue;
+use bases_mcp::vault::{
+    coerce_frontmatter, content_hash, fold_key, is_indexable, match_path, points_at, FileStat,
+    FsVaultSource, PathIndex, SourceKind, Vault, VaultSource,
+};
 use common::memory::{
-    ANY_PATH, MemoryFault, MemoryOp, MemoryVaultSource, MEMORY_MTIME_MS, SharedSource,
+    MemoryFault, MemoryOp, MemoryVaultSource, SharedSource, ANY_PATH, MEMORY_MTIME_MS,
 };
 use common::{
-    CORPUS_SIZE, VaultFile, count_files, dotfile_tree, futures_block_on, load_corpus, seed_dir,
-    vault_dir,
+    count_files, dotfile_tree, futures_block_on, load_corpus, seed_dir, vault_dir, VaultFile,
+    CORPUS_SIZE,
 };
 use tempfile::TempDir;
 
@@ -143,10 +143,16 @@ fn the_corpus_is_the_testing_vault_and_the_testing_vault_is_untouched() {
 #[test]
 fn the_corpus_holds_both_bases_and_seven_notes() {
     let corpus = load_corpus();
-    let bases: Vec<&str> =
-        corpus.iter().filter(|f| f.path.ends_with(".base")).map(|f| f.path.as_str()).collect();
-    let notes: Vec<&str> =
-        corpus.iter().filter(|f| f.path.ends_with(".md")).map(|f| f.path.as_str()).collect();
+    let bases: Vec<&str> = corpus
+        .iter()
+        .filter(|f| f.path.ends_with(".base"))
+        .map(|f| f.path.as_str())
+        .collect();
+    let notes: Vec<&str> = corpus
+        .iter()
+        .filter(|f| f.path.ends_with(".md"))
+        .map(|f| f.path.as_str())
+        .collect();
     assert_eq!(bases, ["AllNotes.base", "Tickets.base"]);
     assert_eq!(notes.len(), 7);
     assert!(notes.contains(&"Root Project.md"));
@@ -202,8 +208,11 @@ fn list_filters_dotfiles_dot_directories_and_other_extensions_exactly_as_fs_does
     // pass by agreeing with a wrong rule that two implementations happen to
     // share.
     let tree = dotfile_tree();
-    let expected: Vec<String> =
-        tree.iter().map(|f| f.path.clone()).filter(|p| is_indexable(p)).collect();
+    let expected: Vec<String> = tree
+        .iter()
+        .map(|f| f.path.clone())
+        .filter(|p| is_indexable(p))
+        .collect();
     assert_eq!(
         expected,
         [
@@ -217,7 +226,10 @@ fn list_filters_dotfiles_dot_directories_and_other_extensions_exactly_as_fs_does
     let dir = TempDir::new().expect("a temp dir is created");
     seed_dir(dir.path(), &tree);
     assert_eq!(list_of(&MemoryVaultSource::new(tree.clone())), expected);
-    assert_eq!(list_of(&FsVaultSource::new(dir.path()).expect("a sandbox is a directory")), expected);
+    assert_eq!(
+        list_of(&FsVaultSource::new(dir.path()).expect("a sandbox is a directory")),
+        expected
+    );
 }
 
 /// The filesystem's `list` swallows a directory it cannot read and returns a
@@ -230,14 +242,25 @@ fn list_filters_dotfiles_dot_directories_and_other_extensions_exactly_as_fs_does
 fn an_unreadable_directory_yields_a_partial_vault_from_both_backends() {
     let dir = TempDir::new().expect("a temp dir is created");
     let all = vec![
-        VaultFile { path: "Readable/Note.md".into(), content: "# reachable\n".into() },
-        VaultFile { path: "Top.md".into(), content: "# top\n".into() },
-        VaultFile { path: "Locked/Secret.md".into(), content: "# secret\n".into() },
+        VaultFile {
+            path: "Readable/Note.md".into(),
+            content: "# reachable\n".into(),
+        },
+        VaultFile {
+            path: "Top.md".into(),
+            content: "# top\n".into(),
+        },
+        VaultFile {
+            path: "Locked/Secret.md".into(),
+            content: "# secret\n".into(),
+        },
     ];
     seed_dir(dir.path(), &all);
 
     let locked = dir.path().join("Locked");
-    let original = std::fs::metadata(&locked).expect("the sandbox is readable").permissions();
+    let original = std::fs::metadata(&locked)
+        .expect("the sandbox is readable")
+        .permissions();
     // `set_readonly` would only clear the write bit, and a directory with read
     // and execute left on is still fully readable -- so the mode is set to zero.
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
@@ -259,8 +282,10 @@ fn an_unreadable_directory_yields_a_partial_vault_from_both_backends() {
     // here is that the subset fs could reach is a vault the fake reproduces
     // exactly, so a caller handed the partial vault sees the same thing from
     // either backend.
-    let reachable: Vec<VaultFile> =
-        all.into_iter().filter(|f| from_fs.contains(&f.path)).collect();
+    let reachable: Vec<VaultFile> = all
+        .into_iter()
+        .filter(|f| from_fs.contains(&f.path))
+        .collect();
     assert_eq!(list_of(&MemoryVaultSource::new(reachable)), from_fs);
 }
 
@@ -274,7 +299,12 @@ fn hash_agrees_on_every_corpus_file() {
     let fs = fs_source();
     let memory = memory_source(&corpus);
     for file in &corpus {
-        assert_eq!(hash_of(&memory, &file.path), hash_of(&fs, &file.path), "{}", file.path);
+        assert_eq!(
+            hash_of(&memory, &file.path),
+            hash_of(&fs, &file.path),
+            "{}",
+            file.path
+        );
     }
 }
 
@@ -285,7 +315,8 @@ fn hash_is_a_32_character_hex_digest_so_a_truncation_change_cannot_pass_quietly(
         let hash = hash_of(&memory, &file.path);
         assert_eq!(hash.len(), 32, "{}", file.path);
         assert!(
-            hash.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            hash.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
             "{hash}"
         );
     }
@@ -295,8 +326,11 @@ fn hash_is_a_32_character_hex_digest_so_a_truncation_change_cannot_pass_quietly(
 fn hash_changes_when_the_content_changes_and_comes_back_afterwards() {
     let corpus = load_corpus();
     let memory = memory_source(&corpus);
-    let original =
-        corpus.iter().find(|f| f.path == "Root Ticket.md").map(|f| f.content.clone()).unwrap();
+    let original = corpus
+        .iter()
+        .find(|f| f.path == "Root Ticket.md")
+        .map(|f| f.content.clone())
+        .unwrap();
     let before = hash_of(&memory, "Root Ticket.md");
 
     write_of(&memory, "Root Ticket.md", "# different\n");
@@ -318,7 +352,12 @@ fn stat_reports_the_identical_byte_size_for_every_corpus_file() {
     let fs = fs_source();
     let memory = memory_source(&corpus);
     for file in &corpus {
-        assert_eq!(stat_of(&memory, &file.path).size, stat_of(&fs, &file.path).size, "{}", file.path);
+        assert_eq!(
+            stat_of(&memory, &file.path).size,
+            stat_of(&fs, &file.path).size,
+            "{}",
+            file.path
+        );
     }
 }
 
@@ -328,15 +367,25 @@ fn stat_counts_bytes_not_utf16_code_units() {
     // disagree with the file on disk.
     let corpus = load_corpus();
     let path = "Projects/SomeProject.md";
-    let content =
-        corpus.iter().find(|f| f.path == path).map(|f| f.content.clone()).unwrap_or_default();
-    assert!(content.contains('ö'), "the corpus is expected to carry non-ASCII frontmatter");
+    let content = corpus
+        .iter()
+        .find(|f| f.path == path)
+        .map(|f| f.content.clone())
+        .unwrap_or_default();
+    assert!(
+        content.contains('ö'),
+        "the corpus is expected to carry non-ASCII frontmatter"
+    );
 
     let fs = fs_source();
     let memory = memory_source(&corpus);
     let size = stat_of(&memory, path).size;
     assert_eq!(size, stat_of(&fs, path).size);
-    assert!(size > content.chars().count() as u64, "{size} vs {}", content.chars().count());
+    assert!(
+        size > content.chars().count() as u64,
+        "{size} vs {}",
+        content.chars().count()
+    );
 }
 
 #[test]
@@ -344,8 +393,16 @@ fn stat_mtime_is_the_fixed_instant_never_the_wall_clock() {
     // The one field the two backends cannot agree on, asserted as a fact rather
     // than assumed. The file header says why the corpus stays clear of it.
     let memory = memory_source(&load_corpus());
-    assert_eq!(stat_of(&memory, "Root Ticket.md").mtime.timestamp_millis(), MEMORY_MTIME_MS);
-    assert_ne!(stat_of(&fs_source(), "Root Ticket.md").mtime.timestamp_millis(), MEMORY_MTIME_MS);
+    assert_eq!(
+        stat_of(&memory, "Root Ticket.md").mtime.timestamp_millis(),
+        MEMORY_MTIME_MS
+    );
+    assert_ne!(
+        stat_of(&fs_source(), "Root Ticket.md")
+            .mtime
+            .timestamp_millis(),
+        MEMORY_MTIME_MS
+    );
 }
 
 #[test]
@@ -370,7 +427,10 @@ fn read_text_resolves_a_redundant_path_to_the_same_note_on_both_backends() {
     let corpus = load_corpus();
     let fs = fs_source();
     let memory = memory_source(&corpus);
-    for path in ["Tickets/../Root Ticket.md", "./Tickets/Fix login redirect.md"] {
+    for path in [
+        "Tickets/../Root Ticket.md",
+        "./Tickets/Fix login redirect.md",
+    ] {
         assert_eq!(read_of(&memory, path), read_of(&fs, path), "{path}");
     }
 }
@@ -383,8 +443,14 @@ fn read_text_refuses_a_path_that_escapes_the_vault_root_on_both_backends() {
     for escapee in ["../outside.md", "/etc/passwd", "Tickets/../../outside.md"] {
         let from_fs = failure_of(fs.read_text(escapee));
         let from_memory = failure_of(memory.read_text(escapee));
-        assert!(from_fs.message().contains("escapes the vault root"), "{from_fs}");
-        assert!(from_memory.message().contains("escapes the vault root"), "{from_memory}");
+        assert!(
+            from_fs.message().contains("escapes the vault root"),
+            "{from_fs}"
+        );
+        assert!(
+            from_memory.message().contains("escapes the vault root"),
+            "{from_memory}"
+        );
         // The fake carries the status as a field, not only as prose: a real
         // backend deciding whether to retry needs it structurally, and a test
         // that matched on strings would let one through.
@@ -475,7 +541,10 @@ fn overwriting_is_silent_and_the_two_vaults_stay_identical() {
 
     assert_eq!(read_of(&memory, "Note.md"), read_of(&fs, "Note.md"));
     assert_eq!(hash_of(&memory, "Note.md"), hash_of(&fs, "Note.md"));
-    assert_eq!(stat_of(&memory, "Note.md").size, stat_of(&fs, "Note.md").size);
+    assert_eq!(
+        stat_of(&memory, "Note.md").size,
+        stat_of(&fs, "Note.md").size
+    );
     assert_eq!(list_of(&memory), list_of(&fs));
 }
 
@@ -539,8 +608,12 @@ fn match_path_accepts_every_spelling_obsidian_accepts() {
         register(&mut index, path);
     }
 
-    for target in ["SomeProject", "SomeProject.md", "Projects/SomeProject", "Projects/SomeProject.md"]
-    {
+    for target in [
+        "SomeProject",
+        "SomeProject.md",
+        "Projects/SomeProject",
+        "Projects/SomeProject.md",
+    ] {
         assert_eq!(
             match_path(target, &index).as_deref(),
             Some("Projects/SomeProject.md"),
@@ -557,7 +630,10 @@ fn match_path_folds_case_and_diacritics_when_no_exact_spelling_matches() {
     register(&mut index, "Geschäftsidee.md");
     // No registered key is spelled this way, so this reaches the folded
     // comparison rather than the exact one.
-    assert_eq!(match_path("GESCHAFTSIDEE", &index).as_deref(), Some("Geschäftsidee.md"));
+    assert_eq!(
+        match_path("GESCHAFTSIDEE", &index).as_deref(),
+        Some("Geschäftsidee.md")
+    );
 }
 
 /// Two notes with the same basename: which one a bare `[[Name]]` reaches.
@@ -576,7 +652,10 @@ fn an_exact_ambiguous_name_takes_the_first_registration_in_sorted_path_order() {
     for path in ["Projects/Root Project.md", "Root Project.md"] {
         register(&mut index, path);
     }
-    assert_eq!(match_path("Root Project", &index).as_deref(), Some("Projects/Root Project.md"));
+    assert_eq!(
+        match_path("Root Project", &index).as_deref(),
+        Some("Projects/Root Project.md")
+    );
     assert_eq!(index.get("Root Project"), Some("Projects/Root Project.md"));
     // The shorter path is still reachable by its own full spelling: it loses the
     // ambiguous name, it does not stop existing.
@@ -584,7 +663,10 @@ fn an_exact_ambiguous_name_takes_the_first_registration_in_sorted_path_order() {
         match_path("Root Project.md", &index).as_deref(),
         Some("Projects/Root Project.md")
     );
-    assert_eq!(match_path("Root Project.md/../Root Project.md", &index), None);
+    assert_eq!(
+        match_path("Root Project.md/../Root Project.md", &index),
+        None
+    );
 }
 
 #[test]
@@ -600,10 +682,19 @@ fn a_folded_ambiguous_name_takes_the_shortest_path() {
     // Both fold to `cafe`, so the spelling below is ambiguous -- but each path has
     // its own exact keys, so this one has to miss every exact key and reach the
     // folded comparison.
-    assert_eq!(match_path("CAFE", &index).as_deref(), Some("Archive/ZZ/Café.md"));
+    assert_eq!(
+        match_path("CAFE", &index).as_deref(),
+        Some("Archive/ZZ/Café.md")
+    );
     // Each path is still reachable by the exact spelling that names it.
-    assert_eq!(match_path("Archive/AAA/Cafe", &index).as_deref(), Some("Archive/AAA/Cafe.md"));
-    assert_eq!(match_path("Archive/ZZ/Café", &index).as_deref(), Some("Archive/ZZ/Café.md"));
+    assert_eq!(
+        match_path("Archive/AAA/Cafe", &index).as_deref(),
+        Some("Archive/AAA/Cafe.md")
+    );
+    assert_eq!(
+        match_path("Archive/ZZ/Café", &index).as_deref(),
+        Some("Archive/ZZ/Café.md")
+    );
 }
 
 /// The length the tie-break compares is UTF-16 code units, as the original's
@@ -619,7 +710,10 @@ fn candidates_of_equal_character_count_are_a_tie_not_a_ranking() {
         register(&mut index, path);
     }
     // First registration wins the tie, which is the path that is LONGER on disk.
-    assert_eq!(match_path("CAFE", &index).as_deref(), Some("Archive/AAA/Café.md"));
+    assert_eq!(
+        match_path("CAFE", &index).as_deref(),
+        Some("Archive/AAA/Café.md")
+    );
 }
 
 #[test]
@@ -642,11 +736,16 @@ fn a_write_that_lands_different_bytes_than_requested() {
     let requested = "# requested\n";
     let swapped = "# swapped by the server\n";
     let source = memory_source(&load_corpus());
-    source.inject(MemoryFault::storing("Root Ticket.md", swapped)).expect("the fault is well formed");
+    source
+        .inject(MemoryFault::storing("Root Ticket.md", swapped))
+        .expect("the fault is well formed");
 
     write_of(&source, "Root Ticket.md", requested);
 
-    assert_eq!(read_of(&source, "Root Ticket.md").expect("the fake holds it"), swapped);
+    assert_eq!(
+        read_of(&source, "Root Ticket.md").expect("the fake holds it"),
+        swapped
+    );
     assert_ne!(hash_of(&source, "Root Ticket.md"), content_hash(requested));
     assert_eq!(hash_of(&source, "Root Ticket.md"), content_hash(swapped));
 }
@@ -654,7 +753,9 @@ fn a_write_that_lands_different_bytes_than_requested() {
 #[test]
 fn a_simulated_500_surfaces_as_a_structured_refusal() {
     let source = memory_source(&load_corpus());
-    source.inject(MemoryFault::on("Tickets.base", MemoryOp::Read, 500)).expect("the fault is well formed");
+    source
+        .inject(MemoryFault::on("Tickets.base", MemoryOp::Read, 500))
+        .expect("the fault is well formed");
     let error = failure_of(source.read_text("Tickets.base"));
     assert_eq!(source.last_status(), Some(500));
     assert!(error.message().contains("500"), "{error}");
@@ -669,25 +770,35 @@ fn a_fault_fires_only_as_many_times_as_it_is_given() {
         .expect("the fault is well formed");
     let error = failure_of(source.read_text("Root Ticket.md"));
     assert!(error.message().contains("503"), "{error}");
-    assert!(read_of(&source, "Root Ticket.md").expect("the fault is spent").contains("Root ticket"));
+    assert!(read_of(&source, "Root Ticket.md")
+        .expect("the fault is spent")
+        .contains("Root ticket"));
 }
 
 #[test]
 fn a_fault_on_one_path_leaves_the_rest_of_the_vault_readable() {
     let source = memory_source(&load_corpus());
-    source.inject(MemoryFault::on("Tickets.base", MemoryOp::Read, 500)).expect("the fault is well formed");
+    source
+        .inject(MemoryFault::on("Tickets.base", MemoryOp::Read, 500))
+        .expect("the fault is well formed");
     assert!(read_of(&source, "Tickets.base").is_err());
     assert_eq!(list_of(&source).len(), CORPUS_SIZE);
-    assert!(read_of(&source, "Root Project.md").expect("an unrelated path is fine").contains("business-idea"));
+    assert!(read_of(&source, "Root Project.md")
+        .expect("an unrelated path is fine")
+        .contains("business-idea"));
 }
 
 #[test]
 fn clear_faults_disarms_so_one_test_cannot_inherit_anothers_fault() {
     let source = memory_source(&load_corpus());
-    source.inject(MemoryFault::on("Root Ticket.md", MemoryOp::Read, 500)).expect("the fault is well formed");
+    source
+        .inject(MemoryFault::on("Root Ticket.md", MemoryOp::Read, 500))
+        .expect("the fault is well formed");
     assert!(read_of(&source, "Root Ticket.md").is_err());
     source.clear_faults();
-    assert!(read_of(&source, "Root Ticket.md").expect("disarmed").contains("Root ticket"));
+    assert!(read_of(&source, "Root Ticket.md")
+        .expect("disarmed")
+        .contains("Root ticket"));
 }
 
 /// A source that cannot list reports the failure rather than an empty vault. The
@@ -697,7 +808,9 @@ fn clear_faults_disarms_so_one_test_cannot_inherit_anothers_fault() {
 #[test]
 fn a_source_whose_list_fails_reports_the_failure_rather_than_an_empty_vault() {
     let source = memory_source(&load_corpus());
-    source.inject(MemoryFault::refusing(ANY_PATH, 500)).expect("the fault is well formed");
+    source
+        .inject(MemoryFault::refusing(ANY_PATH, 500))
+        .expect("the fault is well formed");
     let error = failure_of(source.list());
     assert_eq!(source.last_status(), Some(500));
     assert!(error.message().contains("500"), "{error}");
@@ -718,7 +831,10 @@ fn the_memory_source_presents_the_same_async_api_behind_a_trait_object() {
 
     assert_eq!(source.kind(), SourceKind::Webdav);
     assert_eq!(list_of(source.as_ref()), list_of(shared.as_ref()));
-    assert_eq!(hash_of(source.as_ref(), "Root Ticket.md"), hash_of(&fs_source(), "Root Ticket.md"));
+    assert_eq!(
+        hash_of(source.as_ref(), "Root Ticket.md"),
+        hash_of(&fs_source(), "Root Ticket.md")
+    );
     let expected = load_corpus()
         .iter()
         .find(|f| f.path == "Root Ticket.md")
@@ -752,7 +868,9 @@ fn strip_extension(path: &str) -> String {
 
 /// A loaded index over the oracle vault.
 fn loaded() -> Rc<Vault> {
-    let vault = Rc::new(Vault::new(Box::new(FsVaultSource::new(vault_dir()).expect("the oracle is a directory"))));
+    let vault = Rc::new(Vault::new(Box::new(
+        FsVaultSource::new(vault_dir()).expect("the oracle is a directory"),
+    )));
     run(vault.load()).expect("the oracle vault loads");
     vault
 }
@@ -792,8 +910,14 @@ fn a_bare_alias_does_not_resolve() {
     // `aliases` feeds the link SUGGESTER, which emits `[[Real Name|Alias]]`. A
     // bare `[[Alias]]` does not resolve in Obsidian, and neither does it here.
     let vault = loaded();
-    assert_eq!(vault.resolve("Root Project").as_deref(), Some("Root Project.md"));
-    assert_eq!(vault.resolve("SomeProject").as_deref(), Some("Projects/SomeProject.md"));
+    assert_eq!(
+        vault.resolve("Root Project").as_deref(),
+        Some("Root Project.md")
+    );
+    assert_eq!(
+        vault.resolve("SomeProject").as_deref(),
+        Some("Projects/SomeProject.md")
+    );
     assert_eq!(vault.resolve(""), None);
     assert_eq!(vault.resolve("Nowhere"), None);
     assert_eq!(vault.resolve("Ticket"), None, "a prefix is not a link");
@@ -832,7 +956,10 @@ fn a_link_target_that_carries_an_extension_or_a_folder_prefix_is_not_ambiguous()
     }
     // Both backends see the same seven notes, so a `file.links` that differed
     // would have to come from the links, not the paths.
-    assert_eq!(run(fs.list()).expect("list").len(), run(memory.list()).expect("list").len());
+    assert_eq!(
+        run(fs.list()).expect("list").len(),
+        run(memory.list()).expect("list").len()
+    );
 }
 
 #[test]
@@ -868,7 +995,9 @@ fn file_links_skip_embeds_so_a_base_region_never_links_its_own_host_note() {
     assert_eq!(embeds[0].link_target(), Some("Tickets.base"));
     let links = vault.links_for("Root Project.md");
     assert!(
-        !links.iter().any(|link| link.link_target() == Some("Tickets.base")),
+        !links
+            .iter()
+            .any(|link| link.link_target() == Some("Tickets.base")),
         "the embed leaked into file.links: {links:?}"
     );
 }
@@ -886,9 +1015,17 @@ fn file_links_skip_embeds_so_a_base_region_never_links_its_own_host_note() {
 fn file_links_keeps_every_distinct_link() {
     let vault = loaded();
     let links = vault.links_for("Root Project.md");
-    let targets: Vec<Option<String>> =
-        links.iter().map(|link| link.link_target().map(str::to_string)).collect();
-    assert_eq!(targets, [Some("Geschäftsidee".to_string()), Some("Projects".to_string())]);
+    let targets: Vec<Option<String>> = links
+        .iter()
+        .map(|link| link.link_target().map(str::to_string))
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            Some("Geschäftsidee".to_string()),
+            Some("Projects".to_string())
+        ]
+    );
 
     // A repeated link is still one link: `dedupe` is what the original reached
     // for, and the fix is to key it on the link's own text rather than to drop it.
@@ -914,7 +1051,11 @@ fn file_links_includes_a_body_link_and_a_frontmatter_link_without_duplicating_th
     let vault = loaded();
     let links = vault.links_for("Root Ticket.md");
     assert_eq!(links.len(), 1);
-    assert!(matches!(links[0], BasesValue::Link { .. }), "{:?}", links[0]);
+    assert!(
+        matches!(links[0], BasesValue::Link { .. }),
+        "{:?}",
+        links[0]
+    );
     assert_eq!(links[0].link_target(), Some("Root Project.md"));
 }
 
@@ -936,9 +1077,9 @@ fn file_backlinks_are_the_notes_that_link_here_in_both_directions() {
         ]
     );
     // A host note is not its own backlink, even though it embeds a base.
-    assert!(
-        !vault.backlinks_for("Root Project.md").contains(&BasesValue::String("Root Project.md".to_string()))
-    );
+    assert!(!vault
+        .backlinks_for("Root Project.md")
+        .contains(&BasesValue::String("Root Project.md".to_string())));
 }
 
 #[test]
@@ -953,7 +1094,11 @@ fn file_tasks_are_the_documented_extension_with_the_clis_shape() {
 
     let done = vault.tasks_for("Tickets/Invoice export.md");
     assert_eq!(done.len(), 1);
-    assert!(done[0].to_display_string().contains("completed: true"), "{:?}", done[0]);
+    assert!(
+        done[0].to_display_string().contains("completed: true"),
+        "{:?}",
+        done[0]
+    );
 }
 
 #[test]
@@ -962,8 +1107,14 @@ fn a_root_note_reports_the_vault_root_as_a_slash_and_a_nested_one_does_not() {
     // note emits `"folder": "/"` and a nested one emits `"folder": "Projects"`.
     let vault = loaded();
     assert_eq!(vault.file_value("Root Ticket.md").folder, "/");
-    assert_eq!(vault.file_value("Projects/SomeProject.md").folder, "Projects");
-    assert_eq!(vault.file_value("Tickets/Fix login redirect.md").folder, "Tickets");
+    assert_eq!(
+        vault.file_value("Projects/SomeProject.md").folder,
+        "Projects"
+    );
+    assert_eq!(
+        vault.file_value("Tickets/Fix login redirect.md").folder,
+        "Tickets"
+    );
 }
 
 #[test]
@@ -975,7 +1126,12 @@ fn file_ctime_and_file_mtime_read_the_same_instant() {
     let ctime = (file.accessors.ctime)();
     let mtime = (file.accessors.mtime)();
     assert_eq!(ctime, mtime);
-    assert_eq!(ctime.millis(), stat_of(&fs_source(), "Root Ticket.md").mtime.timestamp_millis());
+    assert_eq!(
+        ctime.millis(),
+        stat_of(&fs_source(), "Root Ticket.md")
+            .mtime
+            .timestamp_millis()
+    );
     // And it is the real clock on fs, not the fake's fixed instant: the value the
     // equivalence suite refuses to compare across backends.
     assert_ne!(ctime.millis(), MEMORY_MTIME_MS);
@@ -988,7 +1144,10 @@ fn file_size_is_bytes_and_file_name_and_basename_split_on_the_extension() {
     assert_eq!(file.name, "Fix login redirect.md");
     assert_eq!(file.basename, "Fix login redirect");
     assert_eq!(file.ext, "md");
-    assert_eq!((file.accessors.size)(), stat_of(&fs_source(), "Tickets/Fix login redirect.md").size);
+    assert_eq!(
+        (file.accessors.size)(),
+        stat_of(&fs_source(), "Tickets/Fix login redirect.md").size
+    );
 }
 
 #[test]
@@ -1016,10 +1175,16 @@ fn file_properties_are_the_coerced_frontmatter() {
             resolved: None,
         }]))
     );
-    assert_eq!(properties.get("status"), Some(&BasesValue::String("active".to_string())));
+    assert_eq!(
+        properties.get("status"),
+        Some(&BasesValue::String("active".to_string()))
+    );
     // `file.links` re-resolves the same target at query time, which is why the
     // unresolved property above does not stop link identity from working.
-    assert_eq!(vault.links_for("Root Ticket.md")[0].link_target(), Some("Root Project.md"));
+    assert_eq!(
+        vault.links_for("Root Ticket.md")[0].link_target(),
+        Some("Root Project.md")
+    );
 }
 
 #[test]
@@ -1054,11 +1219,26 @@ fn a_markdown_link_property_becomes_a_link_and_a_url_property_does_not() {
     // not, and coercing it would put a link object in a property that is a URL.
     let vault = loaded();
     let mut data = BTreeMap::new();
-    data.insert("relative".to_string(), BasesValue::String("[Business](Projects/Business)".to_string()));
-    data.insert("absolute".to_string(), BasesValue::String("[Home](https://example.com)".to_string()));
-    data.insert("anchor".to_string(), BasesValue::String("[Top](#top)".to_string()));
-    data.insert("plain".to_string(), BasesValue::String("Just text".to_string()));
-    data.insert("nested".to_string(), BasesValue::String("[[Tickets/Fix login redirect|Fix]]".to_string()));
+    data.insert(
+        "relative".to_string(),
+        BasesValue::String("[Business](Projects/Business)".to_string()),
+    );
+    data.insert(
+        "absolute".to_string(),
+        BasesValue::String("[Home](https://example.com)".to_string()),
+    );
+    data.insert(
+        "anchor".to_string(),
+        BasesValue::String("[Top](#top)".to_string()),
+    );
+    data.insert(
+        "plain".to_string(),
+        BasesValue::String("Just text".to_string()),
+    );
+    data.insert(
+        "nested".to_string(),
+        BasesValue::String("[[Tickets/Fix login redirect|Fix]]".to_string()),
+    );
 
     let coerced = coerce_frontmatter(&data, &vault);
     assert_eq!(
@@ -1069,9 +1249,20 @@ fn a_markdown_link_property_becomes_a_link_and_a_url_property_does_not() {
             resolved: None,
         })
     );
-    assert_eq!(coerced.get("absolute"), Some(&BasesValue::String("[Home](https://example.com)".to_string())));
-    assert_eq!(coerced.get("anchor"), Some(&BasesValue::String("[Top](#top)".to_string())));
-    assert_eq!(coerced.get("plain"), Some(&BasesValue::String("Just text".to_string())));
+    assert_eq!(
+        coerced.get("absolute"),
+        Some(&BasesValue::String(
+            "[Home](https://example.com)".to_string()
+        ))
+    );
+    assert_eq!(
+        coerced.get("anchor"),
+        Some(&BasesValue::String("[Top](#top)".to_string()))
+    );
+    assert_eq!(
+        coerced.get("plain"),
+        Some(&BasesValue::String("Just text".to_string()))
+    );
     // Resolved, because the index is already built. Coercion DURING a rebuild
     // happens before the index exists and resolves nothing -- see
     // `file_properties_are_the_coerced_frontmatter` for that half.
@@ -1117,6 +1308,9 @@ fn points_at_refuses_a_name_that_is_only_a_prefix_of_the_path() {
     // The separator is what makes it a path rather than a longer word: `Some` does
     // not name `Projects/SomeProject.md`.
     assert!(!points_at("Some", "Projects/SomeProject.md"));
-    assert!(!points_at("Projects/SomeProject", "Projects/OtherProject.md"));
+    assert!(!points_at(
+        "Projects/SomeProject",
+        "Projects/OtherProject.md"
+    ));
     assert!(!points_at("SomeProjectX", "Projects/SomeProject.md"));
 }

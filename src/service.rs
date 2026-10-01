@@ -19,21 +19,21 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use serde_json::{Map, Value as Json, json};
+use serde_json::{json, Map, Value as Json};
 
 use crate::base::{
-    BaseFile, BaseView, QueryOptions, QueryResult, canonical, parse_base, query_base,
+    canonical, parse_base, query_base, BaseFile, BaseView, QueryOptions, QueryResult,
 };
 use crate::drafts::{AddNoteOptions, AddNoteToBaseResult};
 use crate::error::{BasesError, Result};
 use crate::labels::display_name_for;
 use crate::note::{parse_note_with_embeds, serialise};
-use crate::render::markdown::{RenderStyle, render_markdown};
+use crate::render::markdown::{render_markdown, RenderStyle};
 use crate::render::project::{
-    BaseRegionRef, FenceProvenance, ReconcileResult, RefusedRegion, RenderedRegion, base_regions,
-    project, reconcile_note, wrap_in_fence,
+    base_regions, project, reconcile_note, wrap_in_fence, BaseRegionRef, FenceProvenance,
+    ReconcileResult, RefusedRegion, RenderedRegion,
 };
-use crate::value::{BasesValue, strip_extension};
+use crate::value::{strip_extension, BasesValue};
 use crate::vault::{FsVaultSource, Vault, VaultSource};
 
 /// One `.base` file, with the views it declares.
@@ -86,11 +86,17 @@ impl NoteOptions {
 
     /// Just the stored text.
     pub fn raw() -> Self {
-        Self { raw: true, ..Self::default() }
+        Self {
+            raw: true,
+            ..Self::default()
+        }
     }
 
     fn query(&self) -> QueryOptions {
-        QueryOptions { context: self.context.clone(), view: self.view.clone() }
+        QueryOptions {
+            context: self.context.clone(),
+            view: self.view.clone(),
+        }
     }
 }
 
@@ -136,7 +142,10 @@ impl Resolver {
     pub async fn open(source: Box<dyn VaultSource>) -> Result<Self> {
         let vault = Rc::new(Vault::new(source));
         vault.load().await?;
-        Ok(Self { vault, drafts: crate::drafts::DraftStore::default() })
+        Ok(Self {
+            vault,
+            drafts: crate::drafts::DraftStore::default(),
+        })
     }
 
     /// Index a local vault directory.
@@ -193,7 +202,10 @@ impl Resolver {
                 views: base
                     .views
                     .iter()
-                    .map(|view| ViewSummary { name: view.name.clone(), view_type: view.view_type.clone() })
+                    .map(|view| ViewSummary {
+                        name: view.name.clone(),
+                        view_type: view.view_type.clone(),
+                    })
                     .collect(),
             });
         }
@@ -211,7 +223,12 @@ impl Resolver {
     /// An exact indexed path wins, then link resolution, and then a refusal
     /// naming what was asked for.
     pub fn resolve_base_path(&self, path: &str) -> Result<String> {
-        if let Some(exact) = self.vault.base_paths().into_iter().find(|candidate| candidate == path) {
+        if let Some(exact) = self
+            .vault
+            .base_paths()
+            .into_iter()
+            .find(|candidate| candidate == path)
+        {
             return Ok(exact);
         }
         match self.vault.resolve(path) {
@@ -221,7 +238,13 @@ impl Resolver {
     }
 
     pub async fn view_names(&self, path: &str) -> Result<Vec<String>> {
-        Ok(self.load_base(path).await?.views.into_iter().map(|view| view.name).collect())
+        Ok(self
+            .load_base(path)
+            .await?
+            .views
+            .into_iter()
+            .map(|view| view.name)
+            .collect())
     }
 
     pub async fn query(&self, path: &str, options: &QueryOptions) -> Result<QueryResult> {
@@ -254,7 +277,12 @@ impl Resolver {
         let raw = serialise(&record.parsed.segments);
 
         if options.raw {
-            return Ok(NoteView { path: resolved, raw: raw.clone(), content: raw, regions: Vec::new() });
+            return Ok(NoteView {
+                path: resolved,
+                raw: raw.clone(),
+                content: raw,
+                regions: Vec::new(),
+            });
         }
 
         // Every region is rendered BEFORE the Projection is assembled, because
@@ -268,14 +296,26 @@ impl Resolver {
             let body = self.render_region(&record.path, region, &options).await?;
             rendered.push(wrap_in_fence(&body, &provenance_for(region, &options)));
         }
-        let regions = rendered.iter().map(|region| region.provenance.clone()).collect();
+        let regions = rendered
+            .iter()
+            .map(|region| region.provenance.clone())
+            .collect();
 
         let mut queue = rendered.into_iter();
         let content = project(&record.parsed, |_| {
-            queue.next().expect("one rendered region per Base region").text.clone()
+            queue
+                .next()
+                .expect("one rendered region per Base region")
+                .text
+                .clone()
         });
 
-        Ok(NoteView { path: resolved, raw, content, regions })
+        Ok(NoteView {
+            path: resolved,
+            raw,
+            content,
+            regions,
+        })
     }
 
     /// Render one Base region.
@@ -289,7 +329,10 @@ impl Resolver {
         region: &BaseRegionRef,
         options: &NoteOptions,
     ) -> Result<String> {
-        let host = options.context.clone().unwrap_or_else(|| note_path.to_string());
+        let host = options
+            .context
+            .clone()
+            .unwrap_or_else(|| note_path.to_string());
         let mut query_options = options.query();
         query_options.context = Some(host);
 
@@ -320,7 +363,12 @@ impl Resolver {
 
     /// The vault path of a note, from whatever the caller called it.
     pub fn resolve_note_path(&self, path: &str) -> Result<String> {
-        if let Some(exact) = self.vault.note_paths().into_iter().find(|candidate| candidate == path) {
+        if let Some(exact) = self
+            .vault
+            .note_paths()
+            .into_iter()
+            .find(|candidate| candidate == path)
+        {
             return Ok(exact);
         }
         match self.vault.resolve(path) {
@@ -437,7 +485,8 @@ pub fn json_rows(base: &BaseFile, result: &QueryResult, extra_formulas: &[String
                 let canonical_id = canonical(id);
                 out.insert(
                     display_name_for(base, &canonical_id),
-                    stringified(cell(&row.values, &canonical_id, id)).map_or(Json::Null, Json::String),
+                    stringified(cell(&row.values, &canonical_id, id))
+                        .map_or(Json::Null, Json::String),
                 );
             }
             // A formula the view does not order is the one thing an agent cannot
@@ -499,7 +548,11 @@ pub fn stringified(value: Option<&BasesValue>) -> Option<String> {
     match value? {
         BasesValue::Null => None,
         BasesValue::List(items) => Some(
-            items.iter().map(|item| stringified(Some(item)).unwrap_or_default()).collect::<Vec<_>>().join(", "),
+            items
+                .iter()
+                .map(|item| stringified(Some(item)).unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join(", "),
         ),
         // A namespace is a record, and a record has no display form of its own.
         // It is JSON, which is what the TypeScript original emitted — see the
@@ -518,8 +571,9 @@ pub fn stringified(value: Option<&BasesValue>) -> Option<String> {
 /// comparable with the original rather than merely plausible.
 fn json_text(value: &BasesValue) -> String {
     match value {
-        BasesValue::Namespace(_) => serde_json::to_string(&to_json_value(value))
-            .unwrap_or_else(|_| String::from("{}")),
+        BasesValue::Namespace(_) => {
+            serde_json::to_string(&to_json_value(value)).unwrap_or_else(|_| String::from("{}"))
+        }
         other => other.to_display_string(),
     }
 }
@@ -533,12 +587,21 @@ pub fn to_json_value(value: &BasesValue) -> Json {
         BasesValue::String(text) => Json::String(text.clone()),
         BasesValue::List(items) => Json::Array(items.iter().map(to_json_value).collect()),
         BasesValue::Namespace(map) => Json::Object(
-            map.iter().map(|(key, item)| (key.clone(), to_json_value(item))).collect(),
+            map.iter()
+                .map(|(key, item)| (key.clone(), to_json_value(item)))
+                .collect(),
         ),
-        BasesValue::Link { target, display, resolved } => Json::Object(clean_object([
+        BasesValue::Link {
+            target,
+            display,
+            resolved,
+        } => Json::Object(clean_object([
             ("target", Json::String(target.clone())),
             ("display", display.clone().map_or(Json::Null, Json::String)),
-            ("resolvedPath", resolved.clone().map_or(Json::Null, Json::String)),
+            (
+                "resolvedPath",
+                resolved.clone().map_or(Json::Null, Json::String),
+            ),
         ])),
         // `dateOnly` is a TypeScript-only field; `BasesDate` deliberately has
         // no such flag, which changes its derived `Ord` and so the query

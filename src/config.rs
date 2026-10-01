@@ -93,7 +93,10 @@ pub enum ConfigResult {
 
 /// A variable with content in it: present, non-blank, trimmed.
 fn filled(env: &Env, name: &str) -> Option<String> {
-    env.get(name).map(|value| value.trim()).filter(|value| !value.is_empty()).map(str::to_string)
+    env.get(name)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 /// Read the vault configuration out of the environment.
@@ -117,7 +120,12 @@ pub fn parse_config(env: &Env) -> ConfigResult {
                 plural(&ignored, "is", "are")
             )]
         };
-        return ConfigResult::Ok { config: VaultConfig::Fs { dir: absolute(Path::new(&dir)) }, warnings };
+        return ConfigResult::Ok {
+            config: VaultConfig::Fs {
+                dir: absolute(Path::new(&dir)),
+            },
+            warnings,
+        };
     }
 
     if let Some(url) = filled(env, "BASES_MCP_WEBDAV_URL") {
@@ -137,13 +145,21 @@ pub fn parse_config(env: &Env) -> ConfigResult {
         // Unreachable by construction: `missing` is empty exactly when both are
         // present, and the message above is the only path that reports otherwise.
         let (Some(user), Some(password)) = (user, password) else {
-            return ConfigResult::Err { message: usage().to_string() };
+            return ConfigResult::Err {
+                message: usage().to_string(),
+            };
         };
         let Some(parsed) = parse_webdav_url(&url) else {
-            return ConfigResult::Err { message: invalid_webdav_url(&url) };
+            return ConfigResult::Err {
+                message: invalid_webdav_url(&url),
+            };
         };
         return ConfigResult::Ok {
-            config: VaultConfig::Webdav { url: parsed, user, password },
+            config: VaultConfig::Webdav {
+                url: parsed,
+                user,
+                password,
+            },
             warnings: Vec::new(),
         };
     }
@@ -160,15 +176,21 @@ pub fn parse_config(env: &Env) -> ConfigResult {
         };
     }
 
-    ConfigResult::Err { message: usage().to_string() }
+    ConfigResult::Err {
+        message: usage().to_string(),
+    }
 }
 
 /// The WebDAV variables that carry a value, in the order the usage text lists them.
 fn webdav_variables(env: &Env) -> Vec<&'static str> {
-    ["BASES_MCP_WEBDAV_URL", "BASES_MCP_WEBDAV_USER", "BASES_MCP_WEBDAV_PASSWORD"]
-        .into_iter()
-        .filter(|name| filled(env, name).is_some())
-        .collect()
+    [
+        "BASES_MCP_WEBDAV_URL",
+        "BASES_MCP_WEBDAV_USER",
+        "BASES_MCP_WEBDAV_PASSWORD",
+    ]
+    .into_iter()
+    .filter(|name| filled(env, name).is_some())
+    .collect()
 }
 
 /// Join names the way a sentence does: "A", "A and B", "A, B and C".
@@ -177,17 +199,28 @@ fn list(names: &[&str]) -> String {
         [] => String::new(),
         [one] => (*one).to_string(),
         [one, two] => format!("{one} and {two}"),
-        many => format!("{} and {}", many[..many.len() - 1].join(", "), many[many.len() - 1]),
+        many => format!(
+            "{} and {}",
+            many[..many.len() - 1].join(", "),
+            many[many.len() - 1]
+        ),
     }
 }
 
 /// "is" for one name, "are" for more, so the sentence is never ungrammatical.
 fn plural(names: &[&str], one: &'static str, many: &'static str) -> &'static str {
-    if names.len() == 1 { one } else { many }
+    if names.len() == 1 {
+        one
+    } else {
+        many
+    }
 }
 
 /// The credentials a WebDAV configuration is missing, in the order usage lists them.
-fn missing_webdav_credentials(user: &Option<String>, password: &Option<String>) -> Vec<&'static str> {
+fn missing_webdav_credentials(
+    user: &Option<String>,
+    password: &Option<String>,
+) -> Vec<&'static str> {
     [
         user.is_none().then_some("BASES_MCP_WEBDAV_USER"),
         password.is_none().then_some("BASES_MCP_WEBDAV_PASSWORD"),
@@ -240,7 +273,11 @@ fn parse_webdav_url(url: &str) -> Option<String> {
         return None;
     }
     let path = parsed.path();
-    let path = if path.ends_with('/') { path.to_string() } else { format!("{path}/") };
+    let path = if path.ends_with('/') {
+        path.to_string()
+    } else {
+        format!("{path}/")
+    };
     // Only the origin and the path survive. A query string or a fragment would
     // be dropped on the first request anyway, and carrying one here would make
     // the configured URL differ from the URL actually requested.
@@ -296,7 +333,9 @@ pub fn usage() -> &'static str {
 /// Split from [`crate::service::Resolver::open`] because the directory check
 /// has to happen BEFORE the resolver opens it, and because a test wants the
 /// backend without indexing anything.
-pub fn open_source(config: &VaultConfig) -> crate::error::Result<Box<dyn crate::vault::VaultSource>> {
+pub fn open_source(
+    config: &VaultConfig,
+) -> crate::error::Result<Box<dyn crate::vault::VaultSource>> {
     match config {
         VaultConfig::Fs { dir } => {
             // `FsVaultSource` swallows a failed `readdir`, so a mistyped
@@ -317,18 +356,27 @@ pub fn open_source(config: &VaultConfig) -> crate::error::Result<Box<dyn crate::
             }
             Ok(Box::new(crate::vault::FsVaultSource::new(dir)?))
         }
-        VaultConfig::Webdav { url, user, password } => {
+        VaultConfig::Webdav {
+            url,
+            user,
+            password,
+        } => {
             // The URL is safe to name; the credentials are never in this
             // string, and the backend is built so they cannot be.
             let source = WebdavVaultSource::new(
-                WebdavVaultOptions::new(url.clone()).with_user(user.clone()).with_password(password.clone()),
+                WebdavVaultOptions::new(url.clone())
+                    .with_user(user.clone())
+                    .with_password(password.clone()),
             )
             .map_err(|error| {
                 // Redacted, like every other URL this file echoes: the caller
                 // of `open_source` is not `parse_config`, so the URL is not
                 // guaranteed to have been through the credential check.
-                BasesError::new(format!("cannot open WebDAV vault at {url}: {error}", url = redact_url(url)))
-                    .with_construct("BASES_MCP_WEBDAV_URL")
+                BasesError::new(format!(
+                    "cannot open WebDAV vault at {url}: {error}",
+                    url = redact_url(url)
+                ))
+                .with_construct("BASES_MCP_WEBDAV_URL")
             })?;
             Ok(Box::new(source))
         }

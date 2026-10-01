@@ -36,15 +36,15 @@ mod common;
 use bases_mcp::error::BasesError;
 use bases_mcp::vault::fs::content_hash;
 use bases_mcp::vault::webdav::{
-    DAV_PROPFIND_BODY, DavOperation, DavRequest, DavRequestOptions, DavResponse, Depth,
-    WebdavError, WebdavMethod, WebdavTransport, WebdavVaultOptions, WebdavVaultSource,
     dav_refusal, parse_dav_date, parse_multistatus, vault_path_from_href, vault_relative_path,
+    DavOperation, DavRequest, DavRequestOptions, DavResponse, Depth, WebdavError, WebdavMethod,
+    WebdavTransport, WebdavVaultOptions, WebdavVaultSource, DAV_PROPFIND_BODY,
 };
-use bases_mcp::vault::{FsVaultSource, VaultSource, is_indexable};
+use bases_mcp::vault::{is_indexable, FsVaultSource, VaultSource};
 use std::rc::Rc;
 
-use common::fake_dav::{BASE_PATH, BASE_URL, FakeDav, Recorded, Status};
-use common::{CORPUS_SIZE, VaultFile, futures_block_on, load_corpus, vault_dir};
+use common::fake_dav::{FakeDav, Recorded, Status, BASE_PATH, BASE_URL};
+use common::{futures_block_on, load_corpus, vault_dir, VaultFile, CORPUS_SIZE};
 
 /// The mtime every fake server hands out, so no assertion is against a clock.
 const SERVER_MTIME: &str = "Tue, 01 Oct 2024 10:11:12 GMT";
@@ -180,8 +180,8 @@ fn source_over_with(
     password: Option<&str>,
     timeout_ms: Option<u64>,
 ) -> WebdavVaultSource {
-    let mut options =
-        WebdavVaultOptions::new(BASE_URL).with_transport(Box::new(SharedTransport(Rc::clone(server))));
+    let mut options = WebdavVaultOptions::new(BASE_URL)
+        .with_transport(Box::new(SharedTransport(Rc::clone(server))));
     if let Some(user) = user {
         options.user = Some(user.to_string());
     }
@@ -285,14 +285,24 @@ fn strips_the_server_base_path_and_percent_decodes_what_is_left() {
 fn a_collection_href_loses_its_trailing_slash_so_it_is_a_path_and_not_a_name() {
     // The filesystem walk passes `Projects`, never `Projects/`, and a listing
     // compared against it would be off by a slash on every directory.
-    assert_eq!(vault_path_from_href("/dav/vault/Projects/", BASE_PATH).expect("a collection"), "Projects");
-    assert_eq!(vault_path_from_href("/dav/vault/", BASE_PATH).expect("the root"), "");
+    assert_eq!(
+        vault_path_from_href("/dav/vault/Projects/", BASE_PATH).expect("a collection"),
+        "Projects"
+    );
+    assert_eq!(
+        vault_path_from_href("/dav/vault/", BASE_PATH).expect("the root"),
+        ""
+    );
 }
 
 #[test]
 fn the_collection_self_reference_maps_to_the_collections_own_vault_path() {
     for (href, path) in [("/dav/vault/", ""), ("/dav/vault/Projects/", "Projects")] {
-        assert_eq!(vault_path_from_href(href, BASE_PATH).expect("a collection"), path, "{href}");
+        assert_eq!(
+            vault_path_from_href(href, BASE_PATH).expect("a collection"),
+            path,
+            "{href}"
+        );
     }
 }
 
@@ -308,7 +318,10 @@ fn decodes_a_percent_escape_not_the_escape_character() {
 
 #[test]
 fn leaves_a_plus_alone_because_it_is_not_a_space_in_a_path() {
-    assert_eq!(vault_path_from_href("/dav/vault/A+B.md", BASE_PATH).expect("a note"), "A+B.md");
+    assert_eq!(
+        vault_path_from_href("/dav/vault/A+B.md", BASE_PATH).expect("a note"),
+        "A+B.md"
+    );
 }
 
 #[test]
@@ -323,7 +336,8 @@ fn accepts_a_full_url_which_rfc_4918_allows_and_servers_do_send() {
 #[test]
 fn a_base_path_with_an_escape_of_its_own_is_compared_decoded_so_it_still_matches() {
     assert_eq!(
-        vault_path_from_href("/dav/My%20Vault/Note.md", "/dav/My%20Vault").expect("an encoded base"),
+        vault_path_from_href("/dav/My%20Vault/Note.md", "/dav/My%20Vault")
+            .expect("an encoded base"),
         "Note.md"
     );
 }
@@ -332,7 +346,12 @@ fn a_base_path_with_an_escape_of_its_own_is_compared_decoded_so_it_still_matches
 fn refuses_an_href_outside_the_base_rather_than_indexing_another_tree() {
     let error = vault_path_from_href("/elsewhere/Secret.md", BASE_PATH)
         .expect_err("another tree is refused");
-    assert!(error.message().contains("outside the configured vault base"), "{error}");
+    assert!(
+        error
+            .message()
+            .contains("outside the configured vault base"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -341,7 +360,10 @@ fn refuses_a_path_that_escapes_the_vault_root_through_dot_dot() {
     // which this href is an escape rather than a walk up to `/dav/etc/passwd`.
     let error = vault_path_from_href("/dav/vault/../etc/passwd", BASE_PATH)
         .expect_err("an escape is refused");
-    assert!(error.message().contains("escapes the vault root"), "{error}");
+    assert!(
+        error.message().contains("escapes the vault root"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -357,7 +379,10 @@ fn resolves_a_redundant_dot_and_dot_dot_rather_than_keeping_them_in_a_notes_path
 fn refuses_malformed_percent_encoding_instead_of_decoding_it_to_nonsense() {
     let error =
         vault_path_from_href("/dav/vault/100%.md", BASE_PATH).expect_err("a bare % is malformed");
-    assert!(error.message().contains("not valid percent-encoding"), "{error}");
+    assert!(
+        error.message().contains("not valid percent-encoding"),
+        "{error}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -366,7 +391,10 @@ fn refuses_malformed_percent_encoding_instead_of_decoding_it_to_nonsense() {
 
 #[test]
 fn resolves_a_redundant_path_to_the_note_it_names_as_the_filesystem_backend_does() {
-    assert_eq!(vault_relative_path("Tickets/../Root Ticket.md").expect("a redundant path"), "Root Ticket.md");
+    assert_eq!(
+        vault_relative_path("Tickets/../Root Ticket.md").expect("a redundant path"),
+        "Root Ticket.md"
+    );
     assert_eq!(
         vault_relative_path("./Tickets/Fix login redirect.md").expect("a redundant path"),
         "Tickets/Fix login redirect.md"
@@ -377,7 +405,10 @@ fn resolves_a_redundant_path_to_the_note_it_names_as_the_filesystem_backend_does
 fn refuses_every_escape_including_a_leading_slash() {
     for escapee in ["../outside.md", "/etc/passwd", "Tickets/../../outside.md"] {
         let error = vault_relative_path(escapee).expect_err("an escape is refused");
-        assert!(error.message().contains("escapes the vault root"), "{escapee}: {error}");
+        assert!(
+            error.message().contains("escapes the vault root"),
+            "{escapee}: {error}"
+        );
     }
 }
 
@@ -398,8 +429,11 @@ fn an_escape_is_refused_before_any_request_is_made() {
 
 #[test]
 fn extracts_every_resource_by_the_vault_path_it_maps_to() {
-    let paths: Vec<String> =
-        parse_multistatus(CANNED, BASE_PATH).expect("a multistatus").into_iter().map(|r| r.path).collect();
+    let paths: Vec<String> = parse_multistatus(CANNED, BASE_PATH)
+        .expect("a multistatus")
+        .into_iter()
+        .map(|r| r.path)
+        .collect();
     assert_eq!(
         paths,
         [
@@ -434,7 +468,10 @@ fn extracts_the_byte_size_verbatim_and_unrounded() {
 #[test]
 fn extracts_getlastmodified_as_the_string_the_server_sent() {
     let by_path = canned_by_path();
-    assert_eq!(by_path["Root Project.md"].last_modified.as_deref(), Some(SERVER_MTIME));
+    assert_eq!(
+        by_path["Root Project.md"].last_modified.as_deref(),
+        Some(SERVER_MTIME)
+    );
     assert_eq!(
         by_path["Projects"].last_modified.as_deref(),
         Some("Tue, 01 Oct 2024 12:00:00 +0200")
@@ -446,8 +483,11 @@ fn drops_a_resource_whose_only_propstat_is_a_404() {
     // A listing can name a file that was deleted between the request and the
     // response. Indexing it would put a path in `list()` that a later `read_text`
     // cannot serve.
-    let paths: Vec<String> =
-        parse_multistatus(CANNED, BASE_PATH).expect("a multistatus").into_iter().map(|r| r.path).collect();
+    let paths: Vec<String> = parse_multistatus(CANNED, BASE_PATH)
+        .expect("a multistatus")
+        .into_iter()
+        .map(|r| r.path)
+        .collect();
     assert!(!paths.contains(&"Deleted While Listing.md".to_string()));
 }
 
@@ -465,7 +505,9 @@ fn keeps_the_properties_from_a_200_propstat_when_a_sibling_propstat_is_a_404() {
 
 #[test]
 fn an_empty_collection_is_an_empty_listing_not_a_malformed_document() {
-    assert!(parse_multistatus(EMPTY_LISTING, BASE_PATH).expect("an empty collection is fine").is_empty());
+    assert!(parse_multistatus(EMPTY_LISTING, BASE_PATH)
+        .expect("an empty collection is fine")
+        .is_empty());
 }
 
 #[test]
@@ -477,7 +519,10 @@ fn refuses_a_body_that_is_not_a_multistatus_at_all() {
         r#"<?xml version="1.0"?><D:error xmlns:D="DAV:"><D:status>403 Forbidden</D:status></D:error>"#,
     ] {
         let error = parse_multistatus(body, BASE_PATH).expect_err("not a multistatus");
-        assert!(error.message().contains("did not return a multistatus"), "{error}");
+        assert!(
+            error.message().contains("did not return a multistatus"),
+            "{error}"
+        );
     }
 }
 
@@ -487,7 +532,12 @@ fn refuses_a_body_that_is_not_a_multistatus_at_all() {
 
 #[test]
 fn reads_the_instant_in_the_servers_own_timezone() {
-    assert_eq!(parse_dav_date(SERVER_MTIME, "Note.md").expect("a date").timestamp_millis(), SERVER_MTIME_MS);
+    assert_eq!(
+        parse_dav_date(SERVER_MTIME, "Note.md")
+            .expect("a date")
+            .timestamp_millis(),
+        SERVER_MTIME_MS
+    );
     assert_eq!(
         parse_dav_date("Tue, 01 Oct 2024 12:00:00 +0200", "Note.md")
             .expect("a date")
@@ -505,7 +555,9 @@ fn reads_the_two_obsolete_formats_rfc_9110_still_allows() {
         SERVER_MTIME_MS
     );
     assert_eq!(
-        parse_dav_date("Tue Oct  1 10:11:12 2024", "Note.md").expect("an asctime date").timestamp_millis(),
+        parse_dav_date("Tue Oct  1 10:11:12 2024", "Note.md")
+            .expect("an asctime date")
+            .timestamp_millis(),
         SERVER_MTIME_MS
     );
 }
@@ -515,7 +567,10 @@ fn refuses_a_date_it_cannot_read_rather_than_yielding_an_invalid_date() {
     // An unusable date reaches `file.mtime` and then a rendered cell as `NaN`,
     // which looks like data.
     let error = parse_dav_date("yesterday-ish", "Note.md").expect_err("not a date");
-    assert!(error.message().contains("not a date this client can read"), "{error}");
+    assert!(
+        error.message().contains("not a date this client can read"),
+        "{error}"
+    );
     assert!(error.message().contains("yesterday-ish"), "{error}");
 }
 
@@ -526,16 +581,27 @@ fn refuses_a_date_it_cannot_read_rather_than_yielding_an_invalid_date() {
 #[test]
 fn a_2xx_passes_and_207_with_it() {
     for status in [200, 201, 204, 207, 299] {
-        assert!(dav_refusal(DavOperation::Read, WebdavMethod::Get, "Note.md", status, "OK").is_none());
+        assert!(dav_refusal(
+            DavOperation::Read,
+            WebdavMethod::Get,
+            "Note.md",
+            status,
+            "OK"
+        )
+        .is_none());
     }
 }
 
 #[test]
 fn mkcol_tolerates_405_because_the_collection_is_already_there() {
-    assert!(
-        dav_refusal(DavOperation::EnsureDir, WebdavMethod::Mkcol, "Projects", 405, "Method Not Allowed")
-            .is_none()
-    );
+    assert!(dav_refusal(
+        DavOperation::EnsureDir,
+        WebdavMethod::Mkcol,
+        "Projects",
+        405,
+        "Method Not Allowed"
+    )
+    .is_none());
 }
 
 #[test]
@@ -543,16 +609,44 @@ fn delete_tolerates_404_because_the_resource_is_already_not_there() {
     // The deliberate divergence from the filesystem backend, which runs
     // `rm --force`. Both backends report "gone"; only this one was told `404`
     // first. `tests/vault_equivalence.rs` pins the filesystem half.
-    assert!(dav_refusal(DavOperation::Delete, WebdavMethod::Delete, "Note.md", 404, "Not Found").is_none());
+    assert!(dav_refusal(
+        DavOperation::Delete,
+        WebdavMethod::Delete,
+        "Note.md",
+        404,
+        "Not Found"
+    )
+    .is_none());
 }
 
 #[test]
 fn the_tolerance_is_the_operations_not_a_blanket_one() {
     // 405 on a read is a server that does not PROPFIND, and 404 on a read is a
     // note that is not there. Neither is the MKCOL or DELETE answer.
-    assert!(dav_refusal(DavOperation::Read, WebdavMethod::Get, "Note.md", 404, "Not Found").is_some());
-    assert!(dav_refusal(DavOperation::List, WebdavMethod::Propfind, "", 405, "Method Not Allowed").is_some());
-    assert!(dav_refusal(DavOperation::Write, WebdavMethod::Put, "Note.md", 404, "Not Found").is_some());
+    assert!(dav_refusal(
+        DavOperation::Read,
+        WebdavMethod::Get,
+        "Note.md",
+        404,
+        "Not Found"
+    )
+    .is_some());
+    assert!(dav_refusal(
+        DavOperation::List,
+        WebdavMethod::Propfind,
+        "",
+        405,
+        "Method Not Allowed"
+    )
+    .is_some());
+    assert!(dav_refusal(
+        DavOperation::Write,
+        WebdavMethod::Put,
+        "Note.md",
+        404,
+        "Not Found"
+    )
+    .is_some());
 }
 
 #[test]
@@ -625,7 +719,11 @@ fn asks_for_one_collection_at_a_time_and_never_for_infinity() {
     let urls: Vec<String> = server.requests().iter().map(|r| r.url.clone()).collect();
     assert_eq!(
         urls,
-        [format!("{BASE_URL}/"), format!("{BASE_URL}/Projects/"), format!("{BASE_URL}/Tickets/")]
+        [
+            format!("{BASE_URL}/"),
+            format!("{BASE_URL}/Projects/"),
+            format!("{BASE_URL}/Tickets/")
+        ]
     );
 }
 
@@ -645,10 +743,17 @@ fn the_depth_type_cannot_express_infinity() {
         DavOperation::List,
         WebdavMethod::Propfind,
         "",
-        DavRequestOptions { depth: Some(Depth::One), collection: true, ..Default::default() },
+        DavRequestOptions {
+            depth: Some(Depth::One),
+            collection: true,
+            ..Default::default()
+        },
     ));
     assert!(
-        server.requests().iter().all(|r| r.depth.as_deref() != Some("infinity")),
+        server
+            .requests()
+            .iter()
+            .all(|r| r.depth.as_deref() != Some("infinity")),
         "{:?}",
         server.requests()
     );
@@ -677,10 +782,22 @@ fn walks_depth_first_so_a_grandchild_collection_is_listed_before_its_uncle() {
     // Breadth-first would answer `B/` before `A/A2/`. The order of the requests
     // IS the order of the walk, so this is the only place it is observable.
     let server = fake([
-        VaultFile { path: "A/A2/Deep.md".into(), content: "# deep\n".into() },
-        VaultFile { path: "A/Alpha.md".into(), content: "# alpha\n".into() },
-        VaultFile { path: "B/Beta.md".into(), content: "# beta\n".into() },
-        VaultFile { path: "C.md".into(), content: "# c\n".into() },
+        VaultFile {
+            path: "A/A2/Deep.md".into(),
+            content: "# deep\n".into(),
+        },
+        VaultFile {
+            path: "A/Alpha.md".into(),
+            content: "# alpha\n".into(),
+        },
+        VaultFile {
+            path: "B/Beta.md".into(),
+            content: "# beta\n".into(),
+        },
+        VaultFile {
+            path: "C.md".into(),
+            content: "# c\n".into(),
+        },
     ]);
     run(corpus_source(&server).list()).expect("the fake serves the tree");
 
@@ -716,7 +833,10 @@ fn refuses_a_listing_that_names_a_collection_inside_itself() {
     let listings: std::collections::BTreeMap<&str, Vec<&str>> = [
         ("", vec!["/dav/vault/", "/dav/vault/Loop/"]),
         ("Loop", vec!["/dav/vault/Loop/", "/dav/vault/Loop/Inner/"]),
-        ("Loop/Inner", vec!["/dav/vault/Loop/Inner/", "/dav/vault/Loop/"]),
+        (
+            "Loop/Inner",
+            vec!["/dav/vault/Loop/Inner/", "/dav/vault/Loop/"],
+        ),
     ]
     .into_iter()
     .collect();
@@ -724,7 +844,8 @@ fn refuses_a_listing_that_names_a_collection_inside_itself() {
     let transport = move |request: DavRequest| {
         let listings = listings.clone();
         async move {
-            let url = reqwest::Url::parse(&request.url).map_err(|e| BasesError::new(e.to_string()))?;
+            let url =
+                reqwest::Url::parse(&request.url).map_err(|e| BasesError::new(e.to_string()))?;
             let asked = url
                 .path()
                 .strip_prefix(BASE_PATH)
@@ -773,7 +894,13 @@ fn refuses_a_listing_that_names_a_collection_inside_itself() {
 #[test]
 fn refuses_rather_than_indexing_a_smaller_vault_when_a_listing_is_refused() {
     let server = fake(corpus_files());
-    server.refusing("Projects", Status { status: 403, status_text: "Forbidden" });
+    server.refusing(
+        "Projects",
+        Status {
+            status: 403,
+            status_text: "Forbidden",
+        },
+    );
     let error = failure_of(corpus_source(&server).list());
 
     assert!(error.message().contains("PROPFIND"), "{error}");
@@ -782,8 +909,17 @@ fn refuses_rather_than_indexing_a_smaller_vault_when_a_listing_is_refused() {
 
 #[test]
 fn names_the_collection_it_could_not_read_not_the_whole_vault() {
-    let server = fake([VaultFile { path: "Projects/Note.md".into(), content: "# n\n".into() }]);
-    server.refusing("Projects", Status { status: 403, status_text: "Forbidden" });
+    let server = fake([VaultFile {
+        path: "Projects/Note.md".into(),
+        content: "# n\n".into(),
+    }]);
+    server.refusing(
+        "Projects",
+        Status {
+            status: 403,
+            status_text: "Forbidden",
+        },
+    );
     let error = failure_of(corpus_source(&server).list());
     assert!(error.message().contains("Projects"), "{error}");
 }
@@ -794,7 +930,13 @@ fn names_the_collection_it_could_not_read_not_the_whole_vault() {
 #[test]
 fn a_refused_listing_carries_its_status_structurally() {
     let server = fake(corpus_files());
-    server.refusing("Projects", Status { status: 403, status_text: "Forbidden" });
+    server.refusing(
+        "Projects",
+        Status {
+            status: 403,
+            status_text: "Forbidden",
+        },
+    );
     let source = corpus_source(&server);
     let error = run(source.send(
         DavOperation::List,
@@ -823,7 +965,10 @@ fn list_matches_the_filesystem_backend_over_the_testing_vault_path_for_path() {
     // corpus loader only ever hands the fake what the filesystem source will show.
     let server = fake(corpus_files());
     let over_dav = run(corpus_source(&server).list()).expect("the fake serves the corpus");
-    let over_fs = run(FsVaultSource::new(vault_dir()).expect("the oracle is a directory").list()).expect("the oracle is readable");
+    let over_fs = run(FsVaultSource::new(vault_dir())
+        .expect("the oracle is a directory")
+        .list())
+    .expect("the oracle is readable");
     assert_eq!(over_dav, over_fs);
 }
 
@@ -832,8 +977,11 @@ fn filters_exactly_as_is_indexable_does_dot_directories_and_extensions_included(
     // The same tree the equivalence suite pins for fs and the in-memory source,
     // because "the same" is only meaningful across all three.
     let tree = common::dotfile_tree();
-    let mut expected: Vec<String> =
-        tree.iter().map(|f| f.path.clone()).filter(|p| is_indexable(p)).collect();
+    let mut expected: Vec<String> = tree
+        .iter()
+        .map(|f| f.path.clone())
+        .filter(|p| is_indexable(p))
+        .collect();
     expected.sort();
     assert_eq!(
         expected,
@@ -845,7 +993,10 @@ fn filters_exactly_as_is_indexable_does_dot_directories_and_extensions_included(
         ]
     );
     let server = fake(tree);
-    assert_eq!(run(corpus_source(&server).list()).expect("the fake serves the tree"), expected);
+    assert_eq!(
+        run(corpus_source(&server).list()).expect("the fake serves the tree"),
+        expected
+    );
 }
 
 #[test]
@@ -853,10 +1004,19 @@ fn does_not_descend_into_a_dot_directory() {
     // The filesystem walk skips one; a backend that listed it would find
     // `.obsidian/workspace.md` in `list()` and index a file Obsidian does not.
     let server = fake([
-        VaultFile { path: ".obsidian/workspace.md".into(), content: "# not a note\n".into() },
-        VaultFile { path: "Note.md".into(), content: "# note\n".into() },
+        VaultFile {
+            path: ".obsidian/workspace.md".into(),
+            content: "# not a note\n".into(),
+        },
+        VaultFile {
+            path: "Note.md".into(),
+            content: "# note\n".into(),
+        },
     ]);
-    assert_eq!(run(corpus_source(&server).list()).expect("the fake serves the tree"), ["Note.md"]);
+    assert_eq!(
+        run(corpus_source(&server).list()).expect("the fake serves the tree"),
+        ["Note.md"]
+    );
     let urls: Vec<String> = server.requests().iter().map(|r| r.url.clone()).collect();
     assert_eq!(urls, [format!("{BASE_URL}/")]);
 }
@@ -884,10 +1044,16 @@ fn is_a_snapshot_until_a_write_and_refresh_rereads_it() {
     let mut expected = before.clone();
     expected.push("Brand New.md".to_string());
     expected.sort();
-    assert_eq!(run(source.list()).expect("a write invalidates the snapshot"), expected);
+    assert_eq!(
+        run(source.list()).expect("a write invalidates the snapshot"),
+        expected
+    );
 
     source.refresh();
-    assert_eq!(run(source.list()).expect("refresh drops the snapshot"), expected);
+    assert_eq!(
+        run(source.list()).expect("refresh drops the snapshot"),
+        expected
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -897,10 +1063,16 @@ fn is_a_snapshot_until_a_write_and_refresh_rereads_it() {
 #[test]
 fn serves_the_stored_bytes_encoding_a_path_rather_than_guessing_at_it() {
     let content = "---\ntitle: Café\n---\n\n# Café\n";
-    let server = fake([VaultFile { path: "Café/50%.md".into(), content: content.into() }]);
+    let server = fake([VaultFile {
+        path: "Café/50%.md".into(),
+        content: content.into(),
+    }]);
     let source = source_over(&server);
 
-    assert_eq!(run(source.read_text("Café/50%.md")).expect("the note is there"), content);
+    assert_eq!(
+        run(source.read_text("Café/50%.md")).expect("the note is there"),
+        content
+    );
     let requests = server.requests();
     assert_eq!(requests[0].url, format!("{BASE_URL}/Caf%C3%A9/50%25.md"));
     assert_eq!(requests[0].method, "GET");
@@ -909,19 +1081,31 @@ fn serves_the_stored_bytes_encoding_a_path_rather_than_guessing_at_it() {
 
 #[test]
 fn a_notes_name_cannot_truncate_the_request_with_a_hash_or_a_question_mark() {
-    let server = fake([VaultFile { path: "Q1 #2.md".into(), content: "# q\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Q1 #2.md".into(),
+        content: "# q\n".into(),
+    }]);
     run(source_over(&server).read_text("Q1 #2.md")).expect("the note is there");
     assert_eq!(server.requests()[0].url, format!("{BASE_URL}/Q1%20%232.md"));
 }
 
 #[test]
 fn caches_under_the_normalised_path_so_two_spellings_are_one_note() {
-    let server = fake([VaultFile { path: "Root Ticket.md".into(), content: "# ticket\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Root Ticket.md".into(),
+        content: "# ticket\n".into(),
+    }]);
     let source = source_over(&server);
 
-    assert_eq!(run(source.read_text("Tickets/../Root Ticket.md")).expect("a note"), "# ticket\n");
+    assert_eq!(
+        run(source.read_text("Tickets/../Root Ticket.md")).expect("a note"),
+        "# ticket\n"
+    );
     assert_eq!(server.requests().len(), 1);
-    assert_eq!(run(source.read_text("Root Ticket.md")).expect("a note"), "# ticket\n");
+    assert_eq!(
+        run(source.read_text("Root Ticket.md")).expect("a note"),
+        "# ticket\n"
+    );
     assert_eq!(server.requests().len(), 1);
 }
 
@@ -929,8 +1113,13 @@ fn caches_under_the_normalised_path_so_two_spellings_are_one_note() {
 fn a_missing_note_is_a_structured_404() {
     let server = fake([]);
     let source = source_over(&server);
-    let error = run(source.send(DavOperation::Read, WebdavMethod::Get, "Nope.md", Default::default()))
-        .expect_err("there is no such note");
+    let error = run(source.send(
+        DavOperation::Read,
+        WebdavMethod::Get,
+        "Nope.md",
+        Default::default(),
+    ))
+    .expect_err("there is no such note");
     assert_eq!(error.status, Some(404));
     // And through the trait, the message still names the status, so a caller that
     // never saw `WebdavError` can still tell a 404 from a transport failure.
@@ -945,7 +1134,10 @@ fn a_missing_note_is_a_structured_404() {
 #[test]
 fn reports_the_size_and_mtime_the_server_sent_at_the_servers_own_resolution() {
     let content = "---\ntitle: ö\n---\n";
-    let server = fake([VaultFile { path: "Note.md".into(), content: content.into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: content.into(),
+    }]);
     let source = source_over(&server);
 
     let stat = run(source.stat("Note.md")).expect("the note is there");
@@ -960,7 +1152,10 @@ fn reports_the_size_and_mtime_the_server_sent_at_the_servers_own_resolution() {
 fn asks_for_the_resource_itself_not_its_neighbours() {
     // Depth 0: a `Depth: 1` stat of a file is harmless but a `Depth: 1` stat of a
     // collection would silently return the wrong resource.
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     run(source_over(&server).stat("Note.md")).expect("the note is there");
     assert_eq!(server.requests()[0].depth.as_deref(), Some("0"));
 }
@@ -970,12 +1165,17 @@ fn reports_the_servers_mtime_verbatim_never_the_local_clock() {
     // mtime is the one field the two backends cannot agree on: fs reads the local
     // clock, a server reports its own. Massaging the value towards the local
     // clock would make them agree on an instant that never happened.
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     server.with_mtime("Tue, 01 Oct 2024 12:00:00 +0200");
     let stat = run(source_over(&server).stat("Note.md")).expect("the note is there");
     // The instant, as UTC -- which is what the original's `toISOString` printed.
     assert_eq!(
-        stat.mtime.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        stat.mtime
+            .with_timezone(&chrono::Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "2024-10-01T10:00:00.000Z"
     );
     // And the OFFSET, kept as the server sent it: normalising that to UTC would be
@@ -989,18 +1189,35 @@ fn refuses_a_collection_a_missing_size_and_a_missing_mtime_each_by_name() {
     // Each of the three is a server declining to say, and each is refused BY NAME
     // rather than filled in: a `FileStat` with a plausible zero or epoch in it is
     // a wrong answer that looks like data.
-    let server = fake([VaultFile { path: "Projects/Note.md".into(), content: "# n\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Projects/Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     let with_collection = source_over(&server);
     let error = failure_of(with_collection.stat("Projects"));
     assert!(error.message().contains("reported a collection"), "{error}");
 
-    let no_size = source_answering(DavResponse::new(207, "Multi-Status", NO_SIZE_PROPFIND.into()));
+    let no_size = source_answering(DavResponse::new(
+        207,
+        "Multi-Status",
+        NO_SIZE_PROPFIND.into(),
+    ));
     let error = failure_of(no_size.stat("Note.md"));
-    assert!(error.message().contains("did not report getcontentlength"), "{error}");
+    assert!(
+        error.message().contains("did not report getcontentlength"),
+        "{error}"
+    );
 
-    let no_mtime = source_answering(DavResponse::new(207, "Multi-Status", NO_MTIME_PROPFIND.into()));
+    let no_mtime = source_answering(DavResponse::new(
+        207,
+        "Multi-Status",
+        NO_MTIME_PROPFIND.into(),
+    ));
     let error = failure_of(no_mtime.stat("Note.md"));
-    assert!(error.message().contains("did not report getlastmodified"), "{error}");
+    assert!(
+        error.message().contains("did not report getlastmodified"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1012,10 +1229,16 @@ fn refuses_a_listing_that_names_no_resource_at_all() {
 
 #[test]
 fn refuses_an_unparsable_mtime_rather_than_yielding_an_invalid_date() {
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     server.with_mtime("whenever");
     let error = failure_of(source_over(&server).stat("Note.md"));
-    assert!(error.message().contains("not a date this client can read"), "{error}");
+    assert!(
+        error.message().contains("not a date this client can read"),
+        "{error}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1025,11 +1248,22 @@ fn refuses_an_unparsable_mtime_rather_than_yielding_an_invalid_date() {
 #[test]
 fn is_the_shared_content_hash_so_a_hash_means_the_same_on_both_backends() {
     let content = "# Root ticket\n";
-    let server = fake([VaultFile { path: "Root Ticket.md".into(), content: content.into() }]);
+    let server = fake([VaultFile {
+        path: "Root Ticket.md".into(),
+        content: content.into(),
+    }]);
     let source = source_over(&server);
 
-    assert_eq!(run(source.hash("Root Ticket.md")).expect("the note is there"), content_hash(content));
-    assert_eq!(run(source.hash("Root Ticket.md")).expect("the note is there").len(), 32);
+    assert_eq!(
+        run(source.hash("Root Ticket.md")).expect("the note is there"),
+        content_hash(content)
+    );
+    assert_eq!(
+        run(source.hash("Root Ticket.md"))
+            .expect("the note is there")
+            .len(),
+        32
+    );
 }
 
 #[test]
@@ -1051,7 +1285,10 @@ fn agrees_with_the_filesystem_backend_on_every_file_of_the_testing_vault() {
 
 #[test]
 fn reads_once_and_never_an_etag() {
-    let server = fake([VaultFile { path: "Root Ticket.md".into(), content: "# Root ticket\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Root Ticket.md".into(),
+        content: "# Root ticket\n".into(),
+    }]);
     let source = source_over(&server);
 
     run(source.hash("Root Ticket.md")).expect("a hash");
@@ -1063,13 +1300,19 @@ fn reads_once_and_never_an_etag() {
 
 #[test]
 fn follows_the_content_so_a_changed_note_hashes_differently() {
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# one\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# one\n".into(),
+    }]);
     let source = source_over(&server);
     let before = run(source.hash("Note.md")).expect("a hash");
 
     run(source.write_text("Note.md", "# two\n")).expect("the write is verified");
     assert_ne!(run(source.hash("Note.md")).expect("a hash"), before);
-    assert_eq!(run(source.hash("Note.md")).expect("a hash"), content_hash("# two\n"));
+    assert_eq!(
+        run(source.hash("Note.md")).expect("a hash"),
+        content_hash("# two\n")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,7 +1325,8 @@ fn puts_the_bytes_then_reads_them_back_before_reporting_success() {
     let source = source_over(&server);
     run(source.write_text("Note.md", "# note\n")).expect("the write is verified");
 
-    let verb_url: Vec<(String, String)> = server.requests().iter().map(Recorded::verb_url).collect();
+    let verb_url: Vec<(String, String)> =
+        server.requests().iter().map(Recorded::verb_url).collect();
     assert_eq!(
         verb_url,
         [
@@ -1116,10 +1360,18 @@ fn refuses_a_write_the_server_accepted_and_did_not_perform() {
     .expect("the base URL is valid");
 
     let error = failure_of(source.write_text("Root Ticket.md", data));
-    assert!(error.message().contains("accepted but the bytes read back are not"), "{error}");
+    assert!(
+        error
+            .message()
+            .contains("accepted but the bytes read back are not"),
+        "{error}"
+    );
     assert!(error.message().contains(&content_hash(data)), "{error}");
     assert!(error.message().contains(&content_hash(swapped)), "{error}");
-    assert!(!error.message().contains(data), "the message must not echo the content: {error}");
+    assert!(
+        !error.message().contains(data),
+        "the message must not echo the content: {error}"
+    );
 }
 
 #[test]
@@ -1143,18 +1395,30 @@ fn a_refused_write_does_not_enter_the_caches_so_the_vault_is_not_left_lying() {
     .expect("the base URL is valid");
 
     let _ = failure_of(source.write_text("Note.md", "# requested\n"));
-    assert_eq!(run(source.read_text("Note.md")).expect("what the server really holds"), swapped);
-    assert_eq!(run(source.hash("Note.md")).expect("a hash"), content_hash(swapped));
+    assert_eq!(
+        run(source.read_text("Note.md")).expect("what the server really holds"),
+        swapped
+    );
+    assert_eq!(
+        run(source.hash("Note.md")).expect("a hash"),
+        content_hash(swapped)
+    );
     assert!(run(source.list()).expect("a listing").is_empty());
 }
 
 #[test]
 fn overwrites_silently_as_a_put_does_and_as_the_filesystem_backend_does() {
-    let server = fake([VaultFile { path: "Note.md".into(), content: "first\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "first\n".into(),
+    }]);
     let source = source_over(&server);
 
     run(source.write_text("Note.md", "second\n")).expect("the write is verified");
-    assert_eq!(run(source.read_text("Note.md")).expect("a read"), "second\n");
+    assert_eq!(
+        run(source.read_text("Note.md")).expect("a read"),
+        "second\n"
+    );
     assert_eq!(run(source.list()).expect("a listing"), ["Note.md"]);
 }
 
@@ -1166,22 +1430,39 @@ fn refuses_a_path_that_names_the_collection_rather_than_a_note() {
     let server = fake([]);
     let source = source_over(&server);
     let write = failure_of(source.write_text("", "# n\n"));
-    assert!(write.message().contains("collection, not a file"), "{write}");
+    assert!(
+        write.message().contains("collection, not a file"),
+        "{write}"
+    );
     let remove = failure_of(source.delete(""));
-    assert!(remove.message().contains("collection, not a file"), "{remove}");
+    assert!(
+        remove.message().contains("collection, not a file"),
+        "{remove}"
+    );
     assert!(server.requests().is_empty());
 }
 
 #[test]
 fn a_refused_put_surfaces_the_servers_own_status() {
     let server = fake([]);
-    server.refusing("Note.md", Status { status: 507, status_text: "Insufficient Storage" });
+    server.refusing(
+        "Note.md",
+        Status {
+            status: 507,
+            status_text: "Insufficient Storage",
+        },
+    );
     let source = source_over(&server);
-    let error = run(source.send(DavOperation::Write, WebdavMethod::Put, "Note.md", DavRequestOptions {
-        body: Some("# n\n".to_string()),
-        content_type: Some("text/plain; charset=utf-8"),
-        ..Default::default()
-    }))
+    let error = run(source.send(
+        DavOperation::Write,
+        WebdavMethod::Put,
+        "Note.md",
+        DavRequestOptions {
+            body: Some("# n\n".to_string()),
+            content_type: Some("text/plain; charset=utf-8"),
+            ..Default::default()
+        },
+    ))
     .expect_err("the fake refuses the PUT");
     assert_eq!(error.status, Some(507));
     assert!(error.error.message().contains("507"));
@@ -1206,13 +1487,17 @@ fn creates_every_level_because_mkcol_has_no_recursive_form() {
     let server = fake([]);
     run(source_over(&server).ensure_dir("Sandbox/Deep/Nested")).expect("MKCOL 405 is tolerated");
 
-    let verb_url: Vec<(String, String)> = server.requests().iter().map(Recorded::verb_url).collect();
+    let verb_url: Vec<(String, String)> =
+        server.requests().iter().map(Recorded::verb_url).collect();
     assert_eq!(
         verb_url,
         [
             ("MKCOL".to_string(), format!("{BASE_URL}/Sandbox")),
             ("MKCOL".to_string(), format!("{BASE_URL}/Sandbox/Deep")),
-            ("MKCOL".to_string(), format!("{BASE_URL}/Sandbox/Deep/Nested")),
+            (
+                "MKCOL".to_string(),
+                format!("{BASE_URL}/Sandbox/Deep/Nested")
+            ),
         ]
     );
     assert!(server.has_dir("Sandbox/Deep/Nested"));
@@ -1241,7 +1526,13 @@ fn a_root_level_path_creates_no_collection_as_create_note_expects() {
 #[test]
 fn any_other_refusal_still_fails_so_a_409_is_not_mistaken_for_success() {
     let server = fake([]);
-    server.refusing("Sandbox/Deep", Status { status: 403, status_text: "Forbidden" });
+    server.refusing(
+        "Sandbox/Deep",
+        Status {
+            status: 403,
+            status_text: "Forbidden",
+        },
+    );
     let source = source_over(&server);
     let error = run(source.send(
         DavOperation::EnsureDir,
@@ -1259,12 +1550,18 @@ fn any_other_refusal_still_fails_so_a_409_is_not_mistaken_for_success() {
 
 #[test]
 fn deletes_the_file_and_forgets_it() {
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     let source = source_over(&server);
     assert_eq!(run(source.list()).expect("a listing"), ["Note.md"]);
 
     run(source.delete("Note.md")).expect("the DELETE succeeds");
-    assert_eq!(server.requests().last().map(|r| r.method.as_str()), Some("DELETE"));
+    assert_eq!(
+        server.requests().last().map(|r| r.method.as_str()),
+        Some("DELETE")
+    );
     assert_eq!(server.stored("Note.md"), None);
     assert!(run(source.list()).expect("a listing").is_empty());
 }
@@ -1283,11 +1580,25 @@ fn deleting_nothing_succeeds_because_the_desired_state_already_holds() {
 
 #[test]
 fn a_refusal_is_still_a_refusal() {
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
-    server.refusing("Note.md", Status { status: 403, status_text: "Forbidden" });
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
+    server.refusing(
+        "Note.md",
+        Status {
+            status: 403,
+            status_text: "Forbidden",
+        },
+    );
     let source = source_over(&server);
-    let error = run(source.send(DavOperation::Delete, WebdavMethod::Delete, "Note.md", Default::default()))
-        .expect_err("the fake refuses the DELETE");
+    let error = run(source.send(
+        DavOperation::Delete,
+        WebdavMethod::Delete,
+        "Note.md",
+        Default::default(),
+    ))
+    .expect_err("the fake refuses the DELETE");
     assert_eq!(error.status, Some(403));
 }
 
@@ -1305,7 +1616,10 @@ fn expected_basic() -> String {
 
 #[test]
 fn sends_http_basic_auth_on_every_request() {
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     let source = source_over(&server);
     run(source.list()).expect("a listing");
     run(source.read_text("Note.md")).expect("a read");
@@ -1313,7 +1627,10 @@ fn sends_http_basic_auth_on_every_request() {
     let requests = server.requests();
     assert!(requests.len() > 1);
     for request in &requests {
-        assert_eq!(request.authorization.as_deref(), Some(expected_basic().as_str()));
+        assert_eq!(
+            request.authorization.as_deref(),
+            Some(expected_basic().as_str())
+        );
     }
 }
 
@@ -1321,8 +1638,14 @@ fn sends_http_basic_auth_on_every_request() {
 fn never_appears_in_an_error_message_whatever_failed() {
     // A credential in a tool result is a credential in an agent's transcript, and
     // from there in a log somewhere. Every refusal path is checked, not just one.
-    let forbidden = Status { status: 403, status_text: "Forbidden" };
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
+    let forbidden = Status {
+        status: 403,
+        status_text: "Forbidden",
+    };
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     server.refusing("", forbidden);
     server.refusing("Note.md", forbidden);
     server.refusing("Projects", forbidden);
@@ -1350,7 +1673,10 @@ fn never_appears_in_an_error_message_whatever_failed() {
 
 #[test]
 fn never_appears_in_a_url_either() {
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     run(source_over(&server).read_text("Note.md")).expect("a read");
     for request in server.requests() {
         assert!(!request.url.contains(PASSWORD), "{}", request.url);
@@ -1365,10 +1691,11 @@ fn a_url_carrying_credentials_is_refused_rather_than_honoured() {
     // builds messages from strings. Keeping the credential in one place is what
     // makes "never log it" a property of the code rather than of care.
     let error = WebdavVaultSource::new(
-        WebdavVaultOptions::new("https://agent:secret@dav.example/dav/vault")
-            .with_transport(Box::new(ClosureTransport(|_r| async {
+        WebdavVaultOptions::new("https://agent:secret@dav.example/dav/vault").with_transport(
+            Box::new(ClosureTransport(|_r| async {
                 Ok(DavResponse::new(200, "OK", Vec::new()))
-            }))),
+            })),
+        ),
     )
     .expect_err("a URL with userinfo is refused");
     assert!(error.message().contains("carries credentials"), "{error}");
@@ -1382,24 +1709,32 @@ fn a_username_without_a_password_is_a_misconfiguration_not_anonymous_access() {
         })) as Box<dyn WebdavTransport>
     };
     let only_user = WebdavVaultSource::new(
-        WebdavVaultOptions::new(BASE_URL).with_user(USER).with_transport(transport()),
+        WebdavVaultOptions::new(BASE_URL)
+            .with_user(USER)
+            .with_transport(transport()),
     );
     assert!(only_user.is_err(), "a username alone is refused");
 
     let only_password = WebdavVaultSource::new(
-        WebdavVaultOptions::new(BASE_URL).with_password(PASSWORD).with_transport(transport()),
+        WebdavVaultOptions::new(BASE_URL)
+            .with_password(PASSWORD)
+            .with_transport(transport()),
     );
     assert!(only_password.is_err(), "a password alone is refused");
 
     assert!(
-        WebdavVaultSource::new(WebdavVaultOptions::new(BASE_URL).with_transport(transport())).is_ok(),
+        WebdavVaultSource::new(WebdavVaultOptions::new(BASE_URL).with_transport(transport()))
+            .is_ok(),
         "neither is anonymous access"
     );
 }
 
 #[test]
 fn an_unauthenticated_source_sends_no_authorization_header_at_all() {
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     let source = source_over_with(&server, None, None, None);
     run(source.read_text("Note.md")).expect("a read");
     assert_eq!(server.requests()[0].authorization, None);
@@ -1421,7 +1756,10 @@ fn refuses_a_url_that_is_not_http_or_https() {
 
 #[test]
 fn tolerates_a_trailing_slash_on_the_base_url_which_changes_nothing() {
-    let server = fake([VaultFile { path: "Note.md".into(), content: "# n\n".into() }]);
+    let server = fake([VaultFile {
+        path: "Note.md".into(),
+        content: "# n\n".into(),
+    }]);
     let source = WebdavVaultSource::new(
         WebdavVaultOptions::new(format!("{BASE_URL}/"))
             .with_transport(Box::new(SharedTransport(Rc::clone(&server)))),
@@ -1451,7 +1789,11 @@ fn abandons_a_request_that_outlives_its_budget_and_says_so() {
         DavOperation::List,
         WebdavMethod::Propfind,
         "",
-        DavRequestOptions { depth: Some(Depth::One), collection: true, ..Default::default() },
+        DavRequestOptions {
+            depth: Some(Depth::One),
+            collection: true,
+            ..Default::default()
+        },
     ))
     .expect_err("nothing answers");
     assert_eq!(refusal.status, None);
@@ -1463,8 +1805,14 @@ fn abandons_a_request_that_outlives_its_budget_and_says_so() {
 /// between the two.
 #[test]
 fn a_webdav_error_converts_into_the_trait_error_and_keeps_its_fields() {
-    let refusal = dav_refusal(DavOperation::Read, WebdavMethod::Get, "Note.md", 404, "Not Found")
-        .expect("a 404 on a read is refused");
+    let refusal = dav_refusal(
+        DavOperation::Read,
+        WebdavMethod::Get,
+        "Note.md",
+        404,
+        "Not Found",
+    )
+    .expect("a 404 on a read is refused");
     let as_webdav: &WebdavError = &refusal;
     assert_eq!(as_webdav.status, Some(404));
     let as_bases: BasesError = refusal.into();

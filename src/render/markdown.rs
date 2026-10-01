@@ -123,7 +123,9 @@ pub fn render_columns(base: &BaseFile, view: &BaseView) -> Vec<RenderColumn> {
 /// as they do in Obsidian -- but they are not the same thing to a summary, which
 /// counts a column's blanks, so the difference is kept rather than flattened.
 fn cell_value<'a>(row: &'a ResolvedRow, id: &str) -> Option<&'a BasesValue> {
-    row.values.get(id).filter(|value| !matches!(value, BasesValue::Null))
+    row.values
+        .get(id)
+        .filter(|value| !matches!(value, BasesValue::Null))
 }
 
 /// A cell's text. An absent value is an EMPTY cell, matching Obsidian -- note
@@ -155,7 +157,10 @@ fn table_for(
         }
     };
 
-    let headers: Vec<&str> = columns.iter().map(|column| column.header.as_str()).collect();
+    let headers: Vec<&str> = columns
+        .iter()
+        .map(|column| column.header.as_str())
+        .collect();
     let body: Vec<String> = rows
         .iter()
         .map(|row| format!("| {} |", pad_cells(&row_cells(columns, row), widths, align)))
@@ -200,8 +205,9 @@ fn column_widths(
         .iter()
         .enumerate()
         .map(|(index, column)| {
-            let mut width = display_width(&column.header)
-                .max(display_width(extra_cells.get(index).map_or("", String::as_str)));
+            let mut width = display_width(&column.header).max(display_width(
+                extra_cells.get(index).map_or("", String::as_str),
+            ));
             for row in rows {
                 width = width.max(display_width(&to_cell_text(cell_value(row, &column.id))));
             }
@@ -222,7 +228,10 @@ fn pad_cells<S: AsRef<str>>(cells: &[S], widths: &[usize], align: TableAlign) ->
         .enumerate()
         .map(|(index, cell)| {
             let cell = cell.as_ref();
-            let width = widths.get(index).copied().unwrap_or_else(|| display_width(cell));
+            let width = widths
+                .get(index)
+                .copied()
+                .unwrap_or_else(|| display_width(cell));
             match align {
                 TableAlign::Centre => centre(cell, width),
                 TableAlign::Left => pad_end(cell, width),
@@ -320,7 +329,10 @@ fn render_as_table(base: &BaseFile, result: &QueryResult) -> Result<String> {
     let Some(cells) = cells else {
         return Ok(table);
     };
-    Ok(format!("{table}\n\n{}", summary_table(&columns, &cells, &widths)))
+    Ok(format!(
+        "{table}\n\n{}",
+        summary_table(&columns, &cells, &widths)
+    ))
 }
 
 /// A list view: the primary column becomes the bullet text and the rest are
@@ -340,7 +352,11 @@ fn render_as_list(base: &BaseFile, result: &QueryResult) -> String {
             let title = to_cell_text(cell_value(row, &primary.id));
             out.push(format!(
                 "- {}",
-                if title.is_empty() { "(untitled)" } else { title.as_str() }
+                if title.is_empty() {
+                    "(untitled)"
+                } else {
+                    title.as_str()
+                }
             ));
             for column in &columns[1..] {
                 let value = to_cell_text(cell_value(row, &column.id));
@@ -407,8 +423,10 @@ fn summary_cells(
             let Some(spec) = found else {
                 return Ok(String::new());
             };
-            let values: Vec<&BasesValue> =
-                rows.iter().filter_map(|row| cell_value(row, &column.id)).collect();
+            let values: Vec<&BasesValue> = rows
+                .iter()
+                .filter_map(|row| cell_value(row, &column.id))
+                .collect();
             summarise(spec, &values)
         })
         .collect::<Result<Vec<String>>>()?;
@@ -417,7 +435,10 @@ fn summary_cells(
 
 /// The footer: a one-row table reusing the main table's column widths.
 fn summary_table(columns: &[RenderColumn], cells: &[String], widths: &[usize]) -> String {
-    let labels: Vec<&str> = columns.iter().map(|column| column.header.as_str()).collect();
+    let labels: Vec<&str> = columns
+        .iter()
+        .map(|column| column.header.as_str())
+        .collect();
     [
         format!("| {} |", pad_cells(&labels, widths, TableAlign::Left)),
         format!("| {} |", rule(widths)),
@@ -507,7 +528,10 @@ fn reduce_numbers(numbers: &[f64], reduce: impl Fn(&[f64]) -> f64) -> String {
 /// orderable values are present. A date-only summary keeps no time component
 /// because a summary of timestamps is unreadable at a glance.
 fn boundary_time(values: &[&BasesValue], pick: fn(f64, f64) -> f64) -> String {
-    let times: Vec<f64> = values.iter().filter_map(|value| epoch_millis(value)).collect();
+    let times: Vec<f64> = values
+        .iter()
+        .filter_map(|value| epoch_millis(value))
+        .collect();
     let Some(first) = times.first() else {
         return String::new();
     };
@@ -547,7 +571,10 @@ fn js_number(text: &str) -> Option<f64> {
     if trimmed.is_empty() {
         return Some(0.0);
     }
-    trimmed.parse::<f64>().ok().filter(|number| !number.is_nan())
+    trimmed
+        .parse::<f64>()
+        .ok()
+        .filter(|number| !number.is_nan())
 }
 
 /// Format a summary number, or `""` when there was nothing to summarise.

@@ -331,9 +331,12 @@ pub fn reconcile_note(note_path: &str, original: &str, edited: &str) -> Reconcil
         let Some(path) = region.base_path.as_deref() else {
             continue;
         };
-        let hit = original_regions.iter().enumerate().find(|(other, candidate)| {
-            !claimed.contains(other) && candidate.base_path.as_deref() == Some(path)
-        });
+        let hit = original_regions
+            .iter()
+            .enumerate()
+            .find(|(other, candidate)| {
+                !claimed.contains(other) && candidate.base_path.as_deref() == Some(path)
+            });
         let Some((other, hit_ref)) = hit else {
             continue;
         };

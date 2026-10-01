@@ -9,9 +9,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use bases_mcp::evaluator::{evaluate_expression, EvalContext, ThisContext};
-use bases_mcp::value::{
-    BasesValue, Duration, FileAccessors, FileValue,
-};
+use bases_mcp::value::{BasesValue, Duration, FileAccessors, FileValue};
 
 /// A one-note vault, enough for link resolution and the file methods.
 fn make_ctx(options: Option<AccessorsOptions>) -> EvalContext {
@@ -46,7 +44,10 @@ fn make_ctx(options: Option<AccessorsOptions>) -> EvalContext {
         resolve: Rc::new(|target: &str| Some(FileValue::new(target.to_string(), accessors_shim()))),
         links_to: Rc::new(|_: &str| false),
     };
-    let file = FileValue::new(opts.path.clone().unwrap_or_else(|| "Notes/Alpha.md".into()), accessors);
+    let file = FileValue::new(
+        opts.path.clone().unwrap_or_else(|| "Notes/Alpha.md".into()),
+        accessors,
+    );
 
     let mut ctx = EvalContext::new(file);
     ctx.note = opts.note.clone();
@@ -103,7 +104,8 @@ impl AccessorsOptions {
         self
     }
     fn prop(mut self, key: &str, value: &str) -> Self {
-        self.note.insert(key.to_string(), BasesValue::String(value.to_string()));
+        self.note
+            .insert(key.to_string(), BasesValue::String(value.to_string()));
         self
     }
     fn host(mut self, path: &str) -> Self {
@@ -129,7 +131,10 @@ fn s(expr: &str) -> String {
 }
 
 fn n(expr: &str) -> f64 {
-    ev(expr).expect("expression evaluates").as_number().expect("a number")
+    ev(expr)
+        .expect("expression evaluates")
+        .as_number()
+        .expect("a number")
 }
 
 fn b(expr: &str) -> bool {
@@ -166,19 +171,31 @@ fn precedence_follows_javascript() {
 
 #[test]
 fn this_binds_to_the_host_note() {
-    let ctx = make_ctx(Some(AccessorsOptions::default().host("Projects/SomeProject.md")));
-    assert_eq!(ev_in("this.file.name", &ctx).unwrap().to_display_string(), "SomeProject");
+    let ctx = make_ctx(Some(
+        AccessorsOptions::default().host("Projects/SomeProject.md"),
+    ));
+    assert_eq!(
+        ev_in("this.file.name", &ctx).unwrap().to_display_string(),
+        "SomeProject"
+    );
     assert_eq!(
         ev_in("this.file.path", &ctx).unwrap().to_display_string(),
         "Projects/SomeProject.md"
     );
     // `this.path` is a File member...
-    assert_eq!(ev_in("this.path", &ctx).unwrap().to_display_string(), "Projects/SomeProject.md");
+    assert_eq!(
+        ev_in("this.path", &ctx).unwrap().to_display_string(),
+        "Projects/SomeProject.md"
+    );
     // ...and `this.projects` reads the host note's frontmatter.
     let mut opts = AccessorsOptions::default().host("Projects/SomeProject.md");
-    opts.this_note.insert("projects".into(), BasesValue::String("alpha".into()));
+    opts.this_note
+        .insert("projects".into(), BasesValue::String("alpha".into()));
     let ctx2 = make_ctx(Some(opts));
-    assert_eq!(ev_in("this.projects", &ctx2).unwrap().to_display_string(), "alpha");
+    assert_eq!(
+        ev_in("this.projects", &ctx2).unwrap().to_display_string(),
+        "alpha"
+    );
 }
 
 #[test]
@@ -202,14 +219,23 @@ fn file_members_match_obsidian() {
     let ctx = make_ctx(Some(AccessorsOptions::default().at("Notes/Alpha.md")));
     // `file.name` renders WITHOUT the extension, matching `basename`. Probed on
     // 1.13.7; the docs claim the opposite.
-    assert_eq!(ev_in("file.name", &ctx).unwrap().to_display_string(), "Alpha");
-    assert_eq!(ev_in("file.basename", &ctx).unwrap().to_display_string(), "Alpha");
+    assert_eq!(
+        ev_in("file.name", &ctx).unwrap().to_display_string(),
+        "Alpha"
+    );
+    assert_eq!(
+        ev_in("file.basename", &ctx).unwrap().to_display_string(),
+        "Alpha"
+    );
     assert_eq!(
         ev_in("file.path", &ctx).unwrap().to_display_string(),
         "Notes/Alpha.md"
     );
     assert_eq!(ev_in("file.ext", &ctx).unwrap().to_display_string(), "md");
-    assert_eq!(ev_in("file.folder", &ctx).unwrap().to_display_string(), "Notes");
+    assert_eq!(
+        ev_in("file.folder", &ctx).unwrap().to_display_string(),
+        "Notes"
+    );
 }
 
 #[test]
@@ -230,7 +256,9 @@ fn b_in(expr: &str, ctx: &EvalContext) -> bool {
 
 #[test]
 fn has_tag_matches_nested_tags() {
-    let ctx = make_ctx(Some(AccessorsOptions::default().tagged(&["#plugin/transformer"])));
+    let ctx = make_ctx(Some(
+        AccessorsOptions::default().tagged(&["#plugin/transformer"]),
+    ));
     assert!(b_in("file.hasTag(\"plugin\")", &ctx));
     assert!(b_in("file.hasTag(\"plugin/transformer\")", &ctx));
     assert!(b_in("file.hasTag(\"#plugin\")", &ctx));
@@ -283,8 +311,14 @@ fn date_is_never_empty() {
 fn date_subtraction_yields_a_duration_that_also_numbers() {
     // The docs say milliseconds; the runtime returns a Duration. We support both
     // idioms rather than picking a side. See docs/divergences.md.
-    assert_eq!(n("number(date(\"2024-03-01\") - date(\"2024-02-01\"))"), 2_505_600_000.0);
-    assert_eq!(n("(date(\"2024-03-01\") - date(\"2024-02-01\")).days"), 29.0);
+    assert_eq!(
+        n("number(date(\"2024-03-01\") - date(\"2024-02-01\"))"),
+        2_505_600_000.0
+    );
+    assert_eq!(
+        n("(date(\"2024-03-01\") - date(\"2024-02-01\")).days"),
+        29.0
+    );
     // The documented whole-days idiom.
     assert_eq!(
         n("((number(date(\"2024-03-01\")) - number(date(\"2024-02-01\"))) / 86400000).round(0)"),
@@ -316,12 +350,20 @@ fn m_is_a_month_and_m_is_a_minute() {
 #[test]
 fn links_compare_by_resolved_target() {
     assert_eq!(s("link(\"SomeProject\")"), "[[SomeProject]]");
-    assert_eq!(s("link(\"SomeProject\", \"Alias\")"), "[[SomeProject|Alias]]");
+    assert_eq!(
+        s("link(\"SomeProject\", \"Alias\")"),
+        "[[SomeProject|Alias]]"
+    );
     // A link whose resolved target matches another note's path compares equal,
     // regardless of how each was spelled.
-    let linked = make_ctx(Some(AccessorsOptions::default().linked(&["Projects/SomeProject.md"])));
+    let linked = make_ctx(Some(
+        AccessorsOptions::default().linked(&["Projects/SomeProject.md"]),
+    ));
     assert!(b_in("file.links.contains(link(\"SomeProject\"))", &linked));
-    assert!(!b_in("file.links.contains(link(\"OtherProject\"))", &linked));
+    assert!(!b_in(
+        "file.links.contains(link(\"OtherProject\"))",
+        &linked
+    ));
     // And `hasLink` is the same test under Obsidian's other spelling.
     assert!(b_in("file.hasLink(\"SomeProject\")", &linked));
     assert!(!b_in("file.hasLink(\"OtherProject\")", &linked));
@@ -329,7 +371,9 @@ fn links_compare_by_resolved_target() {
 
 #[test]
 fn list_contains_dispatches_on_the_needle() {
-    let ctx = make_ctx(Some(AccessorsOptions::default().prop("project", "[[SomeProject]]")));
+    let ctx = make_ctx(Some(
+        AccessorsOptions::default().prop("project", "[[SomeProject]]"),
+    ));
     assert!(b_in("list([link(\"A\")]).contains(link(\"A\"))", &ctx));
     assert!(!b_in("list([link(\"A\")]).contains(link(\"B\"))", &ctx));
     assert!(b_in("list([1, 2, 3]).contains(2)", &ctx));
@@ -421,7 +465,10 @@ fn index_access_works_on_lists_strings_and_files() {
     assert_eq!(s("list([1, 2, 3])[1]"), "2");
     assert_eq!(s("\"hello\"[1]"), "e");
     let ctx = make_ctx(Some(AccessorsOptions::default().at("Notes/Alpha.md")));
-    assert_eq!(ev_in("file[\"name\"]", &ctx).unwrap().to_display_string(), "Alpha");
+    assert_eq!(
+        ev_in("file[\"name\"]", &ctx).unwrap().to_display_string(),
+        "Alpha"
+    );
 }
 
 #[test]
@@ -455,6 +502,14 @@ fn string_methods_match_the_documented_set() {
 #[test]
 fn object_keys_and_values_work_on_a_namespace() {
     let ctx = make_ctx(Some(AccessorsOptions::default().prop("status", "active")));
-    assert_eq!(ev_in("note.keys().length", &ctx).unwrap().to_display_string(), "1");
-    assert_eq!(ev_in("note.values()[0]", &ctx).unwrap().to_display_string(), "active");
+    assert_eq!(
+        ev_in("note.keys().length", &ctx)
+            .unwrap()
+            .to_display_string(),
+        "1"
+    );
+    assert_eq!(
+        ev_in("note.values()[0]", &ctx).unwrap().to_display_string(),
+        "active"
+    );
 }

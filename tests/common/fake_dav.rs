@@ -137,7 +137,13 @@ impl FakeDav {
         if path.is_empty() {
             return format!("{BASE_URL}/");
         }
-        format!("{BASE_URL}/{}", path.split('/').map(encode_uri_component).collect::<Vec<_>>().join("/"))
+        format!(
+            "{BASE_URL}/{}",
+            path.split('/')
+                .map(encode_uri_component)
+                .collect::<Vec<_>>()
+                .join("/")
+        )
     }
 
     /// The vault path a request URL names, as this server stores it.
@@ -165,7 +171,11 @@ impl FakeDav {
 
     /// Direct children of a vault path, plus the path itself, in sorted order.
     fn members_of(&self, path: &str) -> Vec<String> {
-        let prefix = if path.is_empty() { String::new() } else { format!("{path}/") };
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            format!("{path}/")
+        };
         let mut all: BTreeSet<String> = BTreeSet::new();
         for file in self.files.borrow().keys() {
             if file.starts_with(&prefix) {
@@ -242,7 +252,9 @@ impl WebdavTransport for FakeDav {
             return Err(BasesError::new("The operation timed out"));
         }
 
-        let Some(path) = self.path_of(&url) else { return Ok(refusal(404, "Not Found")) };
+        let Some(path) = self.path_of(&url) else {
+            return Ok(refusal(404, "Not Found"));
+        };
         if let Some(blocked) = self.refuse.borrow().get(&path) {
             return Ok(refusal(blocked.status, blocked.status_text));
         }
@@ -306,7 +318,9 @@ fn first_segment<'a>(path: &'a str, prefix: &'a str) -> &'a str {
 }
 
 fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// A `207 Multi-Status` body for the given `response` blocks.

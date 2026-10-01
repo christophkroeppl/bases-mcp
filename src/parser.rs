@@ -41,15 +41,15 @@ struct Parser {
 impl Parser {
     fn peek(&self) -> &Token {
         // The token list always ends in Eof, so this cannot run off the end.
-        self.tokens.get(self.pos).unwrap_or_else(|| self.tokens.last().expect("non-empty"))
+        self.tokens
+            .get(self.pos)
+            .unwrap_or_else(|| self.tokens.last().expect("non-empty"))
     }
 
     fn next(&mut self) -> Result<Token> {
-        let tok = self
-            .tokens
-            .get(self.pos)
-            .cloned()
-            .ok_or_else(|| BasesError::new("Unexpected end of expression").with_position(self.source_len))?;
+        let tok = self.tokens.get(self.pos).cloned().ok_or_else(|| {
+            BasesError::new("Unexpected end of expression").with_position(self.source_len)
+        })?;
         self.pos += 1;
         Ok(tok)
     }
@@ -65,8 +65,11 @@ impl Parser {
     fn finish(&self) -> Result<()> {
         if !self.at(Tok::Eof) {
             let tok = self.peek();
-            return Err(BasesError::new(format!("Unexpected token \"{}\" after expression", tok.raw))
-                .with_position(tok.start));
+            return Err(BasesError::new(format!(
+                "Unexpected token \"{}\" after expression",
+                tok.raw
+            ))
+            .with_position(tok.start));
         }
         Ok(())
     }
@@ -85,7 +88,10 @@ impl Parser {
 
     fn parse_prefix(&mut self) -> Result<Node> {
         let tok = self.peek().clone();
-        let span = Span { start: tok.start, end: tok.end };
+        let span = Span {
+            start: tok.start,
+            end: tok.end,
+        };
         match tok.kind {
             Tok::Number => {
                 self.advance();
@@ -140,7 +146,10 @@ impl Parser {
                 // the inner token rather than the open paren.
                 Ok(Node::new(
                     inner.kind,
-                    Span { start: span.start, end: close.end },
+                    Span {
+                        start: span.start,
+                        end: close.end,
+                    },
                 ))
             }
             Tok::LBracket => {
@@ -152,8 +161,14 @@ impl Parser {
                 let operand = self.parse_expression(Precedence::Unary)?;
                 let end = operand.span.end;
                 Ok(Node::new(
-                    NodeKind::Unary { op: UnaryOp::Not, operand: Box::new(operand) },
-                    Span { start: span.start, end },
+                    NodeKind::Unary {
+                        op: UnaryOp::Not,
+                        operand: Box::new(operand),
+                    },
+                    Span {
+                        start: span.start,
+                        end,
+                    },
                 ))
             }
             Tok::Minus => {
@@ -161,13 +176,23 @@ impl Parser {
                 let operand = self.parse_expression(Precedence::Unary)?;
                 let end = operand.span.end;
                 Ok(Node::new(
-                    NodeKind::Unary { op: UnaryOp::Negate, operand: Box::new(operand) },
-                    Span { start: span.start, end },
+                    NodeKind::Unary {
+                        op: UnaryOp::Negate,
+                        operand: Box::new(operand),
+                    },
+                    Span {
+                        start: span.start,
+                        end,
+                    },
                 ))
             }
             _ => Err(BasesError::new(format!(
                 "Unexpected token \"{}\"",
-                if tok.raw.is_empty() { "<end of input>" } else { &tok.raw }
+                if tok.raw.is_empty() {
+                    "<end of input>"
+                } else {
+                    &tok.raw
+                }
             ))
             .with_position(tok.start)),
         }
@@ -195,7 +220,13 @@ impl Parser {
         if close.kind != Tok::RBracket {
             return Err(BasesError::new("Expected closing bracket").with_position(close.start));
         }
-        Ok(Node::new(NodeKind::List(elements), Span { start, end: close.end }))
+        Ok(Node::new(
+            NodeKind::List(elements),
+            Span {
+                start,
+                end: close.end,
+            },
+        ))
     }
 
     /// The operator that would continue the expression here, if any.
@@ -265,8 +296,14 @@ impl Parser {
                     );
                 }
                 Ok(Node::new(
-                    NodeKind::Call { callee: Box::new(left), args },
-                    Span { start: left_span.start, end: close.end },
+                    NodeKind::Call {
+                        callee: Box::new(left),
+                        args,
+                    },
+                    Span {
+                        start: left_span.start,
+                        end: close.end,
+                    },
                 ))
             }
             Infix::Member => {
@@ -277,34 +314,47 @@ impl Parser {
                 }
                 let name = self.next()?;
                 if name.kind != Tok::Identifier && name.kind != Tok::Keyword {
-                    return Err(
-                        BasesError::new("Expected a property name after '.'").with_position(name.start)
-                    );
+                    return Err(BasesError::new("Expected a property name after '.'")
+                        .with_position(name.start));
                 }
                 Ok(Node::new(
                     NodeKind::Member {
                         object: Box::new(left),
                         property: name.raw.clone(),
                     },
-                    Span { start: left_span.start, end: name.end },
+                    Span {
+                        start: left_span.start,
+                        end: name.end,
+                    },
                 ))
             }
             Infix::Index => {
                 let index = self.parse_expression(Precedence::Lowest)?;
                 let close = self.next()?;
                 if close.kind != Tok::RBracket {
-                    return Err(BasesError::new("Expected closing bracket").with_position(close.start));
+                    return Err(
+                        BasesError::new("Expected closing bracket").with_position(close.start)
+                    );
                 }
                 Ok(Node::new(
-                    NodeKind::Index { object: Box::new(left), index: Box::new(index) },
-                    Span { start: left_span.start, end: close.end },
+                    NodeKind::Index {
+                        object: Box::new(left),
+                        index: Box::new(index),
+                    },
+                    Span {
+                        start: left_span.start,
+                        end: close.end,
+                    },
                 ))
             }
             Infix::Not => {
                 let operand = self.parse_expression(Precedence::Unary)?;
                 let end = operand.span.end;
                 Ok(Node::new(
-                    NodeKind::Unary { op: UnaryOp::Not, operand: Box::new(operand) },
+                    NodeKind::Unary {
+                        op: UnaryOp::Not,
+                        operand: Box::new(operand),
+                    },
                     Span { start, end },
                 ))
             }
@@ -317,7 +367,10 @@ impl Parser {
                         left: Box::new(left),
                         right: Box::new(right),
                     },
-                    Span { start: left_span.start, end },
+                    Span {
+                        start: left_span.start,
+                        end,
+                    },
                 ))
             }
         }

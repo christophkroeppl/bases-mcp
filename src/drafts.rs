@@ -37,15 +37,15 @@ use serde::Deserialize;
 use serde_yaml::{Mapping, Value as Yaml};
 
 use crate::ast::{Literal, Node, NodeKind};
-use crate::base::{BaseFile, BaseView, FilterNode, order_formulas, resolve_host_note, select_view};
+use crate::base::{order_formulas, resolve_host_note, select_view, BaseFile, BaseView, FilterNode};
 use crate::error::{BasesError, Result};
-use crate::evaluator::{EvalContext, RESERVED, evaluate};
-use crate::parser::{parse, try_parse};
+use crate::evaluator::{evaluate, EvalContext, RESERVED};
 use crate::note::parse_note_with_embeds;
+use crate::parser::{parse, try_parse};
 use crate::service::Resolver;
-use crate::value::{BasesValue, strip_extension};
+use crate::value::{strip_extension, BasesValue};
 use crate::vault::source::{FileStat, SourceKind, VaultSource};
-use crate::vault::{Vault, content_hash};
+use crate::vault::{content_hash, Vault};
 
 // ---------------------------------------------------------------------------
 // Surface
@@ -188,7 +188,10 @@ impl DraftStore {
     /// A store whose drafts live for `ttl_ms`. Zero expires them immediately,
     /// which is how the expiry path is exercised without waiting.
     pub fn new(ttl_ms: i64) -> Self {
-        Self { drafts: RefCell::new(HashMap::new()), ttl_ms }
+        Self {
+            drafts: RefCell::new(HashMap::new()),
+            ttl_ms,
+        }
     }
 
     /// Store a draft and hand back the record, id and expiry included.
@@ -203,14 +206,18 @@ impl DraftStore {
             original: seed.original,
             expires_at: now_ms() + self.ttl_ms,
         };
-        self.drafts.borrow_mut().insert(record.id.clone(), record.clone());
+        self.drafts
+            .borrow_mut()
+            .insert(record.id.clone(), record.clone());
         record
     }
 
     /// Look up a live draft. Expiry is a miss, not a special case to handle.
     pub fn get(&self, id: &str) -> Result<StoredDraft> {
         let draft = self.drafts.borrow().get(id).cloned();
-        let Some(draft) = draft else { return Err(expired_draft(id, self.ttl_ms)) };
+        let Some(draft) = draft else {
+            return Err(expired_draft(id, self.ttl_ms));
+        };
         if draft.expires_at <= now_ms() {
             self.release(id);
             return Err(expired_draft(id, self.ttl_ms));
@@ -238,7 +245,9 @@ impl DraftStore {
 
     fn prune(&self) {
         let now = now_ms();
-        self.drafts.borrow_mut().retain(|_, draft| draft.expires_at > now);
+        self.drafts
+            .borrow_mut()
+            .retain(|_, draft| draft.expires_at > now);
     }
 }
 
@@ -294,7 +303,11 @@ async fn propose_draft(
     let base = resolver.load_base(&base_path).await?;
     let view = select_view(&base, options.view.as_deref())?.clone();
     let context = options.context.clone();
-    let content = render_draft(&path, &invert_effective(&base, &view, context.as_deref()), &view);
+    let content = render_draft(
+        &path,
+        &invert_effective(&base, &view, context.as_deref()),
+        &view,
+    );
 
     let stored = resolver.drafts().put(DraftSeed {
         base: base_path.clone(),
@@ -330,7 +343,12 @@ fn require_field(value: Option<&str>, name: &str) -> Result<String> {
 }
 
 fn assert_note_absent(resolver: &Resolver, path: &str) -> Result<()> {
-    if resolver.vault().note_paths().iter().any(|known| known == path) {
+    if resolver
+        .vault()
+        .note_paths()
+        .iter()
+        .any(|known| known == path)
+    {
         return Err(BasesError::new(format!(
             "{path} already exists. add_note_to_base creates a NEW row; use write_note to change a \
              note that is already there, or pick another path."
@@ -428,7 +446,9 @@ async fn commit_draft(
     let base = resolver.load_base(&stored.base).await?;
     let view = select_view(&base, Some(&stored.view))?.clone();
     if stored.context.is_none()
-        && effective_filters(&base, &view).iter().any(|filter| mentions_this(filter.node))
+        && effective_filters(&base, &view)
+            .iter()
+            .any(|filter| mentions_this(filter.node))
     {
         return Err(BasesError::new(format!(
             "{base} is scoped to a host note: its filter references \"this\", and none was \
@@ -582,10 +602,7 @@ fn probe(
                     failures.push(FilterProbe {
                         where_: where_.to_string(),
                         expression: source.clone(),
-                        outcome: ProbeOutcome::Threw(format!(
-                            "threw: {}",
-                            error.display_message()
-                        )),
+                        outcome: ProbeOutcome::Threw(format!("threw: {}", error.display_message())),
                     });
                 }
                 false
@@ -624,15 +641,21 @@ fn probe(
         FilterNode::And(children) => {
             let mut all = true;
             for (index, child) in children.iter().enumerate() {
-                let held = probe(child, &format!("{where_}.and[{index}]"), ctx, failures, collect);
+                let held = probe(
+                    child,
+                    &format!("{where_}.and[{index}]"),
+                    ctx,
+                    failures,
+                    collect,
+                );
                 all = all && held;
             }
             all
         }
         FilterNode::Or(children) => {
-            let ok = children.iter().any(|child| {
-                probe(child, &format!("{where_}.or"), ctx, failures, false)
-            });
+            let ok = children
+                .iter()
+                .any(|child| probe(child, &format!("{where_}.or"), ctx, failures, false));
             if !ok && collect {
                 failures.push(FilterProbe {
                     where_: where_.to_string(),
@@ -671,10 +694,16 @@ struct LabelledFilter<'a> {
 fn effective_filters<'a>(base: &'a BaseFile, view: &'a BaseView) -> Vec<LabelledFilter<'a>> {
     let mut out = Vec::new();
     if let Some(node) = &base.filters {
-        out.push(LabelledFilter { where_: "filters".to_string(), node });
+        out.push(LabelledFilter {
+            where_: "filters".to_string(),
+            node,
+        });
     }
     if let Some(node) = &view.filters {
-        out.push(LabelledFilter { where_: format!("views.{}.filters", view.name), node });
+        out.push(LabelledFilter {
+            where_: format!("views.{}.filters", view.name),
+            node,
+        });
     }
     out
 }
@@ -689,9 +718,9 @@ fn mentions_this(node: &FilterNode) -> bool {
         FilterNode::Expression(source) => {
             try_parse(source).is_some_and(|ast| mentions_this_node(&ast))
         }
-        FilterNode::And(children)
-        | FilterNode::Or(children)
-        | FilterNode::Not(children) => children.iter().any(mentions_this),
+        FilterNode::And(children) | FilterNode::Or(children) | FilterNode::Not(children) => {
+            children.iter().any(mentions_this)
+        }
     }
 }
 
@@ -777,7 +806,10 @@ struct Inversion {
 
 impl Inversion {
     fn unresolved(source: impl Into<String>) -> Self {
-        Self { entries: Vec::new(), unresolved: vec![source.into()] }
+        Self {
+            entries: Vec::new(),
+            unresolved: vec![source.into()],
+        }
     }
 }
 
@@ -796,16 +828,18 @@ fn invert_effective(base: &BaseFile, view: &BaseView, context: Option<&str>) -> 
 
 /// One node: recurse through a conjunction, parse an expression, or give up.
 fn invert(node: Option<&FilterNode>, context: Option<&str>) -> Inversion {
-    let Some(node) = node else { return Inversion::default() };
+    let Some(node) = node else {
+        return Inversion::default();
+    };
 
     match node {
         FilterNode::Expression(source) => match try_parse(source) {
             None => Inversion::unresolved(source.clone()),
             Some(ast) => invert_node(&ast, source, context),
         },
-        FilterNode::And(children) => merge_of(
-            children.iter().map(|child| invert(Some(child), context)),
-        ),
+        FilterNode::And(children) => {
+            merge_of(children.iter().map(|child| invert(Some(child), context)))
+        }
         // `or` and `not` are the two shapes a single value cannot express.
         FilterNode::Or(_) | FilterNode::Not(_) => Inversion::unresolved(describe(node)),
     }
@@ -824,7 +858,12 @@ fn invert_node(node: &Node, source: &str, context: Option<&str>) -> Inversion {
     let nothing = || Inversion::unresolved(source.to_string());
 
     // `a && b` is as invertible as its parts: both halves have to hold anyway.
-    if let NodeKind::Binary { op: crate::ast::BinOp::And, left, right } = &node.kind {
+    if let NodeKind::Binary {
+        op: crate::ast::BinOp::And,
+        left,
+        right,
+    } = &node.kind
+    {
         return merge([
             invert_node(left, source, context),
             invert_node(right, source, context),
@@ -832,12 +871,22 @@ fn invert_node(node: &Node, source: &str, context: Option<&str>) -> Inversion {
     }
 
     if let Some(tag) = as_call_tag(node) {
-        return Inversion { entries: vec![Entry { key: "tags".to_string(), value: tag }], unresolved: Vec::new() };
+        return Inversion {
+            entries: vec![Entry {
+                key: "tags".to_string(),
+                value: tag,
+            }],
+            unresolved: Vec::new(),
+        };
     }
 
     if let Some((property, needle)) = as_contains(node) {
-        let Some(key) = note_property_key(property) else { return nothing() };
-        let Some(args) = link_argument(needle) else { return nothing() };
+        let Some(key) = note_property_key(property) else {
+            return nothing();
+        };
+        let Some(args) = link_argument(needle) else {
+            return nothing();
+        };
 
         if is_host_file_name(args) {
             // `this.file.name` is the host note, so only a known host can be written.
@@ -849,14 +898,20 @@ fn invert_node(node: &Node, source: &str, context: Option<&str>) -> Inversion {
             };
             let link = format!("[[{}]]", strip_extension(basename(host)));
             return Inversion {
-                entries: vec![Entry { key, value: BasesValue::List(vec![BasesValue::String(link)]) }],
+                entries: vec![Entry {
+                    key,
+                    value: BasesValue::List(vec![BasesValue::String(link)]),
+                }],
                 unresolved: Vec::new(),
             };
         }
         if let NodeKind::Literal(Literal::String(target)) = &args.kind {
             let link = format!("[[{target}]]");
             return Inversion {
-                entries: vec![Entry { key, value: BasesValue::List(vec![BasesValue::String(link)]) }],
+                entries: vec![Entry {
+                    key,
+                    value: BasesValue::List(vec![BasesValue::String(link)]),
+                }],
                 unresolved: Vec::new(),
             };
         }
@@ -864,15 +919,26 @@ fn invert_node(node: &Node, source: &str, context: Option<&str>) -> Inversion {
     }
 
     // Equality is symmetric, so `status == "x"` and `"x" == status` agree.
-    if let NodeKind::Binary { op: crate::ast::BinOp::Eq, left, right } = &node.kind {
+    if let NodeKind::Binary {
+        op: crate::ast::BinOp::Eq,
+        left,
+        right,
+    } = &node.kind
+    {
         if let Some(key) = note_property_key(left) {
             if let Some(value) = plain_literal(right) {
-                return Inversion { entries: vec![Entry { key, value }], unresolved: Vec::new() };
+                return Inversion {
+                    entries: vec![Entry { key, value }],
+                    unresolved: Vec::new(),
+                };
             }
         }
         if let Some(key) = note_property_key(right) {
             if let Some(value) = plain_literal(left) {
-                return Inversion { entries: vec![Entry { key, value }], unresolved: Vec::new() };
+                return Inversion {
+                    entries: vec![Entry { key, value }],
+                    unresolved: Vec::new(),
+                };
             }
         }
     }
@@ -891,7 +957,11 @@ fn merge_of(parts: impl IntoIterator<Item = Inversion>) -> Inversion {
     for part in parts {
         out.unresolved.extend(part.unresolved);
         for entry in part.entries {
-            match out.entries.iter_mut().find(|existing| existing.key == entry.key) {
+            match out
+                .entries
+                .iter_mut()
+                .find(|existing| existing.key == entry.key)
+            {
                 None => out.entries.push(entry),
                 Some(existing) => match (&mut existing.value, entry.value) {
                     // Two list values CONJOIN: a tag filter and a `contains`
@@ -940,16 +1010,16 @@ fn describe_all(children: &[FilterNode]) -> String {
 fn note_property_key(node: &Node) -> Option<String> {
     match &node.kind {
         NodeKind::Identifier(name) => {
-            if RESERVED.contains(&name.as_str()) { None } else { Some(name.clone()) }
+            if RESERVED.contains(&name.as_str()) {
+                None
+            } else {
+                Some(name.clone())
+            }
         }
-        NodeKind::Member { object, property }
-            if matches!(&object.kind, NodeKind::Identifier(name) if name == "note") =>
-        {
+        NodeKind::Member { object, property } if matches!(&object.kind, NodeKind::Identifier(name) if name == "note") => {
             Some(property.clone())
         }
-        NodeKind::Index { object, index }
-            if matches!(&object.kind, NodeKind::Identifier(name) if name == "note") =>
-        {
+        NodeKind::Index { object, index } if matches!(&object.kind, NodeKind::Identifier(name) if name == "note") => {
             match &index.kind {
                 NodeKind::Literal(Literal::String(key)) => Some(key.clone()),
                 _ => None,
@@ -961,8 +1031,12 @@ fn note_property_key(node: &Node) -> Option<String> {
 
 /// `file.hasTag("x")`, as the value to write under `tags`.
 fn as_call_tag(node: &Node) -> Option<BasesValue> {
-    let NodeKind::Call { callee, args } = &node.kind else { return None };
-    let NodeKind::Member { object, property } = &callee.kind else { return None };
+    let NodeKind::Call { callee, args } = &node.kind else {
+        return None;
+    };
+    let NodeKind::Member { object, property } = &callee.kind else {
+        return None;
+    };
     if property != "hasTag"
         || !matches!(&object.kind, NodeKind::Identifier(name) if name == "file")
         || args.len() != 1
@@ -979,7 +1053,9 @@ fn as_call_tag(node: &Node) -> Option<BasesValue> {
 
 /// `link(<arg>)` with exactly one argument, returned.
 fn link_argument(node: &Node) -> Option<&Node> {
-    let NodeKind::Call { callee, args } = &node.kind else { return None };
+    let NodeKind::Call { callee, args } = &node.kind else {
+        return None;
+    };
     if !matches!(&callee.kind, NodeKind::Identifier(name) if name == "link") || args.len() != 1 {
         return None;
     }
@@ -988,8 +1064,12 @@ fn link_argument(node: &Node) -> Option<&Node> {
 
 /// `<prop>.contains(<needle>)`, for any receiver.
 fn as_contains(node: &Node) -> Option<(&Node, &Node)> {
-    let NodeKind::Call { callee, args } = &node.kind else { return None };
-    let NodeKind::Member { object, property } = &callee.kind else { return None };
+    let NodeKind::Call { callee, args } = &node.kind else {
+        return None;
+    };
+    let NodeKind::Member { object, property } = &callee.kind else {
+        return None;
+    };
     if property != "contains" || args.len() != 1 {
         return None;
     }
@@ -998,21 +1078,28 @@ fn as_contains(node: &Node) -> Option<(&Node, &Node)> {
 
 /// `this.file.name` or `this.file.basename` — the same note either way.
 fn is_host_file_name(node: &Node) -> bool {
-    let NodeKind::Member { object, property } = &node.kind else { return false };
+    let NodeKind::Member { object, property } = &node.kind else {
+        return false;
+    };
     if property != "name" && property != "basename" {
         return false;
     }
-    let NodeKind::Member { object: file, property } = &object.kind else { return false };
-    property == "file"
-        && matches!(&file.kind, NodeKind::Identifier(name) if name == "this")
+    let NodeKind::Member {
+        object: file,
+        property,
+    } = &object.kind
+    else {
+        return false;
+    };
+    property == "file" && matches!(&file.kind, NodeKind::Identifier(name) if name == "this")
 }
 
 /// A literal a frontmatter value can be written as. Links and dates are not.
 fn plain_literal(node: &Node) -> Option<BasesValue> {
     match &node.kind {
-        NodeKind::Literal(literal @ (Literal::String(_) | Literal::Number(_) | Literal::Bool(_))) => {
-            Some(literal.clone().into())
-        }
+        NodeKind::Literal(
+            literal @ (Literal::String(_) | Literal::Number(_) | Literal::Bool(_)),
+        ) => Some(literal.clone().into()),
         _ => None,
     }
 }
@@ -1027,8 +1114,11 @@ fn plain_literal(node: &Node) -> Option<BasesValue> {
 /// the shape a row is expected to have. Empty is deliberate — it can never
 /// satisfy a filter, so a seed can never make verification pass by accident.
 fn render_draft(path: &str, inversion: &Inversion, view: &BaseView) -> String {
-    let mut taken: Vec<String> =
-        inversion.entries.iter().map(|entry| entry.key.clone()).collect();
+    let mut taken: Vec<String> = inversion
+        .entries
+        .iter()
+        .map(|entry| entry.key.clone())
+        .collect();
     let mut entries = inversion.entries.clone();
     entries.extend(seed_columns(view, &mut taken));
 
@@ -1058,12 +1148,17 @@ fn seed_columns(view: &BaseView, taken: &mut Vec<String>) -> Vec<Entry> {
     let mut out = Vec::new();
     for id in view.order.iter().flatten() {
         let Some(ast) = try_parse(id) else { continue };
-        let Some(key) = note_property_key(&ast) else { continue };
+        let Some(key) = note_property_key(&ast) else {
+            continue;
+        };
         if taken.contains(&key) {
             continue;
         }
         taken.push(key.clone());
-        out.push(Entry { key, value: BasesValue::String(String::new()) });
+        out.push(Entry {
+            key,
+            value: BasesValue::String(String::new()),
+        });
     }
     out
 }
@@ -1084,7 +1179,10 @@ fn frontmatter_lines(entries: &[Entry], unresolved: &[String]) -> Vec<String> {
 fn yaml_entry(entry: &Entry) -> String {
     let mut mapping = Mapping::new();
     mapping.insert(Yaml::String(entry.key.clone()), yaml_value(&entry.value));
-    serde_yaml::to_string(&mapping).unwrap_or_default().trim_end_matches('\n').to_string()
+    serde_yaml::to_string(&mapping)
+        .unwrap_or_default()
+        .trim_end_matches('\n')
+        .to_string()
 }
 
 /// A Bases value as YAML frontmatter.
@@ -1118,11 +1216,7 @@ fn basename(path: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 /// The real vault with one unsaved note spliced in, and read-only.
-async fn vault_with_draft(
-    inner: Rc<dyn VaultSource>,
-    path: &str,
-    content: &str,
-) -> Rc<Vault> {
+async fn vault_with_draft(inner: Rc<dyn VaultSource>, path: &str, content: &str) -> Rc<Vault> {
     let vault = Rc::new(Vault::new(Box::new(DraftVaultSource {
         inner,
         path: path.to_string(),
@@ -1130,7 +1224,10 @@ async fn vault_with_draft(
     })));
     // The index always builds from a listing this backend can produce, so a
     // failure here is a real failure rather than an empty vault.
-    vault.load().await.expect("the verification vault indexes the real listing plus one draft");
+    vault
+        .load()
+        .await
+        .expect("the verification vault indexes the real listing plus one draft");
     vault
 }
 
@@ -1220,6 +1317,8 @@ fn read_only(what: &str) -> BasesError {
 /// An epoch-millisecond instant as `Date.prototype.toISOString()` spells it.
 pub fn iso_millis(millis: i64) -> String {
     DateTime::<Utc>::from_timestamp_millis(millis)
-        .unwrap_or_else(|| DateTime::<Utc>::from_timestamp_millis(0).expect("epoch is representable"))
+        .unwrap_or_else(|| {
+            DateTime::<Utc>::from_timestamp_millis(0).expect("epoch is representable")
+        })
         .to_rfc3339_opts(SecondsFormat::Millis, true)
 }

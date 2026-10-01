@@ -236,8 +236,9 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
             continue;
         }
 
-        return Err(BasesError::new(format!("Unexpected character \"{}\"", c as char))
-            .with_position(start));
+        return Err(
+            BasesError::new(format!("Unexpected character \"{}\"", c as char)).with_position(start),
+        );
     }
 
     tokens.push(Token {
@@ -338,9 +339,7 @@ fn read_regex(input: &str, start: usize) -> Result<(usize, RegexLiteral)> {
         }
     }
     if bytes.get(i) != Some(&b'/') {
-        return Err(
-            BasesError::new("Unterminated regular expression").with_position(start)
-        );
+        return Err(BasesError::new("Unterminated regular expression").with_position(start));
     }
     let body_end = i;
     i += 1;
@@ -351,8 +350,10 @@ fn read_regex(input: &str, start: usize) -> Result<(usize, RegexLiteral)> {
     let body = input[start + 1..body_end].to_string();
     let flags = input[flag_start..i].to_string();
     if !flags.is_empty() && !flags.chars().all(|c| "gimsuy".contains(c)) {
-        return Err(BasesError::new(format!("Invalid regular expression flags \"{flags}\""))
-            .with_position(start));
+        return Err(
+            BasesError::new(format!("Invalid regular expression flags \"{flags}\""))
+                .with_position(start),
+        );
     }
     // Compile once here so an invalid pattern fails at lex time, as it does in
     // the TypeScript original, rather than at the point of use.

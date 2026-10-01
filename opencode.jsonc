@@ -1,51 +1,25 @@
 {
-  // Project-scoped opencode config. Merged with (not replaced by) the global
-  // config in ~/.config/opencode/opencode.json, and taking precedence for
-  // conflicting keys. See https://opencode.ai/docs/config/#locations
   "$schema": "https://opencode.ai/config.json",
-
-  // Formatting on write.
-  //
-  // `formatter` is the ONLY formatting key this schema has. There is no
-  // `linter` key: the config schema sets `additionalProperties: false`, so
-  // writing one would be a schema violation. Linting is wired in through
-  // package.json scripts and CI instead -- which is also what opencode's own
-  // guidance recommends, because it feeds diagnostics back into the agent loop
-  // rather than through a language server. See https://opencode.ai/docs/lsp/#best-practices
-  //
-  // Named explicitly rather than left as `true`, so the exact command and the
-  // file set are visible here instead of depending on opencode's `findUp`
-  // auto-detection.
   "formatter": {
-    // `check --write` rather than the built-in `format --write`, so safe lint
-    // fixes and import sorting are applied on every agent write too.
     "biome": {
       "command": ["bunx", "biome", "check", "--write", "$FILE"],
       "environment": { "BUN_BE_BUN": "1" },
-      // Scoped to TypeScript on purpose. Biome also formats .json, .yaml, .md
-      // and .xml, but this repo has surfaces where that would be wrong: the
-      // testing vault's notes are fixture content whose byte counts are
-      // asserted (file.size), and docs/*.md is prose.
-      "extensions": [".ts", ".tsx", ".mts", ".cts"]
+      "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".json", ".jsonc"]
     },
-    // Nothing else should run. Biome must not be raced by a second formatter.
+    "rustfmt": {
+      "command": ["rustfmt", "--edition", "2021", "$FILE"],
+      "extensions": [".rs"]
+    },
     "prettier": { "disabled": true }
   },
-
-  // Linting. This is where the "linter" lives -- there is no `linter` key in
-  // this schema, so a linter is wired in as a language server instead.
-  //
-  //   biome     lint + format diagnostics, straight from biome.json, so the
-  //             agent sees exactly the rules CI enforces with no second config
-  //   typescript type errors. Kept deliberately: the expression engine leans on
-  //             `as never` casts, so a silent type regression is exactly the
-  //             failure the parity suite would not catch.
-  //
-  // opencode's docs note LSP servers can get out of sync and cost memory
-  // (https://opencode.ai/docs/lsp/#best-practices). Both of these are cheap and
-  // deterministic here, and `bun run verify` remains the authoritative gate.
   "lsp": {
-    "biome": {},
-    "typescript": {}
+    "biome": {
+      "command": ["biome", "lsp-proxy", "--stdio"],
+      "extensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]
+    },
+    "rust": {
+      "command": ["rust-analyzer"],
+      "extensions": [".rs"]
+    }
   }
 }

@@ -39,7 +39,9 @@ struct Cli {
 
 impl Cli {
     fn new() -> Self {
-        Self { binary: std::env::var("OBSIDIAN_BIN").unwrap_or_else(|_| "obsidian".into()) }
+        Self {
+            binary: std::env::var("OBSIDIAN_BIN").unwrap_or_else(|_| "obsidian".into()),
+        }
     }
 
     /// Whether the CLI can answer a real query.
@@ -178,7 +180,9 @@ fn compare_rows(ours: &[serde_json::Value], theirs: &[serde_json::Value], label:
 fn the_cli_is_detected_as_unavailable_when_its_bridge_is_dead() {
     // Guards the guard. A binary that exits 0 with empty stdout must NOT read as
     // available, because that turns every parity assertion into a no-op.
-    let cli = Cli { binary: "true".into() }; // `true` exits 0 and prints nothing.
+    let cli = Cli {
+        binary: "true".into(),
+    }; // `true` exits 0 and prints nothing.
     assert!(
         !cli.available(),
         "an empty response must not count as an available CLI"
@@ -197,11 +201,16 @@ fn our_json_matches_the_cli() {
         let base = futures_block_on(resolver.load_base("AllNotes.base")).expect("parses");
         let result = futures_block_on(resolver.query(
             "AllNotes.base",
-            &QueryOptions { view: Some(view.into()), context: None },
+            &QueryOptions {
+                view: Some(view.into()),
+                context: None,
+            },
         ))
         .expect("queries");
         let ours = bases_mcp::service::json_rows(&base, &result, &[]);
-        let theirs = cli.query_json("AllNotes.base", Some(view)).expect("the CLI answers");
+        let theirs = cli
+            .query_json("AllNotes.base", Some(view))
+            .expect("the CLI answers");
         compare_rows(&ours, &theirs, &format!("AllNotes.base [{view}]"));
     }
 }
@@ -216,11 +225,20 @@ fn our_markdown_matches_the_cli_byte_for_byte() {
     for view in ["All", "ByPriority", "AsList"] {
         let ours = futures_block_on(resolver.render(
             "AllNotes.base",
-            &QueryOptions { view: Some(view.into()), context: None },
+            &QueryOptions {
+                view: Some(view.into()),
+                context: None,
+            },
         ))
         .expect("renders");
-        let theirs = cli.query_markdown("AllNotes.base", Some(view)).expect("the CLI answers");
-        assert_eq!(ours.trim(), theirs.trim(), "AllNotes.base [{view}] markdown");
+        let theirs = cli
+            .query_markdown("AllNotes.base", Some(view))
+            .expect("the CLI answers");
+        assert_eq!(
+            ours.trim(),
+            theirs.trim(),
+            "AllNotes.base [{view}] markdown"
+        );
     }
 }
 
@@ -233,7 +251,9 @@ fn the_cli_cannot_bind_this_and_returns_an_empty_result() {
     // Asserted as the DIVERGENCE. If a future Obsidian teaches the CLI to bind
     // `this`, this fails and the registry needs updating — which is the intended
     // signal, not a flake.
-    let theirs = cli.query_json("Tickets.base", Some("All")).expect("the CLI answers");
+    let theirs = cli
+        .query_json("Tickets.base", Some("All"))
+        .expect("the CLI answers");
     assert!(
         theirs.is_empty(),
         "the CLI returned rows for a `this`-scoped base: {theirs:?}"
@@ -245,14 +265,20 @@ fn we_scope_to_the_host_note_where_the_cli_returns_nothing() {
     let resolver = resolver();
     let some = futures_block_on(resolver.query(
         "Tickets.base",
-        &QueryOptions { view: Some("All".into()), context: Some("Projects/SomeProject.md".into()) },
+        &QueryOptions {
+            view: Some("All".into()),
+            context: Some("Projects/SomeProject.md".into()),
+        },
     ))
     .expect("queries");
     assert_eq!(some.rows.len(), 2);
 
     let other = futures_block_on(resolver.query(
         "Tickets.base",
-        &QueryOptions { view: Some("All".into()), context: Some("Projects/OtherProject.md".into()) },
+        &QueryOptions {
+            view: Some("All".into()),
+            context: Some("Projects/OtherProject.md".into()),
+        },
     ))
     .expect("queries");
     assert_eq!(other.rows.len(), 1);
@@ -275,7 +301,10 @@ fn the_flat_surface_is_the_one_we_compare() {
     let resolver = resolver();
     let result = futures_block_on(resolver.query(
         "AllNotes.base",
-        &QueryOptions { view: Some("AsList".into()), context: None },
+        &QueryOptions {
+            view: Some("AsList".into()),
+            context: None,
+        },
     ))
     .expect("queries");
     let base = futures_block_on(resolver.load_base("AllNotes.base")).expect("parses");
@@ -285,7 +314,10 @@ fn the_flat_surface_is_the_one_we_compare() {
         bases_mcp::render::markdown::render_markdown(&base, &result, RenderStyle::Structured)
             .expect("renders");
     assert!(flat.starts_with('|'), "flat must be a table");
-    assert_ne!(flat, structured, "the two surfaces must not be the same function");
+    assert_ne!(
+        flat, structured,
+        "the two surfaces must not be the same function"
+    );
 }
 
 /// The base is loaded and its views read, so a parse regression surfaces here

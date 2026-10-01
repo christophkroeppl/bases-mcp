@@ -276,7 +276,10 @@ pub struct WikiLink {
 
 impl WikiLink {
     pub fn span(&self) -> Span {
-        Span { start: self.start, end: self.end }
+        Span {
+            start: self.start,
+            end: self.end,
+        }
     }
 }
 
@@ -310,7 +313,10 @@ pub struct ParsedNote {
 
 /// Segment kinds that occupy a Base region: an embed or a fence.
 pub fn is_base_region(segment: &Segment) -> bool {
-    matches!(segment.kind(), SegmentKind::BaseEmbed | SegmentKind::BaseFence)
+    matches!(
+        segment.kind(),
+        SegmentKind::BaseEmbed | SegmentKind::BaseFence
+    )
 }
 
 /// Segment kinds that are a `.base` embed rather than an inline fence.
@@ -339,7 +345,10 @@ pub fn parse_note(path: impl Into<String>, text: &str) -> ParsedNote {
         let (parsed, is_malformed) = parse_frontmatter(block.yaml);
         properties = Rc::new(parsed);
         malformed = is_malformed;
-        let span = Span { start: 0, end: block.raw.len() };
+        let span = Span {
+            start: 0,
+            end: block.raw.len(),
+        };
         let body = SegmentBody::Frontmatter(Frontmatter {
             data: Rc::clone(&properties),
             malformed,
@@ -366,7 +375,10 @@ pub fn parse_note(path: impl Into<String>, text: &str) -> ParsedNote {
                 }
                 _ => SegmentBody::Prose,
             };
-            let span = Span { start: pos, end: fence.end };
+            let span = Span {
+                start: pos,
+                end: fence.end,
+            };
             segments.push(Segment::slice(text, span, body));
             pos = fence.end;
             continue;
@@ -374,7 +386,14 @@ pub fn parse_note(path: impl Into<String>, text: &str) -> ParsedNote {
 
         // Prose up to the next fence that starts a line.
         let next = find_next_fence(text, pos);
-        segments.push(Segment::slice(text, Span { start: pos, end: next }, SegmentBody::Prose));
+        segments.push(Segment::slice(
+            text,
+            Span {
+                start: pos,
+                end: next,
+            },
+            SegmentBody::Prose,
+        ));
         pos = next;
     }
 
@@ -416,21 +435,38 @@ pub fn split_base_embeds(segments: &[Segment]) -> Vec<Segment> {
         for caps in base_embed_re().captures_iter(raw) {
             let whole = caps.get(0).expect("group 0 of a match always participates");
             if whole.start() > cursor {
-                push_prose(&mut out, &raw[cursor..whole.start()], segment.start() + cursor, segment.start() + whole.start());
+                push_prose(
+                    &mut out,
+                    &raw[cursor..whole.start()],
+                    segment.start() + cursor,
+                    segment.start() + whole.start(),
+                );
             }
             let subpath = caps.get(3).and_then(|m| m.as_str().strip_prefix('#'));
             out.push(Segment::new(
                 whole.as_str().to_string(),
-                Span { start: segment.start() + whole.start(), end: segment.start() + whole.end() },
+                Span {
+                    start: segment.start() + whole.start(),
+                    end: segment.start() + whole.end(),
+                },
                 SegmentBody::BaseEmbed(BaseEmbed {
-                    base_path: caps.get(2).expect("group 2 is the target").as_str().to_string(),
+                    base_path: caps
+                        .get(2)
+                        .expect("group 2 is the target")
+                        .as_str()
+                        .to_string(),
                     view_name: subpath.filter(|s| !s.is_empty()).map(str::to_string),
                 }),
             ));
             cursor = whole.end();
         }
         if cursor < raw.len() {
-            push_prose(&mut out, &raw[cursor..], segment.start() + cursor, segment.end());
+            push_prose(
+                &mut out,
+                &raw[cursor..],
+                segment.start() + cursor,
+                segment.end(),
+            );
         }
     }
     out
@@ -438,7 +474,11 @@ pub fn split_base_embeds(segments: &[Segment]) -> Vec<Segment> {
 
 /// A prose segment carrying `raw`, which spans `[start, end)` of its note.
 fn push_prose(out: &mut Vec<Segment>, raw: &str, start: usize, end: usize) {
-    out.push(Segment::new(raw.to_string(), Span { start, end }, SegmentBody::Prose));
+    out.push(Segment::new(
+        raw.to_string(),
+        Span { start, end },
+        SegmentBody::Prose,
+    ));
 }
 
 /// Merge prose that ended up split, so a note reads as the blocks it has.
@@ -454,7 +494,9 @@ fn merge_adjacent_prose(segments: Vec<Segment>) -> Vec<Segment> {
             merged.push(segment);
             continue;
         }
-        let prev = merged.last_mut().expect("there is a previous segment to join");
+        let prev = merged
+            .last_mut()
+            .expect("there is a previous segment to join");
         prev.raw.push_str(&segment.raw);
         prev.span.end = segment.end();
     }
@@ -506,7 +548,10 @@ fn yaml_properties(value: &Yaml) -> Properties {
     let Yaml::Mapping(entries) = value else {
         return Properties::new();
     };
-    entries.iter().map(|(key, item)| (yaml_key(key), yaml_value(item))).collect()
+    entries
+        .iter()
+        .map(|(key, item)| (yaml_key(key), yaml_value(item)))
+        .collect()
 }
 
 /// A YAML value as the value lattice reads it.
@@ -550,7 +595,8 @@ fn yaml_key(key: &Yaml) -> String {
             BasesValue::Number(n) => crate::value::format_number(n),
             _ => "null".to_string(),
         },
-        other => serde_yaml::to_string(other).map_or_else(|_| String::new(), |s| s.trim_end().to_string()),
+        other => serde_yaml::to_string(other)
+            .map_or_else(|_| String::new(), |s| s.trim_end().to_string()),
     }
 }
 
@@ -582,7 +628,10 @@ fn match_fence(text: &str, pos: usize) -> Option<Fence> {
     let bytes = text.as_bytes();
     let line_start = line_start_at(bytes, pos);
     // A fence opens at a line start, never mid-line.
-    if bytes[line_start..pos].iter().any(|&b| !b.is_ascii_whitespace()) {
+    if bytes[line_start..pos]
+        .iter()
+        .any(|&b| !b.is_ascii_whitespace())
+    {
         return None;
     }
     let line = Lines::from(bytes, line_start).next()?;
@@ -596,7 +645,11 @@ fn match_fence(text: &str, pos: usize) -> Option<Fence> {
             info,
         }),
         // An unclosed fence runs to EOF, matching Obsidian.
-        None => Some(Fence { body: text[body_start..].to_string(), end: bytes.len(), info }),
+        None => Some(Fence {
+            body: text[body_start..].to_string(),
+            end: bytes.len(),
+            info,
+        }),
     }
 }
 
@@ -609,7 +662,8 @@ fn open_fence(line: &str) -> Option<(usize, String)> {
     let caps = open_fence_re().captures(line)?;
     Some((
         caps.get(1)?.as_str().len(),
-        caps.get(2).map_or_else(String::new, |m| m.as_str().trim().to_string()),
+        caps.get(2)
+            .map_or_else(String::new, |m| m.as_str().trim().to_string()),
     ))
 }
 
@@ -618,7 +672,10 @@ fn open_fence(line: &str) -> Option<(usize, String)> {
 fn find_closing_fence(bytes: &[u8], from: usize, ticks: usize) -> Option<Span> {
     Lines::from(bytes, from)
         .find(|line| is_closing_fence(&bytes[line.start..line.content_end], ticks))
-        .map(|line| Span { start: line.start, end: line.content_end })
+        .map(|line| Span {
+            start: line.start,
+            end: line.content_end,
+        })
 }
 
 fn is_closing_fence(line: &[u8], ticks: usize) -> bool {
@@ -684,7 +741,10 @@ pub fn fence_attrs(info: &str) -> BTreeMap<String, String> {
 /// ```` ```base-rendered path="Tickets.base" ```` is a rendered region, not
 /// prose, and a language that swallowed `path="..."` would match neither.
 fn fence_language(info: &str) -> String {
-    info.split_whitespace().next().unwrap_or_default().to_lowercase()
+    info.split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_lowercase()
 }
 
 // ---------------------------------------------------------------------------
@@ -725,13 +785,20 @@ pub fn extract_links(text: &str) -> Vec<WikiLink> {
         }
         let href = caps.get(2).expect("group 2 is the href").as_str();
         // External and in-page links are not vault references.
-        if external_scheme_re().is_match(href) || href.starts_with('#') || href.starts_with("mailto:") {
+        if external_scheme_re().is_match(href)
+            || href.starts_with('#')
+            || href.starts_with("mailto:")
+        {
             continue;
         }
         out.push(WikiLink {
             target: href.strip_suffix(".md").unwrap_or(href).to_string(),
             subpath: None,
-            display: caps.get(1).map(|m| m.as_str()).filter(|text| !text.is_empty()).map(str::to_string),
+            display: caps
+                .get(1)
+                .map(|m| m.as_str())
+                .filter(|text| !text.is_empty())
+                .map(str::to_string),
             embedded: false,
             start: whole.start(),
             end: whole.end(),
@@ -824,7 +891,9 @@ fn strip_fenced_blocks(text: &str) -> String {
         if fence_run(&bytes[line.start..line.content_end]).0 < 3 {
             continue;
         }
-        let end = Lines::from(bytes, next).next().map_or(bytes.len(), |first| first.content_end);
+        let end = Lines::from(bytes, next)
+            .next()
+            .map_or(bytes.len(), |first| first.content_end);
         out.push_str(&text[cursor..line.start]);
         out.push_str(&blank_out(&bytes[line.start..end]));
         cursor = end;
@@ -881,7 +950,10 @@ struct Lines<'a> {
 impl<'a> Lines<'a> {
     /// Every line from `start` on.
     fn from(bytes: &'a [u8], start: usize) -> Self {
-        Lines { bytes, next: Some(start) }
+        Lines {
+            bytes,
+            next: Some(start),
+        }
     }
 
     /// The lines whose start is at or after `pos`: `pos` itself when it begins a
@@ -903,9 +975,17 @@ impl Iterator for Lines<'_> {
             Some(offset) => start + offset,
             None => self.bytes.len(),
         };
-        let content_end = if end > start && self.bytes[end - 1] == b'\r' { end - 1 } else { end };
+        let content_end = if end > start && self.bytes[end - 1] == b'\r' {
+            end - 1
+        } else {
+            end
+        };
         self.next = (end < self.bytes.len()).then_some(end + 1);
-        Some(Line { start, content_end, next: self.next })
+        Some(Line {
+            start,
+            content_end,
+            next: self.next,
+        })
     }
 }
 
@@ -919,7 +999,9 @@ fn line_start_at(bytes: &[u8], pos: usize) -> usize {
 
 /// The start of the line after the one containing `pos`, or the end of the note.
 fn line_after(bytes: &[u8], pos: usize) -> usize {
-    Lines::from(bytes, pos).nth(1).map_or(bytes.len(), |line| line.start)
+    Lines::from(bytes, pos)
+        .nth(1)
+        .map_or(bytes.len(), |line| line.start)
 }
 
 // ---------------------------------------------------------------------------
@@ -942,7 +1024,10 @@ pattern!(
     r"^(?:\u{FEFF})?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)"
 );
 pattern!(open_fence_re, r"^(`{3,})[ \t]*([^`\n]*)[ \t]*$");
-pattern!(fence_attr_re, r#"([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*"([^"]*)""#);
+pattern!(
+    fence_attr_re,
+    r#"([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*"([^"]*)""#
+);
 pattern!(wiki_link_re, r"(!)?\[\[([^\]\n]+?)\]\]");
 pattern!(md_link_re, r#"\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)"#);
 pattern!(tag_re, r"#([A-Za-z0-9_][A-Za-z0-9_/-]*)");

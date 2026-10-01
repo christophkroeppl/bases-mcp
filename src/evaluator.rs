@@ -17,9 +17,7 @@ use crate::ast::{BinOp, Node, NodeKind, UnaryOp};
 use crate::error::{BasesError, MissingThisContext, Result};
 use crate::parser::parse;
 use crate::stdlib::{get_global, get_method, MethodFn};
-use crate::value::{
-    compare, values_equal, BasesDate, BasesValue, Duration, FileValue,
-};
+use crate::value::{compare, values_equal, BasesDate, BasesValue, Duration, FileValue};
 
 /// The host note `this` binds to.
 #[derive(Debug, Clone)]
@@ -120,8 +118,9 @@ pub fn find_this_reference(node: &Node) -> Option<String> {
             find_this_reference(left).or_else(|| find_this_reference(right))
         }
         NodeKind::Unary { operand, .. } => find_this_reference(operand),
-        NodeKind::Call { callee, args } => find_this_reference(callee)
-            .or_else(|| args.iter().find_map(find_this_reference)),
+        NodeKind::Call { callee, args } => {
+            find_this_reference(callee).or_else(|| args.iter().find_map(find_this_reference))
+        }
         NodeKind::Index { object, index } => {
             find_this_reference(object).or_else(|| find_this_reference(index))
         }
@@ -155,10 +154,9 @@ fn resolve_identifier(name: &str, ctx: &EvalContext) -> Result<BasesValue> {
 
     Ok(match name {
         "this" => {
-            let tc = ctx
-                .this_value
-                .as_ref()
-                .ok_or_else(|| MissingThisContext { base: "this".into() })?;
+            let tc = ctx.this_value.as_ref().ok_or_else(|| MissingThisContext {
+                base: "this".into(),
+            })?;
             BasesValue::File(Rc::new(this_as_file(tc)))
         }
         "file" => BasesValue::File(Rc::new(ctx.file.clone())),
@@ -184,14 +182,17 @@ fn namespace_map(map: &BTreeMap<String, BasesValue>) -> BasesValue {
 
 fn resolve_property_path(path: &str, ctx: &EvalContext) -> Result<BasesValue> {
     let (head, rest) = path.split_once('.').unwrap_or((path, ""));
-    let parts: Vec<&str> = if rest.is_empty() { Vec::new() } else { rest.split('.').collect() };
+    let parts: Vec<&str> = if rest.is_empty() {
+        Vec::new()
+    } else {
+        rest.split('.').collect()
+    };
 
     Ok(match head {
         "this" => {
-            let tc = ctx
-                .this_value
-                .as_ref()
-                .ok_or_else(|| MissingThisContext { base: path.to_string() })?;
+            let tc = ctx.this_value.as_ref().ok_or_else(|| MissingThisContext {
+                base: path.to_string(),
+            })?;
             // `this.note.X` is note-scoped; `this.file.X` is file-scoped.
             if parts.first() == Some(&"note") {
                 lookup_path(&namespace_map(&tc.note), &parts[1..])
@@ -254,7 +255,11 @@ pub fn read_member(target: &BasesValue, name: &str) -> BasesValue {
     match target {
         BasesValue::Null => BasesValue::Null,
         BasesValue::File(f) => read_file_member(f, name),
-        BasesValue::Link { target: t, display, resolved } => match name {
+        BasesValue::Link {
+            target: t,
+            display,
+            resolved,
+        } => match name {
             "target" => BasesValue::String(t.clone()),
             "display" => match display {
                 Some(d) => BasesValue::String(d.clone()),
@@ -358,12 +363,7 @@ fn evaluate_unary(op: UnaryOp, operand: &Node, ctx: &EvalContext) -> Result<Base
     })
 }
 
-fn evaluate_binary(
-    op: BinOp,
-    left: &Node,
-    right: &Node,
-    ctx: &EvalContext,
-) -> Result<BasesValue> {
+fn evaluate_binary(op: BinOp, left: &Node, right: &Node, ctx: &EvalContext) -> Result<BasesValue> {
     // Short-circuit before evaluating the right side.
     if op == BinOp::And {
         let l = evaluate(left, ctx)?;
@@ -409,7 +409,12 @@ fn evaluate_binary(
         BinOp::Mul => multiply(&l, &r)?,
         BinOp::Div => divide(&l, &r)?,
         BinOp::Rem => modulo(&l, &r)?,
-        _ => return Err(BasesError::new(format!("Unsupported operator \"{}\"", op.as_str())).with_construct(op.as_str())),
+        _ => {
+            return Err(
+                BasesError::new(format!("Unsupported operator \"{}\"", op.as_str()))
+                    .with_construct(op.as_str()),
+            )
+        }
     })
 }
 
@@ -417,10 +422,16 @@ fn add(a: &BasesValue, b: &BasesValue) -> Result<BasesValue> {
     // Date arithmetic wins over string concatenation, so `date + "1d"` is a date
     // rather than the literal text of a date followed by "1d".
     if matches!(a, BasesValue::Date(_)) || matches!(b, BasesValue::Date(_)) {
-        return apply_duration_or_number(a, b, |d, n| BasesValue::Date(BasesDate::from_millis(d.millis() + n)));
+        return apply_duration_or_number(a, b, |d, n| {
+            BasesValue::Date(BasesDate::from_millis(d.millis() + n))
+        });
     }
     if matches!(a, BasesValue::String(_)) || matches!(b, BasesValue::String(_)) {
-        return Ok(BasesValue::String(format!("{}{}", a.to_display_string(), b.to_display_string())));
+        return Ok(BasesValue::String(format!(
+            "{}{}",
+            a.to_display_string(),
+            b.to_display_string()
+        )));
     }
     if matches!(a, BasesValue::Duration(_)) || matches!(b, BasesValue::Duration(_)) {
         return Ok(combine_durations(a, b, |x, y| x + y));
@@ -439,10 +450,14 @@ fn subtract(a: &BasesValue, b: &BasesValue) -> Result<BasesValue> {
         // milliseconds. We return a Duration AND make `number()` work on it, so
         // both the documented `((a-b)/86400000).round()` and the real-world
         // `(a-b).days.round(0)` idioms work. See docs/divergences.md.
-        return Ok(BasesValue::Duration(Duration::from_millis(x.millis() - y.millis())));
+        return Ok(BasesValue::Duration(Duration::from_millis(
+            x.millis() - y.millis(),
+        )));
     }
     if matches!(a, BasesValue::Date(_)) {
-        return apply_duration_or_number(a, b, |d, n| BasesValue::Date(BasesDate::from_millis(d.millis() - n)));
+        return apply_duration_or_number(a, b, |d, n| {
+            BasesValue::Date(BasesDate::from_millis(d.millis() - n))
+        });
     }
     if matches!(a, BasesValue::Duration(_)) {
         return Ok(combine_durations(a, b, |x, y| x - y));
@@ -525,7 +540,9 @@ fn apply_duration_or_number(
     f: impl Fn(BasesDate, i64) -> BasesValue,
 ) -> Result<BasesValue> {
     let Some(d) = coerce_date(date) else {
-        return Err(BasesError::new("Expected a date on the left of an arithmetic operator"));
+        return Err(BasesError::new(
+            "Expected a date on the left of an arithmetic operator",
+        ));
     };
     match other {
         BasesValue::Duration(dur) => {
@@ -596,14 +613,16 @@ fn evaluate_call(callee: &Node, args: &[Node], ctx: &EvalContext) -> Result<Base
                 let mut bindings = call.ctx.bindings.clone().unwrap_or_default();
                 bindings.insert("value".into(), call.value.clone());
                 bindings.insert("index".into(), BasesValue::Number(call.index as f64));
-                bindings.insert(
-                    "acc".into(),
-                    call.acc.cloned().unwrap_or(BasesValue::Null),
-                );
-                let inner = EvalContext { bindings: Some(bindings), ..call.ctx.clone() };
+                bindings.insert("acc".into(), call.acc.cloned().unwrap_or(BasesValue::Null));
+                let inner = EvalContext {
+                    bindings: Some(bindings),
+                    ..call.ctx.clone()
+                };
                 evaluate(call.body, &inner)
             });
-            return crate::stdlib::run_higher_order(&target, property, arity, runner, body, seed, ctx);
+            return crate::stdlib::run_higher_order(
+                &target, property, arity, runner, body, seed, ctx,
+            );
         }
 
         let mut evaluated = Vec::with_capacity(args.len());
@@ -629,7 +648,9 @@ fn evaluate_call(callee: &Node, args: &[Node], ctx: &EvalContext) -> Result<Base
         );
     }
 
-    Err(BasesError::new("Attempted to call a value that is not a function"))
+    Err(BasesError::new(
+        "Attempted to call a value that is not a function",
+    ))
 }
 
 fn evaluate_member(object: &Node, property: &str, ctx: &EvalContext) -> Result<BasesValue> {
@@ -653,14 +674,18 @@ fn evaluate_index(object: &Node, index: &Node, ctx: &EvalContext) -> Result<Base
 fn index_into(target: &BasesValue, index: &BasesValue) -> BasesValue {
     match target {
         BasesValue::List(items) => {
-            let Some(i) = to_number_loose(index) else { return BasesValue::Null };
+            let Some(i) = to_number_loose(index) else {
+                return BasesValue::Null;
+            };
             if i < 0.0 || i.fract() != 0.0 {
                 return BasesValue::Null;
             }
             items.get(i as usize).cloned().unwrap_or(BasesValue::Null)
         }
         BasesValue::String(s) => {
-            let Some(i) = to_number_loose(index) else { return BasesValue::Null };
+            let Some(i) = to_number_loose(index) else {
+                return BasesValue::Null;
+            };
             // A string indexes by character, not by byte, so an emoji is one index.
             match s.chars().nth(i.max(0.0) as usize) {
                 Some(c) => BasesValue::String(c.to_string()),
@@ -668,12 +693,10 @@ fn index_into(target: &BasesValue, index: &BasesValue) -> BasesValue {
             }
         }
         // `file["name"]` is a documented spelling of `file.name`.
-        BasesValue::File(_) | BasesValue::Link { .. } | BasesValue::Namespace(_) => {
-            match index {
-                BasesValue::String(name) => read_member(target, name),
-                _ => BasesValue::Null,
-            }
-        }
+        BasesValue::File(_) | BasesValue::Link { .. } | BasesValue::Namespace(_) => match index {
+            BasesValue::String(name) => read_member(target, name),
+            _ => BasesValue::Null,
+        },
         _ => BasesValue::Null,
     }
 }

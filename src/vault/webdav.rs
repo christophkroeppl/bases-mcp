@@ -40,7 +40,7 @@ use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone};
 
 use crate::error::{BasesError, Result};
 use crate::vault::fs::content_hash;
-use crate::vault::source::{FileStat, SourceKind, VaultSource, is_indexable};
+use crate::vault::source::{is_indexable, FileStat, SourceKind, VaultSource};
 
 /// The media type a `PROPFIND` request body is sent as.
 const XML_CONTENT_TYPE: &str = r#"application/xml; charset="utf-8""#;
@@ -190,7 +190,11 @@ pub struct DavResponse {
 
 impl DavResponse {
     pub fn new(status: u16, status_text: &str, body: Vec<u8>) -> Self {
-        Self { status, status_text: status_text.to_string(), body }
+        Self {
+            status,
+            status_text: status_text.to_string(),
+            body,
+        }
     }
 
     /// The body as text, lossily.
@@ -223,9 +227,11 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     pub fn new() -> Result<Self> {
-        Ok(Self { client: reqwest::Client::builder().build().map_err(|e| {
-            BasesError::new(format!("WebDAV: could not build an HTTP client: {e}"))
-        })? })
+        Ok(Self {
+            client: reqwest::Client::builder().build().map_err(|e| {
+                BasesError::new(format!("WebDAV: could not build an HTTP client: {e}"))
+            })?,
+        })
     }
 }
 
@@ -234,18 +240,32 @@ impl WebdavTransport for HttpTransport {
     async fn send(&self, request: DavRequest) -> Result<DavResponse> {
         let method = reqwest::Method::from_bytes(request.method.as_str().as_bytes())
             .map_err(|e| BasesError::new(format!("WebDAV: {e}")))?;
-        let mut builder = self.client.request(method, &request.url).timeout(request.timeout);
+        let mut builder = self
+            .client
+            .request(method, &request.url)
+            .timeout(request.timeout);
         for (name, value) in &request.headers {
             builder = builder.header(name.as_str(), value.as_str());
         }
         if let Some(body) = request.body {
             builder = builder.body(body);
         }
-        let response = builder.send().await.map_err(|e| BasesError::new(e.to_string()))?;
+        let response = builder
+            .send()
+            .await
+            .map_err(|e| BasesError::new(e.to_string()))?;
         let status = response.status();
         let status_text = status.canonical_reason().unwrap_or_default().to_string();
-        let body = response.bytes().await.map_err(|e| BasesError::new(e.to_string()))?.to_vec();
-        Ok(DavResponse { status: status.as_u16(), status_text, body })
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| BasesError::new(e.to_string()))?
+            .to_vec();
+        Ok(DavResponse {
+            status: status.as_u16(),
+            status_text,
+            body,
+        })
     }
 }
 
@@ -461,22 +481,29 @@ fn is_success(status: Option<&str>) -> bool {
 }
 
 fn code_of(digits: &[char]) -> Option<u16> {
-    digits
-        .iter()
-        .all(char::is_ascii_digit)
-        .then(|| digits.iter().fold(0u16, |code, d| code * 10 + d.to_digit(10).unwrap_or(0) as u16))
+    digits.iter().all(char::is_ascii_digit).then(|| {
+        digits.iter().fold(0u16, |code, d| {
+            code * 10 + d.to_digit(10).unwrap_or(0) as u16
+        })
+    })
 }
-
 
 /// A `getcontentlength` as a byte count, or `None` if it is not one.
 fn content_length(value: Option<&String>) -> Option<u64> {
     let raw = trimmed(value)?;
-    raw.parse::<f64>().ok().filter(|size| size.is_finite()).map(|size| size as u64)
+    raw.parse::<f64>()
+        .ok()
+        .filter(|size| size.is_finite())
+        .map(|size| size as u64)
 }
 
 fn trimmed(value: Option<&String>) -> Option<String> {
     let text = value?.trim();
-    if text.is_empty() { None } else { Some(text.to_string()) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -489,7 +516,11 @@ fn trimmed(value: Option<&String>) -> Option<String> {
 /// filesystem walk and the in-memory source both call it, and an empty string in
 /// prose reads as a missing value rather than as `/`.
 fn at_root(path: &str) -> &str {
-    if path.is_empty() { "/" } else { path }
+    if path.is_empty() {
+        "/"
+    } else {
+        path
+    }
 }
 
 /// The vault-relative path a `DAV:href` names.
@@ -557,9 +588,16 @@ fn resource_url(base_url: &str, path: &str, collection: bool) -> String {
     if path.is_empty() {
         return format!("{base_url}/");
     }
-    let encoded =
-        path.split('/').map(encode_segment).collect::<Vec<_>>().join("/");
-    if collection { format!("{base_url}/{encoded}/") } else { format!("{base_url}/{encoded}") }
+    let encoded = path
+        .split('/')
+        .map(encode_segment)
+        .collect::<Vec<_>>()
+        .join("/");
+    if collection {
+        format!("{base_url}/{encoded}/")
+    } else {
+        format!("{base_url}/{encoded}")
+    }
 }
 
 /// The pathname of an href that may or may not be a full URL.
@@ -594,9 +632,9 @@ fn decode_segment(segment: &str, origin: &str) -> Result<String> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' {
-            let escape = bytes.get(i + 1..i + 3).and_then(|pair| {
-                Some(hex_digit(pair[0])? * 16 + hex_digit(pair[1])?)
-            });
+            let escape = bytes
+                .get(i + 1..i + 3)
+                .and_then(|pair| Some(hex_digit(pair[0])? * 16 + hex_digit(pair[1])?));
             match escape {
                 Some(byte) => {
                     out.push(byte);
@@ -749,14 +787,12 @@ impl Multistatus {
         let mut walk = DavReader::default();
         let mut buffer = Vec::new();
         loop {
-            let event = reader
-                .read_event_into(&mut buffer)
-                .map_err(|error| {
-                    BasesError::new(format!(
-                        "WebDAV PROPFIND returned a body that is not well-formed XML: {error}"
-                    ))
-                    .with_construct("webdav")
-                })?;
+            let event = reader.read_event_into(&mut buffer).map_err(|error| {
+                BasesError::new(format!(
+                    "WebDAV PROPFIND returned a body that is not well-formed XML: {error}"
+                ))
+                .with_construct("webdav")
+            })?;
             let done = match event {
                 Event::Start(element) => {
                     walk.open(&local_name(element.name().as_ref()));
@@ -846,7 +882,10 @@ impl DavReader {
         match self.parent() {
             Parent::Prop => {
                 self.resourcetype_is_collection = false;
-                self.prop = Some(OpenProp { name: name.to_string(), text: String::new() });
+                self.prop = Some(OpenProp {
+                    name: name.to_string(),
+                    text: String::new(),
+                });
             }
             Parent::Resourcetype if name == "collection" => self.resourcetype_is_collection = true,
             Parent::Response if name == "href" => self.href_text = Some(String::new()),
@@ -876,7 +915,11 @@ impl DavReader {
     /// on the open property's own name, so a `prop` child that itself contains
     /// markup does not fold its inner text into the outer value.
     fn text(&mut self, text: &str) {
-        if self.prop.as_ref().is_some_and(|open| self.stack.last() == Some(&open.name)) {
+        if self
+            .prop
+            .as_ref()
+            .is_some_and(|open| self.stack.last() == Some(&open.name))
+        {
             if let Some(open) = self.prop.as_mut() {
                 open.text.push_str(text);
             }
@@ -898,7 +941,11 @@ impl DavReader {
     fn close(&mut self, name: &str) {
         if self.prop.as_ref().is_some_and(|open| open.name == name) {
             let open = self.prop.take().expect("checked above");
-            let value = if open.name == "resourcetype" { "" } else { open.text.as_str() };
+            let value = if open.name == "resourcetype" {
+                ""
+            } else {
+                open.text.as_str()
+            };
             self.record(&open.name, value);
         }
         if name == "status" && self.propstat.is_some() {
@@ -951,7 +998,6 @@ fn local_name(qualified: &[u8]) -> String {
         None => text.into_owned(),
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Dates
@@ -1063,7 +1109,6 @@ fn zone_offset(zone: &str) -> std::result::Result<FixedOffset, ()> {
         }
     }
 }
-
 
 fn month_number(name: &str) -> Option<u32> {
     Some(match name {
@@ -1188,7 +1233,13 @@ pub struct WebdavVaultOptions {
 
 impl WebdavVaultOptions {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into(), user: None, password: None, timeout_ms: None, transport: None }
+        Self {
+            url: url.into(),
+            user: None,
+            password: None,
+            timeout_ms: None,
+            transport: None,
+        }
     }
 
     pub fn with_user(mut self, user: impl Into<String>) -> Self {
@@ -1294,7 +1345,11 @@ impl WebdavVaultSource {
         let authorization = options.user.as_ref().map(|user| {
             format!(
                 "Basic {}",
-                base64_encode(format!("{}:{}", user, options.password.as_deref().unwrap_or("")))
+                base64_encode(format!(
+                    "{}:{}",
+                    user,
+                    options.password.as_deref().unwrap_or("")
+                ))
             )
         });
         let transport = match options.transport {
@@ -1408,7 +1463,10 @@ impl WebdavVaultSource {
             )
             .await?;
         let resources = parse_multistatus(&response.text(), &self.base_path)?;
-        Ok(resources.into_iter().filter(|resource| resource.path != rel).collect())
+        Ok(resources
+            .into_iter()
+            .filter(|resource| resource.path != rel)
+            .collect())
     }
 
     /// The bytes at `path`, read without consulting or filling the cache.
@@ -1418,8 +1476,14 @@ impl WebdavVaultSource {
     /// mark, so a note that starts with one has to read the same on both
     /// backends.
     async fn fetch_text(&self, operation: DavOperation, path: &str) -> Result<String> {
-        let response =
-            self.send(operation, WebdavMethod::Get, path, DavRequestOptions::default()).await?;
+        let response = self
+            .send(
+                operation,
+                WebdavMethod::Get,
+                path,
+                DavRequestOptions::default(),
+            )
+            .await?;
         Ok(response.text())
     }
 
@@ -1460,23 +1524,33 @@ impl WebdavVaultSource {
             timeout: self.timeout,
         };
 
-        let response = self.transport.send(request).await.map_err(|error| WebdavError {
-            // No status, because nothing answered. Reported as a refusal rather
-            // than left to escape as a transport error, which the MCP layer
-            // would call an internal bug in this server rather than an
-            // unreachable one.
-            status: None,
+        let response = self
+            .transport
+            .send(request)
+            .await
+            .map_err(|error| WebdavError {
+                // No status, because nothing answered. Reported as a refusal rather
+                // than left to escape as a transport error, which the MCP layer
+                // would call an internal bug in this server rather than an
+                // unreachable one.
+                status: None,
+                operation,
+                method,
+                path: path.to_string(),
+                error: BasesError::new(format!(
+                    "WebDAV {operation}: {method} \"{}\" got no response: {error}",
+                    at_root(path)
+                ))
+                .with_construct("webdav"),
+            })?;
+
+        match dav_refusal(
             operation,
             method,
-            path: path.to_string(),
-            error: BasesError::new(format!(
-                "WebDAV {operation}: {method} \"{}\" got no response: {error}",
-                at_root(path)
-            ))
-            .with_construct("webdav"),
-        })?;
-
-        match dav_refusal(operation, method, path, response.status, &response.status_text) {
+            path,
+            response.status,
+            &response.status_text,
+        ) {
             Some(refusal) => Err(refusal),
             None => Ok(response),
         }
@@ -1579,7 +1653,11 @@ impl VaultSource for WebdavVaultSource {
             DavOperation::Write,
             WebdavMethod::Put,
             &path,
-            DavRequestOptions { body: Some(data.to_string()), content_type: Some(TEXT_CONTENT_TYPE), ..Default::default() },
+            DavRequestOptions {
+                body: Some(data.to_string()),
+                content_type: Some(TEXT_CONTENT_TYPE),
+                ..Default::default()
+            },
         )
         .await?;
 
@@ -1596,7 +1674,9 @@ impl VaultSource for WebdavVaultSource {
         // Only now, after the read-back agreed: a cache updated from an
         // unverified write would report the requested bytes for a resource
         // holding others.
-        self.text_cache.borrow_mut().insert(path.clone(), data.to_string());
+        self.text_cache
+            .borrow_mut()
+            .insert(path.clone(), data.to_string());
         self.hash_cache.borrow_mut().remove(&path);
         *self.files.borrow_mut() = None;
         Ok(())
@@ -1642,8 +1722,13 @@ impl VaultSource for WebdavVaultSource {
     /// caller needs to know which of the two it got.
     async fn delete(&self, rel: &str) -> Result<()> {
         let path = named_file(&vault_relative_path(rel)?)?.to_string();
-        self.send(DavOperation::Delete, WebdavMethod::Delete, &path, DavRequestOptions::default())
-            .await?;
+        self.send(
+            DavOperation::Delete,
+            WebdavMethod::Delete,
+            &path,
+            DavRequestOptions::default(),
+        )
+        .await?;
         self.text_cache.borrow_mut().remove(&path);
         self.hash_cache.borrow_mut().remove(&path);
         *self.files.borrow_mut() = None;

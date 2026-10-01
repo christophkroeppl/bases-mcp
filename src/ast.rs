@@ -58,11 +58,27 @@ pub enum NodeKind {
     Literal(Literal),
     Identifier(String),
     /// `!` or `-`.
-    Unary { op: UnaryOp, operand: Box<Node> },
-    Binary { op: BinOp, left: Box<Node>, right: Box<Node> },
-    Call { callee: Box<Node>, args: Vec<Node> },
-    Member { object: Box<Node>, property: String },
-    Index { object: Box<Node>, index: Box<Node> },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Node>,
+    },
+    Binary {
+        op: BinOp,
+        left: Box<Node>,
+        right: Box<Node>,
+    },
+    Call {
+        callee: Box<Node>,
+        args: Vec<Node>,
+    },
+    Member {
+        object: Box<Node>,
+        property: String,
+    },
+    Index {
+        object: Box<Node>,
+        index: Box<Node>,
+    },
     List(Vec<Node>),
 }
 
