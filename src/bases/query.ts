@@ -105,17 +105,21 @@ export function queryBase(
       thisValue,
     };
 
-    // Evaluate every formula for this note.
-    const formulaValues: Record<string, BasesValue> = {};
+    // Evaluate every formula for this note, writing each result into `ctx`
+    // as it goes so a formula that references another formula sees it.
+    //
+    // This used to accumulate into a separate object and assign it to
+    // `ctx.formula` afterwards, which meant `formula.b` in
+    // `{b: "formula.a + 1", a: "41"}` read `null` -- the topological sort above
+    // ordered the names correctly and the values were still not visible.
     for (const name of formulaOrder) {
-      formulaValues[name] = evaluate(compiledFormulas.get(name)!, ctx);
+      ctx.formula[name] = evaluate(compiledFormulas.get(name)!, ctx);
     }
-    ctx.formula = formulaValues;
 
     if (globalFilter !== null && !runFilter(globalFilter, ctx)) continue;
     if (viewFilter !== null && !runFilter(viewFilter, ctx)) continue;
 
-    rows.push({ path: notePath, formula: formulaValues, values: {} });
+    rows.push({ path: notePath, formula: { ...ctx.formula }, values: {} });
   }
 
   const total = rows.length;

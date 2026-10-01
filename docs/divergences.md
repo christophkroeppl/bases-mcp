@@ -249,3 +249,54 @@ same gap had a second cause: `available()` only checked the exit code, and
 Obsidian exits 0 even with a dead bridge, so a dead bridge reported available.
 It now requires non-empty stdout, and there is a `vaultReachable` check for the
 case where the app runs but the vault is not open.
+
+### A formula could not see the formula it referenced
+
+Formulas were accumulated into a separate `formulaValues` object and assigned to
+`ctx.formula` only after the evaluation loop. A formula reading
+`formula.<other>` therefore saw `null`, and any arithmetic on it threw
+`Expected a number but got null`.
+
+The topological sort that orders the formulas was already correct, so the bug was
+invisible in the ordering and only showed up in the values — which is why it
+survived.
+
+Confirmed against the TypeScript implementation before fixing: with
+`formulas: {doubled: "formula.base_value * 2", base_value: "41"}`, the old code
+throws and the fixed code yields 82.
+
+Fixed in both implementations by writing each result into `ctx.formula` as it is
+computed, so a later formula in the same note sees it. Pinned by
+`a_formula_sees_the_formula_it_references` on both sides, over the shared
+fixture at `test/fixtures/formula-chain`.
+
+### An inline ```base fence could not round-trip
+
+A base region written as an inline fence carries no `path=`, so the reconciler's
+"same region" check — which required both sides to carry YAML — rejected it, and
+the path-based fallback had no `path=` to match on. A clean `get_note` →
+`write_note` on a note containing an inline fence reported two refusals and
+replaced the live fence with nothing.
+
+Fixed in the Rust port by pairing two inline regions on their pinned view alone.
+The TypeScript tree still has this bug; it is not yet repaired there.
+
+### `project` appended a spurious newline
+
+The Projection builder added a newline after each rendered region unconditionally.
+Because `write_note` reconciles rather than writes, that newline came back as an
+edit the agent never made. Fixed by adding one only where the boundary does not
+already have it.
+
+### Date cells lost their `dateOnly` flag
+
+`DateValue` carried a `dateOnly` flag, and `file.mtime` was built with it set, so
+`toString()` truncated to `YYYY-MM-DD`. `BasesDate` keeps a fixed offset and
+renders full RFC 3339.
+
+This is a deliberate consequence of the value type rather than a defect: a
+`dateOnly` flag on `BasesDate` would change its derived `Ord`, which the query
+pipeline's sort depends on. The effect is that a rendered date cell in the Rust
+port carries a time component the TypeScript dropped, which **will** show up in
+`format=md` byte parity once Obsidian is reachable. Recorded here so it is not
+discovered as a mystery later.

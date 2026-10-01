@@ -73,3 +73,18 @@ describe("property display labels", () => {
     expect(displayNameFor(b, "note.status")).toBe("status");
   });
 });
+
+describe("formula references", () => {
+  test("a formula sees the formula it references, however deep the chain", async () => {
+    // Regression, and the fixture is what proves it: with formulas accumulated
+    // into a separate object and assigned to `ctx.formula` after the loop,
+    // `doubled` read `null` and this threw `Expected a number but got null`.
+    const { Resolver } = await import("../../src/service");
+    const resolver = await Resolver.openDir("test/fixtures/formula-chain");
+    const result = await resolver.query("Chained.base");
+    const values = result.rows[0]!.values;
+    expect(values["formula.base_value"]).toBe(41);
+    expect(values["formula.doubled"]).toBe(82);
+    expect(values["formula.label"]).toBe(83);
+  });
+});

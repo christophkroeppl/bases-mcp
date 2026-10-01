@@ -1,9 +1,12 @@
 pub mod ast;
+pub mod base;
 pub mod error;
 pub mod evaluator;
+pub mod labels;
 pub mod lexer;
 pub mod note;
 pub mod parser;
+pub mod render;
 pub mod stdlib;
 pub mod value;
 pub mod vault;

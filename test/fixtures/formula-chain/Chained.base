@@ -1,0 +1,15 @@
+filters:
+  and:
+    - file.hasTag("ticket")
+formulas:
+  base_value: "41"
+  doubled: "formula.base_value * 2"
+  label: 'formula.doubled + 1'
+views:
+  - type: table
+    name: All
+    order:
+      - file.name
+      - formula.base_value
+      - formula.doubled
+      - formula.label
