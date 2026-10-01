@@ -4,7 +4,18 @@
     "biome": {
       "command": ["bunx", "biome", "check", "--write", "$FILE"],
       "environment": { "BUN_BE_BUN": "1" },
-      "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".json", ".jsonc"]
+      "extensions": [
+        ".ts",
+        ".tsx",
+        ".mts",
+        ".cts",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".json",
+        ".jsonc"
+      ]
     },
     "rustfmt": {
       "command": ["rustfmt", "--edition", "2021", "$FILE"],
