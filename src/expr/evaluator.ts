@@ -413,13 +413,23 @@ function evaluateBinary(node: BinaryNode, ctx: EvalContext): BasesValue {
     case "!=":
       return !valuesEqual(l, r);
     case ">":
-      return compare(l, r) > 0;
     case "<":
-      return compare(l, r) < 0;
     case ">=":
-      return compare(l, r) >= 0;
-    case "<=":
-      return compare(l, r) <= 0;
+    case "<=": {
+      // An ordering against null is falsy, and so is an ordering against a value
+      // that will not convert to a number. Obsidian's ComparisonExpr returns Null
+      // for a null side and NaN for an uncoercible one; null is not truthy and
+      // every comparison against NaN is false. `compare` ranks null below
+      // everything because a sort needs nulls to go somewhere, so the
+      // distinction has to be made here.
+      if (l === null || r === null) return false;
+      const ord = compare(l, r);
+      if (Number.isNaN(ord)) return false;
+      if (node.op === ">") return ord > 0;
+      if (node.op === "<") return ord < 0;
+      if (node.op === ">=") return ord >= 0;
+      return ord <= 0;
+    }
     case "+":
       return add(l, r, ctx);
     case "-":
@@ -580,6 +590,11 @@ export function compare(a: BasesValue, b: BasesValue): number {
   const na = toNumberLoose(a);
   const nb = toNumberLoose(b);
   if (na !== null && nb !== null) return na - nb;
+  // A number against a string that does not convert: ToNumber("abc") is NaN, so
+  // Obsidian's relational comparison is false for every operator. `compare`
+  // cannot express that -- it has to return a number -- so the evaluator treats
+  // a NaN here as incomparable and the row is excluded.
+  if (typeof a === "number" || typeof b === "number") return NaN;
   return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
 }
 

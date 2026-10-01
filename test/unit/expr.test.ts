@@ -382,3 +382,36 @@ describe("comparing a list against a scalar does not recurse", () => {
     expect(ev("lst != 0", ctxWith([], "lst"))).toBe(true);
   });
 });
+
+describe("ordering coerces across types, and declines when it cannot", () => {
+  // Measured against `obsidian base:query`. Obsidian's ComparisonExpr coerces a
+  // string to a number on the right of a relational operator and returns null
+  // for a null side, so `n < "10"` is numeric while `abc > 1` is false for
+  // ToNumber("abc") being NaN.
+  const num = makeCtx({ note: { n: 5 } });
+  const abc = makeCtx({ note: { abc: "abc" } });
+
+  test("a number compares numerically against a string", () => {
+    expect(ev('n > "3"', num)).toBe(true);
+    expect(ev('n >= "3"', num)).toBe(true);
+    expect(ev('n < "10"', num)).toBe(true);
+    expect(ev("n > 10", num)).toBe(false);
+  });
+
+  test("a string that does not convert makes every operator false", () => {
+    expect(ev("abc > 1", abc)).toBe(false);
+    expect(ev("abc < 1", abc)).toBe(false);
+    expect(ev("abc >= 1", abc)).toBe(false);
+    expect(ev("abc <= 1", abc)).toBe(false);
+  });
+
+  test("an ordering against null is false, not true", () => {
+    // `compare` ranks null lowest because a sort needs it to; the filter must
+    // not inherit that, or every note missing the property matches.
+    expect(ev("missing < 10", num)).toBe(false);
+    expect(ev("n < missing", num)).toBe(false);
+    expect(ev("missing >= 0", num)).toBe(false);
+    expect(ev("missing <= 0", num)).toBe(false);
+    expect(ev("n < 10", num)).toBe(true);
+  });
+});
