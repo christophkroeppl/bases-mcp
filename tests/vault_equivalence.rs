@@ -470,6 +470,79 @@ fn read_text_refuses_to_read_a_file_that_is_not_there_on_both_backends() {
     assert_eq!(memory.last_status(), Some(404));
 }
 
+#[test]
+fn exists_agrees_on_every_path_and_escaping_one_on_both_backends() {
+    let corpus = load_corpus();
+    let fs = fs_source();
+    let memory = memory_source(&corpus);
+    for file in &corpus {
+        assert!(
+            run(fs.exists(&file.path)).expect("the filesystem answers"),
+            "{path} is in the corpus",
+            path = file.path
+        );
+        assert!(
+            run(memory.exists(&file.path)).expect("the fake answers"),
+            "{path} is in the corpus",
+            path = file.path
+        );
+    }
+    assert!(
+        !run(fs.exists("Nope.md")).expect("the filesystem answers"),
+        "a path neither vault holds is absent"
+    );
+    assert!(!run(memory.exists("Nope.md")).expect("the fake answers"));
+    // Redundant syntax resolves the same way it does everywhere else, so the
+    // check behind a commit cannot be fooled by `./` or `..` into a different
+    // answer than the write that follows it.
+    assert!(run(fs.exists("Tickets/../Root Ticket.md")).expect("answers"));
+    assert!(run(memory.exists("Tickets/../Root Ticket.md")).expect("answers"));
+
+    for escapee in ["../outside.md", "/etc/passwd"] {
+        assert!(
+            failure_of(fs.exists(escapee))
+                .message()
+                .contains("escapes the vault root"),
+            "{escapee}"
+        );
+        failure_of(memory.exists(escapee));
+        assert_eq!(memory.last_status(), Some(403), "{escapee}");
+    }
+}
+
+/// `exists` must not be answered from the listing.
+///
+/// This is the whole reason the method is on the trait rather than being
+/// assembled from `list()`: the listing is a snapshot that moves only when this
+/// server writes, so a human's save in Obsidian is invisible to it, and a check
+/// built on it reports a taken path as free. The file here is written with
+/// `std::fs` on purpose -- going through `write_text` would drop the snapshot and
+/// prove nothing, because that is a server-side write, which is the one case the
+/// snapshot does track.
+#[test]
+fn exists_sees_a_note_written_behind_the_listing() {
+    let (dir, fs, memory) = pair();
+    let late = "Tickets/Written Behind The Listing.md";
+
+    // Prime both listings, so both are snapshots of a vault without this note.
+    assert!(!run(fs.list()).expect("lists").contains(&late.to_string()));
+    assert!(!run(memory.list())
+        .expect("lists")
+        .contains(&late.to_string()));
+    assert!(!run(fs.exists(late)).expect("answers"));
+    assert!(!run(memory.exists(late)).expect("answers"));
+
+    std::fs::write(dir.path().join(late), "# written by a human").expect("the save lands");
+    run(memory.write_text(late, "# written by a human")).expect("the fake stores it");
+
+    assert!(
+        !run(fs.list()).expect("lists").contains(&late.to_string()),
+        "the listing snapshot must still be stale, or this test proves nothing"
+    );
+    assert!(run(fs.exists(late)).expect("the filesystem answers"));
+    assert!(run(memory.exists(late)).expect("the fake answers"));
+}
+
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------

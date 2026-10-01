@@ -64,6 +64,7 @@ pub enum MemoryOp {
     Read,
     Stat,
     Hash,
+    Exists,
     Write,
     Delete,
 }
@@ -337,6 +338,7 @@ impl MemoryOp {
             MemoryOp::Read => "read",
             MemoryOp::Stat => "stat",
             MemoryOp::Hash => "hash",
+            MemoryOp::Exists => "exists",
             MemoryOp::Write => "write",
             MemoryOp::Delete => "delete",
         }
@@ -389,6 +391,19 @@ impl VaultSource for MemoryVaultSource {
     /// There is no cache here, so a fresh read is the same read.
     async fn read_fresh(&self, rel: &str) -> std::result::Result<String, BasesError> {
         self.read_text(rel).await
+    }
+
+    /// A membership test, which is all this fake has to answer.
+    ///
+    /// It consults the fault table like every other operation, so a `500` injected
+    /// here is an error rather than a `false`. That is the property the trait
+    /// demands and the property a real WebDAV source has to earn: reporting a note
+    /// as absent because the server could not be reached would authorise the
+    /// overwrite this method exists to prevent.
+    async fn exists(&self, rel: &str) -> std::result::Result<bool, BasesError> {
+        let path = self.normalise_refusing(rel)?;
+        self.fire(MemoryOp::Exists, &path)?;
+        Ok(self.files.borrow().contains_key(&path))
     }
 
     async fn stat(&self, rel: &str) -> std::result::Result<FileStat, BasesError> {
@@ -475,6 +490,9 @@ impl VaultSource for SharedSource {
     }
     async fn read_fresh(&self, path: &str) -> std::result::Result<String, BasesError> {
         self.0.read_fresh(path).await
+    }
+    async fn exists(&self, path: &str) -> std::result::Result<bool, BasesError> {
+        self.0.exists(path).await
     }
     async fn write_text(&self, path: &str, data: &str) -> std::result::Result<(), BasesError> {
         self.0.write_text(path, data).await
