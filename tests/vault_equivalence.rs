@@ -38,6 +38,7 @@
 //! mistake the suite's own header warns about.
 
 // Each integration test is its own crate, and no two of them need every helper here.
+// Each integration test is its own crate, and no suite needs every helper here.
 #[allow(dead_code)]
 mod common;
 

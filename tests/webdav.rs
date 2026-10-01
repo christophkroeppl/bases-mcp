@@ -29,6 +29,7 @@
 //! report rather than approximated with a stand-in resolver.
 
 // Each integration test is its own crate, and no two of them need every helper here.
+// Each integration test is its own crate, and no suite needs every helper here.
 #[allow(dead_code)]
 mod common;
 

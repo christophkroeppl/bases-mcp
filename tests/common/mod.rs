@@ -1,3 +1,4 @@
+
 //! The corpus: the testing vault, as `{ path, content }`.
 //!
 //! One definition, shared by every vault-related suite. Two suites that each
@@ -16,6 +17,12 @@
 //! exactly [`CORPUS_SIZE`] files: it is the parity oracle, and a file added to it
 //! silently changes what `obsidian base:query` returns.
 
+// Every integration test is its own crate and includes this whole module, but
+// each suite needs a different part of it: the parity suite wants the runtime and
+// the corpus path, the equivalence suite wants the memory backend, the WebDAV
+// suite wants the fake server. What one of them does not touch would otherwise be
+// a dead-code warning in that crate, which is how people learn to ignore
+// dead-code warnings.
 use std::path::{Path, PathBuf};
 
 use bases_mcp::vault::{FsVaultSource, VaultSource};

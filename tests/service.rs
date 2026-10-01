@@ -17,6 +17,7 @@
 //! filter inversion are read-only by construction, since nothing in these tests
 //! commits a note into them.
 
+// Each integration test is its own crate, and no suite needs every helper here.
 #[allow(dead_code)]
 mod common;
 

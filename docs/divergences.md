@@ -334,3 +334,36 @@ surface the parity suite compares against the Obsidian CLI.
 `serde_json`'s `preserve_order` feature is enabled so insertion order is kept
 rather than sorted; the remaining difference is the order the payload is built
 in, which is a presentation choice with no bearing on the result.
+
+## The Rust parity harness fails loudly rather than skipping
+
+Rust's test harness has no `skip`. A test that returns early reports `ok`, which
+is the vacuous-green failure this project had already suffered once in
+TypeScript — seven `if (!available) return;` guards, and a suite that reported
+green with zero assertions whenever Obsidian was unreachable.
+
+`tests/parity.rs` therefore **panics** when the CLI cannot answer, and only
+relaxes when `BASES_MCP_ALLOW_SKIP=1` is set explicitly:
+
+```
+$ cargo test --test parity
+test result: FAILED. 5 passed; 3 failed
+
+$ BASES_MCP_ALLOW_SKIP=1 cargo test --test parity
+[parity] Obsidian CLI unavailable — COMPARING NOTHING this run.
+test result: ok. 8 passed
+```
+
+"Compared nothing" is therefore loud by default and deliberate to opt into, which
+is the opposite of the original bug.
+
+The availability probe is a real `base:query` that must return parseable rows,
+not `obsidian version` and not a non-empty check. A half-started bridge answers
+`version` and then returns an empty string for every query, so a weaker probe
+passes while nothing can be compared.
+
+Note that Obsidian's exit code is not a signal: it exits 0 with empty stdout
+when its bridge is down. Both harnesses therefore require non-empty output, and
+`tests/parity.rs` pins that with a test that runs the availability check against a
+binary that exits 0 silently (`true`) and asserts it reads as UNAVAILABLE — the
+guard, guarded.

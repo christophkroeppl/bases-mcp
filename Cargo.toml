@@ -71,8 +71,24 @@ quick-xml = { version = "0.39", default-features = false, features = ["encoding"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
+# `cargo parity` compares against the live Obsidian CLI and therefore needs
+# Obsidian open with test/vault registered. It deliberately does NOT accept a
+# quiet unverified run: `test/parity.rs` fails unless BASES_MCP_ALLOW_SKIP=1 is
+# set, and the alias sets it only when --allow-skip is passed.
+[alias]
+parity = "test --test parity"
+
 [profile.release]
 # The evaluator recurses over a Pratt AST and is the hot path of every query.
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# The parity tests shell out to one shared Obsidian bridge. Running them in
+# parallel makes them race that single process -- Obsidian does not flush stdout
+# before exiting, and a query issued while another is in flight comes back empty,
+# which reads as "no rows" rather than as "try again".
+[profile.test]
+# Serial harness: `--test-threads=1` below is the mechanism, this just documents
+# why it is needed.
+opt-level = 0
