@@ -1657,8 +1657,10 @@ fn an_external_edit_made_after_the_read_is_not_clobbered() {
     let (dir, resolver) = sandbox();
     let note = "Tickets/Invoice export.md";
 
-    // The agent reads the note, exactly as the designed flow intends.
-    let as_read = futures_block_on(resolver.vault().read_text(note)).expect("reads");
+    // The agent reads the note, exactly as the designed flow intends, and keeps
+    // the hash of what it read.
+    let view = futures_block_on(resolver.read_note(note, NoteOptions::raw())).expect("reads");
+    let as_read = view.raw;
 
     // The user edits the same note in Obsidian, which autosaves it.
     let user_text = format!(
@@ -1667,11 +1669,10 @@ several new lines of real prose that must not be lost.\n"
     );
     std::fs::write(dir.path().join(note), &user_text).expect("the user's save lands");
 
-    // The agent writes back its edit of the copy it read.
+    // The agent writes back its edit of the copy it read, quoting the hash from
+    // BEFORE the user's save.
+    let hash = view.base_hash;
     let agent_edit = as_read.replace("# Invoice export", "# Invoice export, revised");
-    let hash = futures_block_on(resolver.read_note(note, NoteOptions::raw()))
-        .expect("reads")
-        .base_hash;
 
     // The conditional write is refused, and the user's paragraph survives.
     let message = message_of_async(|| resolver.write_note(note, &agent_edit, Some(&hash)));
@@ -1743,4 +1744,49 @@ fn a_mismatched_hash_is_refused() {
 
     let after = std::fs::read_to_string(dir.path().join(note)).expect("reads");
     assert_eq!(before, after, "a refused write changed the note");
+}
+
+/// A refused write must become writable again after re-reading.
+///
+/// Regression, and the most serious of the defects found by porting. `get_note`
+/// served its bytes from the index while `write_note` compared the hash against
+/// a fresh read. Once the two disagreed, the note could never be written again:
+/// the re-read the refusal message instructs returns the SAME stale bytes and
+/// the SAME stale hash, so the next write is refused too. That trades silent data
+/// loss for a permanent hard block on a single note.
+///
+/// The test asserts the full loop: read, external edit, refused write, re-read,
+/// write accepted.
+#[test]
+fn a_refused_write_does_not_lock_the_note_out() {
+    let (dir, resolver) = sandbox();
+    let note = "Tickets/Invoice export.md";
+
+    let view = futures_block_on(resolver.read_note(note, NoteOptions::raw())).expect("reads");
+    std::fs::write(dir.path().join(note), format!("{}\nuser text\n", view.raw))
+        .expect("the user's save lands");
+
+    let stale_edit = view.raw.replace("Invoice export", "v2");
+    futures_block_on(resolver.write_note(note, &stale_edit, Some(&view.base_hash)))
+        .expect_err("the stale write must be refused");
+
+    // Re-read as the error message instructs.
+    let again = futures_block_on(resolver.read_note(note, NoteOptions::raw())).expect("re-reads");
+    assert!(
+        again.raw.contains("user text"),
+        "the re-read did not see the user's text, so it cannot be based on a fresh copy"
+    );
+    assert_ne!(
+        again.base_hash, view.base_hash,
+        "the re-read returned the same hash, which is the deadlock"
+    );
+
+    // The second write, based on the re-read, must now be ACCEPTED.
+    let reapplied = again.raw.replace("Invoice export", "v2");
+    futures_block_on(resolver.write_note(note, &reapplied, Some(&again.base_hash)))
+        .expect("a write based on a fresh read must be accepted");
+
+    let on_disk = std::fs::read_to_string(dir.path().join(note)).expect("reads");
+    assert!(on_disk.contains("user text"), "{on_disk}");
+    assert!(on_disk.contains("v2"), "{on_disk}");
 }

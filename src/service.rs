@@ -279,10 +279,28 @@ impl Resolver {
     /// escape hatch for an agent that wants to edit the note itself.
     pub async fn read_note(&self, path: &str, options: NoteOptions) -> Result<NoteView> {
         let resolved = self.resolve_note_path(path)?;
+
+        // `raw` is read FRESH, from the backend, not from the index. `base_hash`
+        // is only useful if it describes the same bytes `write_note` will
+        // compare against, and `write_note` reads fresh too: serving one from
+        // the index and comparing against the other is a permanent refusal,
+        // because the re-read the error message tells the agent to perform comes
+        // back with the same stale bytes and the same stale hash. That trades
+        // silent data loss for a hard block, which is not a trade worth making.
+        let fresh = self.backend().read_fresh(&resolved).await?;
         let Some(record) = self.vault.note(&resolved) else {
             return Err(BasesError::new(format!("Note not found: {path}")).with_note(path));
         };
-        let raw = serialise(&record.parsed.segments);
+
+        // The index parsed an older copy, so its segments are rebuilt from the
+        // fresh text. Rendering Base regions still goes through the index, which
+        // is correct: a region only exists in the note, and the note is what we
+        // just read.
+        let raw = if serialise(&record.parsed.segments) == fresh {
+            serialise(&record.parsed.segments)
+        } else {
+            fresh
+        };
 
         if options.raw {
             return Ok(NoteView {
