@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 
 use serde_yaml::{Mapping, Value as Yaml};
 
+use crate::depth::{Depth, FILTER};
 use crate::error::{BasesError, Result};
 
 /// Sort or group direction. Anything Obsidian does not spell `DESC` is `ASC`.
@@ -329,6 +330,24 @@ pub fn normalise_filters(
     path: &str,
     where_: &str,
 ) -> Result<Option<FilterNode>> {
+    normalise_filters_within(value, path, where_, &Depth::new())
+}
+
+/// The walk itself, against a budget the caller holds.
+///
+/// Split from [`normalise_filters`] for the same reason [`crate::evaluator`]'s
+/// is: the group keys recurse, and a filter tree is exactly as attacker-shaped
+/// as an expression. Measured, this walk is not the one that kills the process —
+/// `serde_yaml` refuses a tree deeper than 63 levels before it reaches here —
+/// so the guard is here to make the refusal ours and legible, not to save the
+/// stack.
+fn normalise_filters_within(
+    value: Option<&Yaml>,
+    path: &str,
+    where_: &str,
+    depth: &Depth,
+) -> Result<Option<FilterNode>> {
+    let _level = depth.enter(FILTER)?;
     let Some(raw) = value else { return Ok(None) };
 
     if let Some(expression) = raw.as_str() {
@@ -370,6 +389,7 @@ pub fn normalise_filters(
         present(entries, group.key()),
         path,
         &format!("{where_}.{}", group.key()),
+        depth,
     )?;
     Ok(Some(group.node(children)))
 }
@@ -403,7 +423,12 @@ impl FilterGroup {
 }
 
 /// A group's operands. `not:` accepts a single scalar as well as a list.
-fn normalise_list(value: Option<&Yaml>, path: &str, where_: &str) -> Result<Vec<FilterNode>> {
+fn normalise_list(
+    value: Option<&Yaml>,
+    path: &str,
+    where_: &str,
+    depth: &Depth,
+) -> Result<Vec<FilterNode>> {
     if let Some(expression) = value.and_then(Yaml::as_str) {
         return Ok(vec![FilterNode::Expression(expression.to_string())]);
     }
@@ -415,7 +440,7 @@ fn normalise_list(value: Option<&Yaml>, path: &str, where_: &str) -> Result<Vec<
     };
     items
         .iter()
-        .filter_map(|item| normalise_filters(Some(item), path, where_).transpose())
+        .filter_map(|item| normalise_filters_within(Some(item), path, where_, depth).transpose())
         .collect::<Result<Vec<_>>>()
 }
 

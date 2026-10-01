@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::ast::Node;
+use crate::depth::{Depth, FILTER};
 use crate::error::{BasesError, Result};
 use crate::evaluator::{evaluate, evaluate_expression, EvalContext, ThisContext};
 use crate::parser::{parse, try_parse};
@@ -267,11 +268,22 @@ fn compile_filter(
     Ok(Some(match node {
         FilterNode::Expression(source) => {
             CompiledFilter::Expression(parse(source).map_err(|error| {
-                BasesError::new(format!(
+                // The construct rides as a field rather than inlined into the prose,
+                // because `tools::context_of` lifts it into the tool result.
+                // Inlining it lost nothing until the depth guard: no other
+                // parse-time refusal carried a construct, so there was none to drop.
+                // `Expression` is what says which Base key to pull back, and D4
+                // promises a hard error names its construct — flattened here, the
+                // depth limit would reach the agent as a sentence with no construct.
+                let mut located = BasesError::new(format!(
                     "Filter at {where_} failed to parse: {}",
-                    error.display_message()
+                    error.message()
                 ))
-                .with_note(base_path)
+                .with_note(base_path);
+                if let Some(construct) = error.construct() {
+                    located = located.with_construct(construct);
+                }
+                located
             })?)
         }
         FilterNode::And(children) => {
@@ -303,11 +315,26 @@ fn compile_children(
 /// `not` is NAND -- "none of these are true" -- which is what the docs specify and
 /// what makes a six-sibling `not:` exclude a note matching any one of them.
 fn run_filter(filter: &CompiledFilter, ctx: &EvalContext) -> Result<bool> {
+    run_filter_within(filter, ctx, &Depth::new())
+}
+
+/// The walk itself, against a budget the caller holds.
+///
+/// A filter tree is a second recursion over attacker-shaped input: `and`/`or`/
+/// `not` nest exactly as expressions do, and each level here is a frame in
+/// addition to the one the expression inside it spends. It is not the deepest
+/// walk in the crate — `normalise_filters` bounds the tree before this sees it,
+/// and this runs once per note — so the guard is cheap insurance rather than the
+/// thing keeping the process alive. Left unguarded it is the one walk that would
+/// still abort if a `CompiledFilter` were ever built from somewhere other than
+/// `compile_filter`.
+fn run_filter_within(filter: &CompiledFilter, ctx: &EvalContext, depth: &Depth) -> Result<bool> {
+    let _level = depth.enter(FILTER)?;
     match filter {
         CompiledFilter::Expression(node) => Ok(evaluate(node, ctx)?.is_truthy()),
         CompiledFilter::And(children) => {
             for child in children {
-                if !run_filter(child, ctx)? {
+                if !run_filter_within(child, ctx, depth)? {
                     return Ok(false);
                 }
             }
@@ -315,7 +342,7 @@ fn run_filter(filter: &CompiledFilter, ctx: &EvalContext) -> Result<bool> {
         }
         CompiledFilter::Or(children) => {
             for child in children {
-                if run_filter(child, ctx)? {
+                if run_filter_within(child, ctx, depth)? {
                     return Ok(true);
                 }
             }
@@ -323,7 +350,7 @@ fn run_filter(filter: &CompiledFilter, ctx: &EvalContext) -> Result<bool> {
         }
         CompiledFilter::Not(children) => {
             for child in children {
-                if run_filter(child, ctx)? {
+                if run_filter_within(child, ctx, depth)? {
                     return Ok(false);
                 }
             }

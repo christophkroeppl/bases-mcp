@@ -19,6 +19,9 @@
 //!     reached through.
 //!   - [`tools`] — the six MCP tools, and [`config`] — startup configuration.
 //!
+//!   - [`depth`] — the nesting budget the recursive walks spend, so an
+//!     over-nested `.base` is a refusal rather than a dead process.
+//!
 //! Two decisions shape the top of that stack and are stated where they happen
 //! rather than here: the Resolver's renders are two surfaces, not one (see
 //! [`service`]), and a tool's `isError` is reserved for a failure rather than a
@@ -27,6 +30,7 @@
 pub mod ast;
 pub mod base;
 pub mod config;
+pub mod depth;
 pub mod drafts;
 pub mod error;
 pub mod evaluator;

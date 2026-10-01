@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::ast::{BinOp, Node, NodeKind, UnaryOp};
+use crate::depth::{Depth, EXPRESSION};
 use crate::error::{BasesError, MissingThisContext, Result};
 use crate::parser::parse;
 use crate::stdlib::{get_global, get_method, MethodFn};
@@ -70,21 +71,36 @@ impl EvalContext {
 }
 
 pub fn evaluate(node: &Node, ctx: &EvalContext) -> Result<BasesValue> {
+    evaluate_within(node, ctx, &Depth::new())
+}
+
+/// Evaluate a tree, spending nesting from a budget the caller supplies.
+///
+/// Split from [`evaluate`] so a lambda body can be walked with the budget its
+/// call site already holds rather than a fresh one: a `filter` that runs its
+/// body once per element would otherwise reset the counter on every element and
+/// bound nothing at all.
+fn evaluate_within(node: &Node, ctx: &EvalContext, depth: &Depth) -> Result<BasesValue> {
+    // The parser's limit already bounds any tree `parse` produced, so this is
+    // not load-bearing for expressions read out of a Base. It is here because
+    // `Node` and `Node::new` are public: a caller can hand `evaluate` a tree no
+    // parser built, and this is the only place that can notice.
+    let _level = depth.enter(EXPRESSION)?;
     match &node.kind {
         NodeKind::Literal(l) => Ok(l.clone().into()),
         NodeKind::List(items) => {
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                out.push(evaluate(item, ctx)?);
+                out.push(evaluate_within(item, ctx, depth)?);
             }
             Ok(BasesValue::List(out))
         }
         NodeKind::Identifier(name) => resolve_identifier(name, ctx),
-        NodeKind::Unary { op, operand } => evaluate_unary(*op, operand, ctx),
-        NodeKind::Binary { op, left, right } => evaluate_binary(*op, left, right, ctx),
-        NodeKind::Call { callee, args } => evaluate_call(callee, args, ctx),
-        NodeKind::Member { object, property } => evaluate_member(object, property, ctx),
-        NodeKind::Index { object, index } => evaluate_index(object, index, ctx),
+        NodeKind::Unary { op, operand } => evaluate_unary(*op, operand, ctx, depth),
+        NodeKind::Binary { op, left, right } => evaluate_binary(*op, left, right, ctx, depth),
+        NodeKind::Call { callee, args } => evaluate_call(callee, args, ctx, depth),
+        NodeKind::Member { object, property } => evaluate_member(object, property, ctx, depth),
+        NodeKind::Index { object, index } => evaluate_index(object, index, ctx, depth),
     }
 }
 
@@ -355,33 +371,46 @@ fn read_file_member(file: &FileValue, name: &str) -> BasesValue {
 // Operators
 // ---------------------------------------------------------------------------
 
-fn evaluate_unary(op: UnaryOp, operand: &Node, ctx: &EvalContext) -> Result<BasesValue> {
-    let v = evaluate(operand, ctx)?;
+fn evaluate_unary(
+    op: UnaryOp,
+    operand: &Node,
+    ctx: &EvalContext,
+    depth: &Depth,
+) -> Result<BasesValue> {
+    let v = evaluate_within(operand, ctx, depth)?;
     Ok(match op {
         UnaryOp::Not => BasesValue::Bool(!v.is_truthy()),
         UnaryOp::Negate => BasesValue::Number(-to_number(&v, "unary -")?),
     })
 }
 
-fn evaluate_binary(op: BinOp, left: &Node, right: &Node, ctx: &EvalContext) -> Result<BasesValue> {
+fn evaluate_binary(
+    op: BinOp,
+    left: &Node,
+    right: &Node,
+    ctx: &EvalContext,
+    depth: &Depth,
+) -> Result<BasesValue> {
     // Short-circuit before evaluating the right side.
     if op == BinOp::And {
-        let l = evaluate(left, ctx)?;
+        let l = evaluate_within(left, ctx, depth)?;
         if !l.is_truthy() {
             return Ok(BasesValue::Bool(false));
         }
-        return Ok(BasesValue::Bool(evaluate(right, ctx)?.is_truthy()));
+        return Ok(BasesValue::Bool(
+            evaluate_within(right, ctx, depth)?.is_truthy(),
+        ));
     }
     if op == BinOp::Or {
-        let l = evaluate(left, ctx)?;
+        let l = evaluate_within(left, ctx, depth)?;
         if l.is_truthy() {
             return Ok(l);
         }
-        return evaluate(right, ctx);
+        return evaluate_within(right, ctx, depth);
     }
 
-    let l = evaluate(left, ctx)?;
-    let r = evaluate(right, ctx)?;
+    let l = evaluate_within(left, ctx, depth)?;
+    let r = evaluate_within(right, ctx, depth)?;
 
     use std::cmp::Ordering;
     Ok(match op {
@@ -587,12 +616,25 @@ pub struct LambdaCall<'a> {
     pub ctx: &'a EvalContext,
 }
 
-pub type LambdaRunner = Rc<dyn Fn(LambdaCall<'_>) -> Result<BasesValue>>;
+/// Runs a lambda body once per element, against the budget its call site holds.
+///
+/// The lifetime is the borrow of that budget. It rides on the type rather than in
+/// the argument because the runner is stored in an `Rc` and so has to outlive the
+/// call, and the two ways to give it a budget are both worse than this: a field
+/// on [`LambdaCall`] widens a public struct that nothing else needs widened, and a
+/// parameter on [`crate::stdlib::run_higher_order`] pushes that function to eight
+/// arguments for a value it only forwards.
+pub type LambdaRunner<'depth> = Rc<dyn Fn(LambdaCall<'_>) -> Result<BasesValue> + 'depth>;
 
-fn evaluate_call(callee: &Node, args: &[Node], ctx: &EvalContext) -> Result<BasesValue> {
+fn evaluate_call(
+    callee: &Node,
+    args: &[Node],
+    ctx: &EvalContext,
+    depth: &Depth,
+) -> Result<BasesValue> {
     // A method call: `value.foo(...)`
     if let NodeKind::Member { object, property } = &callee.kind {
-        let target = evaluate(object, ctx)?;
+        let target = evaluate_within(object, ctx, depth)?;
         let Some(method) = get_method(&target, property) else {
             return Err(BasesError::new(format!(
                 "Type error: \"{property}\" is not a method on {}",
@@ -612,13 +654,20 @@ fn evaluate_call(callee: &Node, args: &[Node], ctx: &EvalContext) -> Result<Base
             // The seed for `reduce` is the second argument, evaluated once.
             let seed = if property == "reduce" {
                 match args.get(1) {
-                    Some(node) => Some(evaluate(node, ctx)?),
+                    Some(node) => Some(evaluate_within(node, ctx, depth)?),
                     None => None,
                 }
             } else {
                 None
             };
-            let runner: LambdaRunner = Rc::new(|call: LambdaCall<'_>| {
+            // The call site's `Depth` is captured rather than handed to
+            // `run_higher_order`, so every element of the list spends from the one
+            // budget the call site is already holding: a runner that started a
+            // fresh one per element would bound nothing at all. Capture works
+            // because `&Depth` is `Copy` and `Depth::enter` spends through a
+            // `Cell`, which keeps this closure `Fn` — and keeps the depth out of
+            // [`crate::stdlib::run_higher_order`]'s signature.
+            let runner: LambdaRunner<'_> = Rc::new(|call: LambdaCall<'_>| {
                 let mut bindings = call.ctx.bindings.clone().unwrap_or_default();
                 bindings.insert("value".into(), call.value.clone());
                 bindings.insert("index".into(), BasesValue::Number(call.index as f64));
@@ -627,7 +676,7 @@ fn evaluate_call(callee: &Node, args: &[Node], ctx: &EvalContext) -> Result<Base
                     bindings: Some(bindings),
                     ..call.ctx.clone()
                 };
-                evaluate(call.body, &inner)
+                evaluate_within(call.body, &inner, depth)
             });
             return crate::stdlib::run_higher_order(
                 &target, property, arity, runner, body, seed, ctx,
@@ -636,7 +685,7 @@ fn evaluate_call(callee: &Node, args: &[Node], ctx: &EvalContext) -> Result<Base
 
         let mut evaluated = Vec::with_capacity(args.len());
         for arg in args {
-            evaluated.push(evaluate(arg, ctx)?);
+            evaluated.push(evaluate_within(arg, ctx, depth)?);
         }
         let plain: MethodFn = method.fn_body;
         return plain(&target, &evaluated, ctx);
@@ -646,7 +695,7 @@ fn evaluate_call(callee: &Node, args: &[Node], ctx: &EvalContext) -> Result<Base
         if let Some(global) = get_global(name) {
             let mut evaluated = Vec::with_capacity(args.len());
             for arg in args {
-                evaluated.push(evaluate(arg, ctx)?);
+                evaluated.push(evaluate_within(arg, ctx, depth)?);
             }
             return (global.body)(&evaluated, ctx);
         }
@@ -662,7 +711,12 @@ fn evaluate_call(callee: &Node, args: &[Node], ctx: &EvalContext) -> Result<Base
     ))
 }
 
-fn evaluate_member(object: &Node, property: &str, ctx: &EvalContext) -> Result<BasesValue> {
+fn evaluate_member(
+    object: &Node,
+    property: &str,
+    ctx: &EvalContext,
+    depth: &Depth,
+) -> Result<BasesValue> {
     // `this.<prop>` routes through the property-path resolver so frontmatter
     // keys on the host note resolve (`this.projects`), not just file members.
     if let NodeKind::Identifier(name) = &object.kind {
@@ -670,13 +724,18 @@ fn evaluate_member(object: &Node, property: &str, ctx: &EvalContext) -> Result<B
             return resolve_property_path(&format!("this.{property}"), ctx);
         }
     }
-    let target = evaluate(object, ctx)?;
+    let target = evaluate_within(object, ctx, depth)?;
     Ok(read_member(&target, property))
 }
 
-fn evaluate_index(object: &Node, index: &Node, ctx: &EvalContext) -> Result<BasesValue> {
-    let target = evaluate(object, ctx)?;
-    let idx = evaluate(index, ctx)?;
+fn evaluate_index(
+    object: &Node,
+    index: &Node,
+    ctx: &EvalContext,
+    depth: &Depth,
+) -> Result<BasesValue> {
+    let target = evaluate_within(object, ctx, depth)?;
+    let idx = evaluate_within(index, ctx, depth)?;
     Ok(index_into(&target, &idx))
 }
 
