@@ -20,32 +20,32 @@ fmt:
 lint:
     cargo clippy --all-targets
 
-# What CI runs. Fast, no Obsidian, no network.
+# What CI runs. Fast, and provably no Obsidian: `OBSIDIAN_BIN` below cannot exist.
 check:
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
-    cargo test --all-targets -- --skip parity
+    OBSIDIAN_BIN=/nonexistent/obsidian cargo test --all-targets
     @just check-versions
 
 # -- tests -------------------------------------------------------------------
 
 # Unit and integration tests, no Obsidian required.
 test *ARGS:
-    cargo test --all-targets -- --skip parity {{ARGS}}
+    cargo test --all-targets {{ARGS}}
 
-# Everything, single-threaded, so a failing assertion is readable.
+# Everything except parity, single-threaded, so a failing assertion is readable.
 verify:
-    cargo test --all-targets -- --skip parity --test-threads=1
+    cargo test --all-targets -- --test-threads=1
 
-# The Obsidian CLI gate. Panics by design if Obsidian cannot answer.
+# The Obsidian CLI gate, behind a Cargo feature. Panics by design if Obsidian cannot answer.
 parity:
-    cargo test --test parity
+    cargo test --features parity --test parity
 
 # Run everything, requiring the live Obsidian CLI.
 check-all:
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
-    cargo test --all-targets -- --test-threads=1
+    cargo test --features parity --all-targets -- --test-threads=1
     @just check-versions
 
 # -- build -------------------------------------------------------------------
@@ -70,7 +70,7 @@ record *ARGS:
 
 # Compare against the recorded snapshot, using the real CLI.
 parity-recorded:
-    cargo test --test parity
+    cargo test --features parity --test parity
 
 # Does the testing vault still match the recorded snapshot?
 corpus-check:
@@ -86,7 +86,7 @@ check-versions:
 precommit:
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
-    cargo test --all-targets -- --skip parity
+    OBSIDIAN_BIN=/nonexistent/obsidian cargo test --all-targets
     @just corpus-check
 
 # What a new machine needs, once. Prints the path to register.

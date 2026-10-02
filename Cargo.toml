@@ -15,6 +15,28 @@ path = "src/main.rs"
 name = "bases_mcp"
 path = "src/lib.rs"
 
+[features]
+# Parity is a FEATURE, not a name filter.
+#
+# `cargo test -- --skip parity` filters by test NAME, and exactly one of the eight
+# tests in tests/parity.rs has "parity" in its name. The other seven ran; three of
+# them panicked at the no-CLI guard, by design, because a parity run that compared
+# nothing must not report green. CI has therefore been red on every push since
+# `f377887`, while its own comment claimed parity was excluded. The same filter was
+# also quietly dropping two ordinary tests — `render_is_the_flat_cli_parity_surface`
+# and `resolve_base_says_which_of_its_two_surfaces_is_the_parity_one` — from suites
+# that never touch the CLI.
+#
+# A `required-features` gate excludes the TARGET, which is the unit that was wrong:
+# no test in it runs, and nothing has to remember a substring.
+parity = []
+
+# Only the target that needs a live Obsidian CLI. Declaring it turns off
+# autodiscovery for this name alone, so every other tests/*.rs is still found.
+[[test]]
+name = "parity"
+required-features = ["parity"]
+
 [dependencies]
 # The official Rust MCP SDK, so the wire format cannot drift from the clients
 # this has to talk to. `schemars` is not optional here: tool input schemas are

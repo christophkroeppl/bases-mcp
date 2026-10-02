@@ -251,7 +251,12 @@ fn ends_its_own_line(out: &str, next: Option<&Segment>) -> bool {
     }
     match next {
         None => true,
-        Some(following) => following.raw().starts_with('\n'),
+        // A `\r\n` ends the region's line exactly as a `\n` does, and it is the
+        // form the prose after a Base region on a CRLF line actually starts with:
+        // the region stops before the `\r` (see `split_base_embeds`), so the
+        // segment that follows it begins with one. Calling that a mid-line
+        // boundary splices a bare LF into a CRLF Projection.
+        Some(following) => following.raw().starts_with("\r\n") || following.raw().starts_with('\n'),
     }
 }
 

@@ -47,10 +47,27 @@ jobs:
 
       - name: Tests
         # Parity is excluded because it needs a live Obsidian CLI against a
-        # registered vault, which does not exist in CI. The recorded CLI answers
-        # under test/parity/data/ are what CI checks instead; see the
-        # `parity-data` job.
-        run: cargo test --all-targets -- --skip parity
+        # registered vault, which does not exist in CI. The exclusion is a Cargo
+        # feature gate on the TARGET (`required-features` in Cargo.toml), not a
+        # `--skip` filter: a filter matches TEST NAMES, and only one of the eight
+        # tests in tests/parity.rs has "parity" in its name. The other seven ran,
+        # three of them panicked at the no-CLI guard, and CI was red on every push
+        # since f377887 while its own comment claimed parity was excluded. The
+        # same filter was also silently dropping two ordinary tests —
+        # `render_is_the_flat_cli_parity_surface` in tests/service.rs and
+        # `resolve_base_says_which_of_its_two_surfaces_is_the_parity_one` in
+        # tests/tools.rs — from suites that have nothing to do with the CLI.
+        run: cargo test --all-targets
+
+      - name: No test reaches for the Obsidian CLI
+        # The proof, and the regression guard: `tests/parity.rs` PANICS rather than
+        # skips when the CLI cannot answer, precisely so a run that compared
+        # nothing cannot report green. If the gate above ever stops excluding that
+        # target, this step is the one that says so — loudly, and in the job that
+        # runs on every push.
+        run: cargo test --all-targets
+        env:
+          OBSIDIAN_BIN: /nonexistent/obsidian
 
   commitlint:
     name: commit messages

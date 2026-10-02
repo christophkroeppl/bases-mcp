@@ -443,11 +443,14 @@ pub fn split_base_embeds(segments: &[Segment]) -> Vec<Segment> {
                 );
             }
             let subpath = caps.get(3).and_then(|m| m.as_str().strip_prefix('#'));
+            // The match runs one byte past the region on a CRLF line; see
+            // `region_end`.
+            let end = region_end(raw, whole.end());
             out.push(Segment::new(
-                whole.as_str().to_string(),
+                raw[whole.start()..end].to_string(),
                 Span {
                     start: segment.start() + whole.start(),
-                    end: segment.start() + whole.end(),
+                    end: segment.start() + end,
                 },
                 SegmentBody::BaseEmbed(BaseEmbed {
                     base_path: caps
@@ -458,7 +461,7 @@ pub fn split_base_embeds(segments: &[Segment]) -> Vec<Segment> {
                     view_name: subpath.filter(|s| !s.is_empty()).map(str::to_string),
                 }),
             ));
-            cursor = whole.end();
+            cursor = end;
         }
         if cursor < raw.len() {
             push_prose(
@@ -470,6 +473,35 @@ pub fn split_base_embeds(segments: &[Segment]) -> Vec<Segment> {
         }
     }
     out
+}
+
+/// Where a `base_embed_re` match ending at `matched_end` really ends.
+///
+/// The match is one byte longer than the Base region on a CRLF line, and that byte
+/// is load-bearing. Rust's `(?m)` `$` does not match before a `\r`, so the pattern
+/// has to CONSUME the `\r` to reach `$`; JavaScript's multiline `$` matches there,
+/// so the TypeScript tree's span stopped short and the `\r` belonged to the prose
+/// after it. The `regex` crate has no look-around to say "but not that `\r`", so
+/// the span is trimmed here instead — which is what keeps the two implementations
+/// byte-identical rather than merely equivalent.
+///
+/// Leaving the `\r` inside the region makes `push_line` append the note's line
+/// ending to a span that already ends in one, and a CRLF Host note comes back from
+/// `write_note` as `\r\r\n`. Nothing about that is visible: the embed is still in
+/// the file, the write reports `health: ok`, and the doubled carriage return is a
+/// line ending most editors silently rewrite. What it does is make the region
+/// unmatchable — an `![[T.base]]` line followed by `\r\r` has no way to satisfy
+/// `[ \t]*\r?$` — so the next read reports `regions: []`, the agent deletes what it
+/// can see is nothing, and the deletion lands.
+///
+/// A match always contains the embed itself, so trimming one byte can never
+/// produce an empty or inverted span.
+fn region_end(raw: &str, matched_end: usize) -> usize {
+    if raw[..matched_end].ends_with('\r') {
+        matched_end - 1
+    } else {
+        matched_end
+    }
 }
 
 /// A prose segment carrying `raw`, which spans `[start, end)` of its note.
@@ -1040,13 +1072,18 @@ pattern!(external_scheme_re, r"(?i)^[a-z]+://");
 fn base_embed_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // The trailing `\r?` is load-bearing. Rust's `(?m)` treats only `\n` as a
-        // line terminator, so `$` does not match before a `\r`. Without it a CRLF
-        // note's Base region is invisible, and `write_note` then persists the
-        // agent's deletion of it and reports success. JavaScript's multiline `$`
-        // does match before `\r`, which is why the TypeScript tree never had this
-        // bug and the port inherited it. A CRLF note comes from `core.autocrlf`,
-        // a Windows sync client, or `sed -i` on an imported file.
+        // The trailing `\r?` is load-bearing, and it is also the reason the match
+        // runs past the region it identifies. Rust's `(?m)` treats only `\n` as a
+        // line terminator, so `$` does not match before a `\r`. Without the `\r?` a
+        // CRLF note's Base region is invisible, and `write_note` then persists the
+        // agent's deletion of it and reports success. JavaScript's multiline `$` does
+        // match before `\r`, which is why the TypeScript tree never had this bug and
+        // the port inherited it. A CRLF note comes from `core.autocrlf`, a Windows
+        // sync client, or `sed -i` on an imported file.
+        //
+        // Consuming the `\r` also makes the match one byte longer than the span
+        // JavaScript produced, so `split_base_embeds` trims it back; see
+        // `region_end` for why the region must not own that byte.
         Regex::new(r"(?m)^([ \t]*)!\[\[([^\]|#]+?\.base)(#[^\]|]*)?(\|[^\]]*)?\]\][ \t]*\r?$")
             .expect("the base embed pattern compiles")
     })
