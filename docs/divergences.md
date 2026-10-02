@@ -361,10 +361,10 @@ into a CRLF Host note came back as `…\n` between two CRLF lines — a mixed-en
 file, which is what the CRLF work in `src/note.rs` (c4af62f) existed to prevent. The
 region's own bytes come from the original and carry whatever it used, but an inline
 ` ```base ` fence spans no terminator at all and an embed at end of file spans none
-either, so the byte after a restored region is always one `push_line` chose. On an
-embed whose own line ends CRLF a bare `\n` accidentally completed the pair, which is
-why pinning the embed case alone would have pinned the one shape that was never
-broken.
+either, so the byte after a restored region is always one `push_line` chose. At that
+point an embed whose own line ended CRLF appeared immune, because its span swallowed
+the `\r` and `push_line`'s bare `\n` completed the pair. It was not immune; it was
+wrong in the other direction, which is the next entry.
 
 `reconcile_note` now detects the note's line ending once, from the first terminator
 in the original, and writes both joins with it. First, deliberately: `write_note`
@@ -381,6 +381,51 @@ note that is already mixed, and most often on one Windows paste inside an
 otherwise LF note — where "anywhere" picks CRLF for a region restored beside LF
 prose. Recorded here rather than left as a silent difference between two trees that
 are meant to be equivalent.
+
+### A restored Base region came back as `\r\r\n`, and then vanished
+
+A CRLF Host note whose Base region sat on a **terminated** line came back from
+`write_note` with a doubled carriage return where the region's terminator used to
+be, and lost the region on the very next read.
+
+The region's byte span included the `\r`. Rust's `(?m)` treats only `\n` as a line
+terminator, so `$` does not match before a `\r` and the pattern's trailing `\r?`
+has to CONSUME it to reach `$`; JavaScript's multiline `$` matches there, so the
+TypeScript tree's span stopped short and the `\r` belonged to the prose after it.
+A span that already ends in `\r` plus the `\r\n` `push_line` appends is `\r\r\n`.
+
+Nothing reported it. The write was `health: partial-with-errors`, the embed was
+still plainly visible in the file, and a doubled carriage return is a line ending
+every editor silently rewrites — so nothing would ever have noticed except a human
+comparing bytes much later. What it destroyed was the region: `![[T.base]]\r\r`
+cannot satisfy `[ \t]*\r?$`, so the next read answered `regions: []` with no
+refusal at all, and the agent's next deletion of that invisible region reported
+`removedRegion: false`, `refusals: []`, `health: ok` — and was written. The first
+write refused a deletion and the second one silently performed it.
+
+Only the terminated-line shape reaches it. A Base region at end of file has no
+terminator for the join to double, which is why the two corpus hosts that end with
+their embed never showed it and every existing test passed.
+
+Two things hid it. The assertion that watched for mixed endings counted `\n` not
+preceded by `\r`, and `\r\r\n` contains no lone `\n` — it looked straight through
+the corruption. And a test comment already named the span as "a separate question
+about `split_base_embeds`" rather than as a bug, which is how a known-wrong span
+became a load-bearing one.
+
+Fixed in the span rather than in the pattern, because the `regex` crate has no
+look-around to say "…but not that `\r`": `split_base_embeds` trims the match back to
+where JavaScript's ended, which also makes the two trees byte-identical here
+instead of merely equivalent. `ends_its_own_line` now reads a leading `\r\n` as the
+line boundary it is, so the Projection of a CRLF note no longer splices a bare LF
+after a region either.
+
+Pinned on all three surfaces: the span against the exact bytes JavaScript produces
+(`expected_region` in `tests/note.rs`), every restore shape for both bare LFs and
+doubled carriage returns plus a re-parse (`tests/render.rs`), and two consecutive
+deletions through the tool surface, because the first corrupts the file and the
+second loses the region — asserting only the first cannot tell a repaired restore
+from a slightly wrong one (`tests/tools.rs`).
 
 ## TypeScript and Rust: verified equivalent
 
@@ -414,16 +459,18 @@ green with zero assertions whenever Obsidian was unreachable.
 relaxes when `BASES_MCP_ALLOW_SKIP=1` is set explicitly:
 
 ```
-$ cargo test --test parity
+$ cargo test --features parity --test parity
 test result: FAILED. 5 passed; 3 failed
 
-$ BASES_MCP_ALLOW_SKIP=1 cargo test --test parity
+$ BASES_MCP_ALLOW_SKIP=1 cargo test --features parity --test parity
 [parity] Obsidian CLI unavailable — COMPARING NOTHING this run.
 test result: ok. 8 passed
 ```
 
 "Compared nothing" is therefore loud by default and deliberate to opt into, which
-is the opposite of the original bug.
+is the opposite of the original bug. The target is behind a Cargo feature
+(`required-features = ["parity"]`), so a plain `cargo test` never builds it and the
+`--features parity` above is what puts it back — see `docs/tooling.md`.
 
 The availability probe is a real `base:query` that must return parseable rows,
 not `obsidian version` and not a non-empty check. A half-started bridge answers

@@ -20,11 +20,29 @@ just --list          everything else.
 
 `just check` does not need Obsidian. `just parity` and `just check-all` do.
 
+Parity is a **Cargo feature**, not a `--skip` filter:
+
+```
+$ cargo test --features parity --test parity
+```
+
+`tests/parity.rs` is declared with `required-features = ["parity"]`, so plain
+`cargo test` cannot build the target at all. That is deliberate. `--skip parity`
+filters by test *name*, and only one of the eight tests in that file has "parity"
+in its name — the other seven ran, three of them panicked at the no-CLI guard, and
+CI was red on every push while its own comment claimed parity was excluded. The
+same filter was also quietly dropping `render_is_the_flat_cli_parity_surface` and
+`resolve_base_says_which_of_its_two_surfaces_is_the_parity_one` from suites that
+never touch the CLI. Filtering by name is not a substitute for excluding a target.
+
 `tests/parity.rs` **panics** when the CLI cannot answer rather than skipping, so
 a green suite always compared something. `BASES_MCP_ALLOW_SKIP=1` relaxes it, and
 that is a deliberate choice: the alternative is a parity suite that passes
 because it tested nothing, which is the failure this project has already made
-once.
+once. Because that panic is the guard, `just check` runs the suite with
+`OBSIDIAN_BIN` pointed at a path that cannot exist — so the gate that excludes
+parity is *proved* on every run rather than assumed, and CI runs the same
+assertion as a step of its own.
 
 `just dev-setup` prints whether the CLI is on `PATH`, its version, the registered
 vaults, and — if the testing vault is missing — the exact path to add. The CLI

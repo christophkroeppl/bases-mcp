@@ -543,7 +543,8 @@ fn the_testing_vault_has_the_base_regions_it_is_a_fixture_for() {
     );
 }
 
-/// A CRLF note's Base region must still be a Base region.
+/// A CRLF note's Base region must still be a Base region, and must span the same
+/// bytes the TypeScript tree's did.
 ///
 /// Regression. Rust's `(?m)` treats only `\n` as a line terminator, so `$` does
 /// not match before a `\r`. That made every CRLF note's region invisible, and
@@ -551,6 +552,12 @@ fn the_testing_vault_has_the_base_regions_it_is_a_fixture_for() {
 /// `health: ok` — silent vault corruption on a note the tool claimed to have
 /// protected. JavaScript's multiline `$` does match before `\r`, so this was a
 /// port regression rather than inherited behaviour.
+///
+/// Making the region VISIBLE was only half of it. Matching it needs a `\r?` the
+/// pattern consumes, so the span arrived one byte longer than JavaScript's, and a
+/// region that owns its `\r` is a region `push_line` then joins to `\r\r\n`. The
+/// span is pinned here for the same reason the match is: byte for byte, and equal
+/// to what the TypeScript produced.
 #[test]
 fn a_crlf_host_note_still_has_a_base_region() {
     for (label, text) in [
@@ -567,10 +574,14 @@ fn a_crlf_host_note_still_has_a_base_region() {
             "{label}: expected exactly one Base region, found {}",
             regions.len()
         );
-        // The region covers the whole line: indentation, the embed, trailing
-        // spaces, and on a CRLF note the `\r`. Consuming the `\r` is what keeps
-        // removal and restoration byte exact; dropping it while keeping the `\n`
-        // would leave a stray carriage return behind.
+        // The region covers its own line and stops before the `\r`. JavaScript's
+        // multiline `$` matches there, so the TypeScript tree's span stopped
+        // there too and the `\r` belonged to the prose that followed. Rust's
+        // `(?m)` `$` does not match before a `\r`, so `base_embed_re` has to
+        // consume it to reach `$`; `split_base_embeds` trims the match back to
+        // this span rather than letting the region absorb a line ending it does
+        // not own — an absorbed `\r` plus the `\r\n` `push_line` appends is
+        // `\r\r\n`, which the next read cannot match at all.
         assert_eq!(
             &text[regions[0].start()..regions[0].end()],
             expected_region(label),
@@ -585,19 +596,53 @@ fn a_crlf_host_note_still_has_a_base_region() {
 }
 
 /// The byte span a Base region must occupy for each CRLF shape below.
+///
+/// Byte-identical to what the TypeScript tree produced, which is the point: the
+/// two implementations are meant to agree on every span, and a region that owns
+/// its `\r` agrees with neither JavaScript nor `push_line`.
 fn expected_region(label: &str) -> &'static str {
     match label {
-        "indented" => "  ![[T.base]]  \r",
-        "with view" => "![[T.base#View]]\r",
+        "indented" => "  ![[T.base]]  ",
+        "with view" => "![[T.base#View]]",
         "no trailing newline" => "![[T.base]]",
-        _ => "![[T.base]]\r",
+        _ => "![[T.base]]",
     }
 }
 
 /// A CRLF note must round-trip byte for byte, like every other note.
 #[test]
 fn a_crlf_note_round_trips_exactly() {
-    let text = "# Host\r\n\r\nintro\r\n\r\n![[T.base]]\r\n\r\ntail\r\n";
-    let note = parse_note_with_embeds("Host.md", text);
-    assert_eq!(serialise(&note.segments), text);
+    for (label, text) in [
+        (
+            "a Base region on a terminated line",
+            "# Host\r\n\r\nintro\r\n\r\n![[T.base]]\r\n\r\ntail\r\n",
+        ),
+        (
+            "a Base region at end of file",
+            "# Host\r\n\r\nintro\r\n\r\n![[T.base]]",
+        ),
+        (
+            "a Base region pinning a view",
+            "# Host\r\n\r\n![[T.base#View]]\r\n",
+        ),
+        (
+            "an indented Base region with trailing spaces",
+            "# Host\r\n\r\n  ![[T.base]]  \r\n",
+        ),
+        (
+            "an inline fence",
+            "# Host\r\n\r\n```base\r\nviews: []\r\n```\r\n",
+        ),
+        (
+            "the same note with LF",
+            "# Host\n\nintro\n\n![[T.base]]\n\ntail\n",
+        ),
+        (
+            "a mixed note, left exactly as found",
+            "# Host\r\n\nintro\n\n![[T.base]]\n",
+        ),
+    ] {
+        let note = parse_note_with_embeds("Host.md", text);
+        assert_eq!(serialise(&note.segments), text, "{label}: lost bytes");
+    }
 }
