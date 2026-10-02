@@ -40,7 +40,9 @@ use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone};
 
 use crate::error::{BasesError, Result};
 use crate::vault::fs::content_hash;
-use crate::vault::source::{is_indexable, FileStat, SourceKind, VaultSource};
+use crate::vault::source::{
+    is_indexable, normalise_line_endings, FileStat, SourceKind, VaultSource,
+};
 
 /// The media type a `PROPFIND` request body is sent as.
 const XML_CONTENT_TYPE: &str = r#"application/xml; charset="utf-8""#;
@@ -423,7 +425,7 @@ pub fn parse_multistatus(xml: &str, base_path: &str) -> Result<Vec<DavResource>>
         // Skipped when every propstat is a non-2xx, which is how a server says
         // this resource is gone: a listing can name a file deleted between the
         // request and the response, and indexing it would put a path in `list()`
-        // that a later `read_text` cannot serve. A href outside the base does
+        // that a later `read_note` cannot serve. A href outside the base does
         // NOT land here — that refuses, in `vault_path_from_href`.
         let Some(properties) = found_properties(response) else {
             continue;
@@ -1288,6 +1290,10 @@ pub struct WebdavVaultSource {
     timeout: Duration,
     transport: Box<dyn WebdavTransport>,
     files: RefCell<Option<Vec<String>>>,
+    /// Note text, NORMALISED — the same string [`VaultSource::read_note`] returns.
+    /// The equivalence suite reads this backend and the filesystem one through the
+    /// same calls, so a cache that held raw bytes here and normalised bytes there
+    /// would show up as a phantom backend difference.
     text_cache: RefCell<HashMap<String, String>>,
     hash_cache: RefCell<HashMap<String, String>>,
 }
@@ -1589,12 +1595,12 @@ impl VaultSource for WebdavVaultSource {
         Ok(out)
     }
 
-    async fn read_text(&self, rel: &str) -> Result<String> {
+    async fn read_note(&self, rel: &str) -> Result<String> {
         let path = vault_relative_path(rel)?;
         if let Some(text) = self.text_cache.borrow().get(&path) {
             return Ok(text.clone());
         }
-        let text = self.fetch_text(DavOperation::Read, &path).await?;
+        let text = normalise_line_endings(&self.fetch_text(DavOperation::Read, &path).await?);
         self.text_cache.borrow_mut().insert(path, text.clone());
         Ok(text)
     }
@@ -1607,7 +1613,7 @@ impl VaultSource for WebdavVaultSource {
     /// old.
     async fn read_fresh(&self, rel: &str) -> Result<String> {
         let path = vault_relative_path(rel)?;
-        let text = self.fetch_text(DavOperation::Read, &path).await?;
+        let text = normalise_line_endings(&self.fetch_text(DavOperation::Read, &path).await?);
         self.text_cache.borrow_mut().insert(path, text.clone());
         Ok(text)
     }
@@ -1651,7 +1657,7 @@ impl VaultSource for WebdavVaultSource {
         if let Some(hash) = self.hash_cache.borrow().get(&path) {
             return Ok(hash.clone());
         }
-        let hash = content_hash(&self.read_text(&path).await?);
+        let hash = content_hash(&self.read_note(&path).await?);
         self.hash_cache.borrow_mut().insert(path, hash.clone());
         Ok(hash)
     }
@@ -1728,6 +1734,10 @@ impl VaultSource for WebdavVaultSource {
         .await?;
 
         let sent = content_hash(data);
+        // NOT normalised on either side, deliberately: this comparison is about
+        // what the server stored on the wire, which is a different question from
+        // what a read of this resource will return. Normalising here would accept a
+        // server that rewrote line endings on the way through.
         let stored = content_hash(&self.fetch_text(DavOperation::Write, &path).await?);
         if stored != sent {
             return Err(BasesError::new(format!(
@@ -1739,10 +1749,11 @@ impl VaultSource for WebdavVaultSource {
         }
         // Only now, after the read-back agreed: a cache updated from an
         // unverified write would report the requested bytes for a resource
-        // holding others.
+        // holding others. Normalised, because that is what the next
+        // [`VaultSource::read_note`] of this resource will hand back.
         self.text_cache
             .borrow_mut()
-            .insert(path.clone(), data.to_string());
+            .insert(path.clone(), normalise_line_endings(data));
         self.hash_cache.borrow_mut().remove(&path);
         *self.files.borrow_mut() = None;
         Ok(())

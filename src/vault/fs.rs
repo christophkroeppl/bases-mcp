@@ -19,7 +19,9 @@ use chrono::{DateTime, Local};
 use sha2::{Digest, Sha256};
 
 use crate::error::{BasesError, Result};
-use crate::vault::source::{is_indexable, FileStat, SourceKind, VaultSource};
+use crate::vault::source::{
+    is_indexable, normalise_line_endings, FileStat, SourceKind, VaultSource,
+};
 
 /// The content hash every backend must compute identically.
 ///
@@ -34,6 +36,15 @@ use crate::vault::source::{is_indexable, FileStat, SourceKind, VaultSource};
 /// backends and the conflict check silently stopped firing.
 /// `tests/vault_equivalence.rs` compares hashes across backends, and that
 /// comparison is only meaningful while there is one definition of the function.
+///
+/// **It hashes exactly what it is given and normalises nothing.** That is a
+/// deliberate limit, not an oversight: the WebDAV write verification hashes the
+/// bytes it PUT against the bytes the server stored, and a hash that quietly
+/// folded CRLF would stop being able to see a server that rewrites endings. So the
+/// obligation to hash a NORMALISED note belongs to the callers, and every one of
+/// them above the backend is handed text [`VaultSource::read_note`] has already
+/// normalised. `the_two_spellings_of_a_note_get_the_same_base_hash` in
+/// `tests/service.rs` is what holds that obligation to account.
 pub fn content_hash(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
     hex::encode(digest)[..32].to_string()
@@ -42,6 +53,10 @@ pub fn content_hash(text: &str) -> String {
 pub struct FsVaultSource {
     root: PathBuf,
     files: RefCell<Option<Vec<String>>>,
+    /// Note text, NORMALISED — the same string [`VaultSource::read_note`] returns.
+    /// The cache is not a copy of the bytes on disk and never was meant to be; it
+    /// is what the next read would produce, so a cache hit and a fresh read cannot
+    /// disagree about a note's line endings.
     text_cache: RefCell<HashMap<String, String>>,
     hash_cache: RefCell<HashMap<String, String>>,
 }
@@ -60,7 +75,7 @@ impl FsVaultSource {
     ///
     /// A root of `/` is refused. The escape guard below compares path COMPONENTS,
     /// and every absolute path starts with the root component, so against `/` the
-    /// guard would be inert and `read_text("/etc/passwd")` would succeed. No
+    /// guard would be inert and `read_note("/etc/passwd")` would succeed. No
     /// vault is the filesystem root, so the configuration is a mistake and saying
     /// so is cheaper than a guard that quietly stops working.
     pub fn new(root: impl AsRef<Path>) -> std::result::Result<Self, BasesError> {
@@ -255,7 +270,7 @@ impl VaultSource for FsVaultSource {
         Ok(out)
     }
 
-    async fn read_text(&self, rel: &str) -> Result<String> {
+    async fn read_note(&self, rel: &str) -> Result<String> {
         if let Some(text) = self.text_cache.borrow().get(rel) {
             return Ok(text.clone());
         }
@@ -268,7 +283,7 @@ impl VaultSource for FsVaultSource {
         let bytes = tokio::fs::read(&abs)
             .await
             .map_err(|e| io("read", &abs, e))?;
-        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let text = normalise_line_endings(&String::from_utf8_lossy(&bytes));
         self.text_cache
             .borrow_mut()
             .insert(rel.to_string(), text.clone());
@@ -283,8 +298,8 @@ impl VaultSource for FsVaultSource {
         let bytes = tokio::fs::read(&abs)
             .await
             .map_err(|e| io("read", &abs, e))?;
-        let text = String::from_utf8_lossy(&bytes).into_owned();
-        // Keep the cache consistent with disk, so a later `read_text` cannot
+        let text = normalise_line_endings(&String::from_utf8_lossy(&bytes));
+        // Keep the cache consistent with disk, so a later `read_note` cannot
         // hand back the pre-write copy we just superseded.
         self.text_cache
             .borrow_mut()
@@ -298,7 +313,7 @@ impl VaultSource for FsVaultSource {
     /// The snapshot is dropped by `refresh` and by every write, and the caller
     /// here is a commit that is about to overwrite: a `refresh` landing between
     /// the check and the write would not prevent the clobber, it would just make
-    /// it happen over fresher bytes. `metadata` rather than `read_text` because
+    /// it happen over fresher bytes. `metadata` rather than `read_note` because
     /// the question is whether the path is taken, not what it says.
     ///
     /// Only `NotFound` is absence. The TypeScript tree answers `false` for EVERY
@@ -326,9 +341,14 @@ impl VaultSource for FsVaultSource {
         tokio::fs::write(&abs, data.as_bytes())
             .await
             .map_err(|e| io("write", &abs, e))?;
+        // What goes to disk is exactly what the caller asked for — a verbatim write
+        // that second-guessed its bytes would be a different tool. What goes in
+        // the cache is what a READ of that file will return, which is the
+        // normalised form; caching the raw bytes here would hand the next
+        // `read_note` line endings no read of this file could ever produce.
         self.text_cache
             .borrow_mut()
-            .insert(rel.to_string(), data.to_string());
+            .insert(rel.to_string(), normalise_line_endings(data));
         self.hash_cache.borrow_mut().remove(rel);
         *self.files.borrow_mut() = None;
         Ok(())
@@ -353,7 +373,7 @@ impl VaultSource for FsVaultSource {
         if let Some(hash) = self.hash_cache.borrow().get(rel) {
             return Ok(hash.clone());
         }
-        let hash = content_hash(&self.read_text(rel).await?);
+        let hash = content_hash(&self.read_note(rel).await?);
         self.hash_cache
             .borrow_mut()
             .insert(rel.to_string(), hash.clone());

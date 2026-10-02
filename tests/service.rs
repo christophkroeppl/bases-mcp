@@ -31,6 +31,7 @@ use bases_mcp::drafts::{
 use bases_mcp::error::{BasesError, Result};
 use bases_mcp::note::parse_note;
 use bases_mcp::service::{NoteOptions, Resolver};
+use bases_mcp::vault::content_hash;
 use common::{
     count_files, futures_block_on, load_corpus_from, seed_dir, vault_dir, VaultFile, CORPUS_SIZE,
 };
@@ -1103,7 +1104,7 @@ fn a_base_path_is_refused_on_the_commit_call_too() {
     assert!(message.contains("a Base is never written"), "{message}");
     // The base itself is untouched, not merely refused in the abstract.
     let text =
-        futures_block_on(resolver.vault().read_text("Tickets.base")).expect("the base reads");
+        futures_block_on(resolver.vault().read_note("Tickets.base")).expect("the base reads");
     assert!(text.contains("views:"), "the base is intact");
 }
 
@@ -1130,12 +1131,12 @@ fn an_empty_path_is_refused() {
 fn an_existing_note_is_never_clobbered() {
     let (_dir, resolver) = sandbox();
     let target = "Tickets/Fix login redirect.md";
-    let before = futures_block_on(resolver.vault().read_text(target)).expect("the note reads");
+    let before = futures_block_on(resolver.vault().read_note(target)).expect("the note reads");
 
     let message = message_of(|| add(&resolver, vec![("base", "Tickets.base"), ("path", target)]));
     assert!(message.contains("already exists"), "{message}");
 
-    let after = futures_block_on(resolver.vault().read_text(target)).expect("the note reads");
+    let after = futures_block_on(resolver.vault().read_note(target)).expect("the note reads");
     assert_eq!(before, after, "the existing note is byte-identical");
 }
 
@@ -1569,7 +1570,7 @@ fn directory_names(dir: &Path) -> Vec<String> {
 fn a_prose_edit_is_applied_and_written() {
     let (dir, resolver) = sandbox();
     let note = "Tickets/Invoice export.md";
-    let original = futures_block_on(resolver.vault().read_text(note)).expect("reads");
+    let original = futures_block_on(resolver.vault().read_note(note)).expect("reads");
 
     let edited = original.replace("# Invoice export", "# Invoice export, revised");
     let result =
@@ -1581,7 +1582,7 @@ fn a_prose_edit_is_applied_and_written() {
     let on_disk = std::fs::read_to_string(dir.path().join(note)).expect("the note is on disk");
     assert_eq!(on_disk, edited);
     assert_eq!(
-        futures_block_on(resolver.vault().read_text(note)).expect("reads"),
+        futures_block_on(resolver.vault().read_note(note)).expect("reads"),
         edited
     );
 }
@@ -1590,7 +1591,7 @@ fn a_prose_edit_is_applied_and_written() {
 fn an_edit_that_changes_nothing_does_not_touch_the_file() {
     let (dir, resolver) = sandbox();
     let note = "Tickets/Invoice export.md";
-    let original = futures_block_on(resolver.vault().read_text(note)).expect("reads");
+    let original = futures_block_on(resolver.vault().read_note(note)).expect("reads");
     let stamp = std::fs::metadata(dir.path().join(note))
         .expect("the note is on disk")
         .len();
@@ -1648,7 +1649,7 @@ fn editing_a_base_region_is_refused_and_the_rest_of_the_edit_still_lands() {
 fn deleting_a_base_region_is_refused_and_the_region_is_restored() {
     let (dir, resolver) = sandbox();
     let note = "Projects/OtherProject.md";
-    let original = futures_block_on(resolver.vault().read_text(note)).expect("reads");
+    let original = futures_block_on(resolver.vault().read_note(note)).expect("reads");
     assert!(original.contains("![[Tickets.base]]"));
 
     let edited = original.replace("![[Tickets.base]]", "");
@@ -2024,6 +2025,112 @@ fn a_conditional_write_succeeds_when_nothing_changed() {
 
     let on_disk = futures_block_on(resolver.read_note(note, NoteOptions::raw())).expect("reads");
     assert!(on_disk.raw.contains("revised"), "{}", on_disk.raw);
+}
+
+/// The two spellings of one note get the same `base_hash`.
+///
+/// The whole reason a `base_hash` can survive a line ending, asserted where it is
+/// actually true rather than as a property of `content_hash` — which does NOT
+/// normalise, and must not. The WebDAV write verification compares the bytes it PUT
+/// against the bytes the server stored, and a hash that folded CRLF would stop being
+/// able to see a server that rewrites endings. So `content_hash` is a pure function
+/// of its argument, the obligation is on its callers, and every one of them above
+/// the backend is handed text `read_note` has already normalised.
+///
+/// This is the test that the obligation is met, through the same read an agent does.
+/// The files are written BEFORE the vault is opened, or the index would never have
+/// heard of them.
+#[test]
+fn the_two_spellings_of_a_note_get_the_same_base_hash() {
+    let lf_text = "# Host\n\nintro\n\n![[Tickets.base]]\n";
+    let dir = TempDir::new().expect("a temp dir is writable");
+    seed_dir(dir.path(), &load_corpus_from(&vault_dir()));
+    for (name, text) in [
+        ("Tickets/__lf.md", lf_text),
+        ("Tickets/__crlf.md", &lf_text.replace('\n', "\r\n")),
+        // CR-only: not a line ending this normaliser touches, so it is its own note
+        // and hashes like one. Pinned because "replace every `\r`" is the obvious
+        // wrong version of this rule, and it splits such a note into three lines.
+        ("Tickets/__cr.md", &lf_text.replace('\n', "\r")),
+    ] {
+        std::fs::write(dir.path().join(name), text).expect("the note is on disk");
+    }
+    let resolver = Rc::new(
+        futures_block_on(Resolver::open_dir(dir.path()))
+            .unwrap_or_else(|error| panic!("the mixed vault opens: {error}")),
+    );
+
+    let base_hash = |note: &str| {
+        futures_block_on(resolver.read_note(note, NoteOptions::raw()))
+            .unwrap_or_else(|error| panic!("{note} reads: {error}"))
+            .base_hash
+    };
+
+    assert_eq!(base_hash("Tickets/__lf.md"), content_hash(lf_text));
+    assert_eq!(
+        base_hash("Tickets/__crlf.md"),
+        base_hash("Tickets/__lf.md"),
+        "a CRLF note and its LF twin are one note"
+    );
+    assert_ne!(
+        base_hash("Tickets/__cr.md"),
+        base_hash("Tickets/__lf.md"),
+        "a CR-only note is not normalised, so it is a different note"
+    );
+}
+
+/// `base_hash` survives Obsidian re-saving a CRLF note as LF, which is what it
+/// does to every note it opens.
+///
+/// The lockout class the normaliser removes. Obsidian converts CRLF back to LF
+/// when it opens a note (`docs/divergences.md`), so the bytes behind a note can
+/// turn over between the agent's read and its write while the note nobody is
+/// looking at does not change at all. `write_note` compares `base_hash` against a
+/// fresh read, so before normalisation that turn refused the write — "changed
+/// since you read it", for a note no human had touched, and the error message
+/// tells the agent to re-read and retry, which lands on the same refusal for as
+/// long as the resave and the read disagree about the ending.
+///
+/// The note is written BEFORE the vault is opened, or the index would never have
+/// heard of it.
+#[test]
+fn a_base_hash_from_a_crlf_note_round_trips_through_an_obsidian_resave() {
+    const NOTE: &str = "Tickets/Invoice export.md";
+    const ORIGINAL: &str = "# Invoice export\r\n\r\nThe body of the note.\r\n\r\n- [ ] a task\r\n";
+
+    let dir = TempDir::new().expect("a temp dir is writable");
+    seed_dir(dir.path(), &load_corpus_from(&vault_dir()));
+    std::fs::write(dir.path().join(NOTE), ORIGINAL).expect("the CRLF note is on disk");
+    let resolver = Rc::new(
+        futures_block_on(Resolver::open_dir(dir.path()))
+            .unwrap_or_else(|error| panic!("the CRLF vault opens: {error}")),
+    );
+
+    // The agent reads it, and keeps the hash of what it read.
+    let view = futures_block_on(resolver.read_note(NOTE, NoteOptions::raw())).expect("reads");
+    assert!(
+        !view.raw.contains('\r'),
+        "a read hands back the normalised note: {:?}",
+        view.raw
+    );
+
+    // Obsidian opens the note and saves it back as LF. Nobody typed anything.
+    std::fs::write(dir.path().join(NOTE), ORIGINAL.replace("\r\n", "\n"))
+        .expect("the resave lands");
+
+    // The agent writes its edit of what it read, quoting the hash from before.
+    let edited = view
+        .raw
+        .replace("# Invoice export", "# Invoice export, revised");
+    futures_block_on(resolver.write_note(NOTE, &edited, Some(&view.base_hash)))
+        .expect("a line-ending turn must not refuse the write");
+
+    let on_disk = std::fs::read_to_string(dir.path().join(NOTE)).expect("the note is on disk");
+    assert!(on_disk.contains("# Invoice export, revised"), "{on_disk}");
+    assert!(
+        on_disk.contains("- [ ] a task"),
+        "the agent's edit replaced the note rather than editing it: {on_disk}"
+    );
 }
 
 /// A wrong hash is refused rather than applied, including a hash of nothing.

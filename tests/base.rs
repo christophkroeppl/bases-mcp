@@ -85,7 +85,7 @@ fn fixtures_dir() -> PathBuf {
 
 /// Parse a `.base` out of the testing vault by name.
 fn base_of(vault: &Vault, path: &str) -> BaseFile {
-    let text = futures_block_on(vault.read_text(path)).expect("a corpus base is readable");
+    let text = futures_block_on(vault.read_note(path)).expect("a corpus base is readable");
     parse_base(path, &text).expect("a corpus base parses")
 }
 

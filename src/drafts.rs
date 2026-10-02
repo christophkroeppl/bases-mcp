@@ -45,7 +45,7 @@ use crate::note::parse_note_with_embeds;
 use crate::parser::{parse, try_parse};
 use crate::service::Resolver;
 use crate::value::{strip_extension, BasesValue};
-use crate::vault::source::{FileStat, SourceKind, VaultSource};
+use crate::vault::source::{normalise_line_endings, FileStat, SourceKind, VaultSource};
 use crate::vault::{content_hash, Vault};
 
 // ---------------------------------------------------------------------------
@@ -610,7 +610,7 @@ async fn commit_draft(
 
     let failures = verification_failures(resolver, &base, &view, &stored, &content).await?;
     if !failures.is_empty() {
-        let yaml = resolver.vault().read_text(&stored.base).await?;
+        let yaml = resolver.vault().read_note(&stored.base).await?;
         return Err(verification_error(&stored, &view, &failures, &yaml));
     }
 
@@ -1448,18 +1448,24 @@ impl VaultSource for DraftVaultSource {
         Ok(paths.into_iter().collect())
     }
 
-    async fn read_text(&self, path: &str) -> Result<String> {
+    /// Normalised on the way out like every other backend's read, because this
+    /// IS a backend as far as the index is concerned. The draft's content comes
+    /// from the agent rather than from storage, so it is the one note that could
+    /// arrive with CRLF — and a verify step that indexed it with the endings
+    /// normalised while the real vault was read raw would be comparing two
+    /// different readings of the same note.
+    async fn read_note(&self, path: &str) -> Result<String> {
         if path == self.path {
-            return Ok(self.content.clone());
+            return Ok(normalise_line_endings(&self.content));
         }
-        self.inner.read_text(path).await
+        self.inner.read_note(path).await
     }
 
     /// The draft overlays the real vault, so a fresh read still has to consult
     /// the draft for its own path before going to the backend for anything else.
     async fn read_fresh(&self, path: &str) -> Result<String> {
         if path == self.path {
-            return Ok(self.content.clone());
+            return Ok(normalise_line_endings(&self.content));
         }
         self.inner.read_fresh(path).await
     }
@@ -1504,7 +1510,10 @@ impl VaultSource for DraftVaultSource {
         if path != self.path {
             return self.inner.hash(path).await;
         }
-        Ok(content_hash(&self.content))
+        // Over the same text `read_note` hands back. Every other backend reaches
+        // this answer by hashing a read, so a raw hash here would make a CRLF draft
+        // disagree with the LF vault it is being verified against.
+        Ok(content_hash(&normalise_line_endings(&self.content)))
     }
 
     async fn ensure_dir(&self, _path: &str) -> Result<()> {

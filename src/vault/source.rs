@@ -78,6 +78,28 @@ pub struct FileStat {
     pub mtime: DateTime<FixedOffset>,
 }
 
+/// Replace every `\r\n` with `\n`, and nothing else.
+///
+/// A lone `\r` is left alone, and that is the design rather than a shortcut.
+/// `note::Lines` finds `\n` and nothing else, so a CR-only note is ONE line to
+/// this crate; replacing every `\r` would make it as many lines as it has
+/// carriage returns, inventing a line count the note never had. Leaving it alone
+/// is also what keeps such a note round-tripping byte for byte.
+///
+/// `\r\r\n` becomes `\r\n`, because the pair at the end of it is still a pair.
+/// Degrading a doubled carriage return to a real CRLF on the way to being
+/// normalised is strictly better than passing it up.
+///
+/// See [`VaultSource::read_note`], which is where this runs.
+pub fn normalise_line_endings(text: &str) -> String {
+    // Notes are LF already unless something outside Obsidian said otherwise, so
+    // this is the common path and the copy is a memcpy with nothing to scan.
+    if !text.contains('\r') {
+        return text.to_string();
+    }
+    text.replace("\r\n", "\n")
+}
+
 /// A place vault content comes from and goes to.
 #[async_trait(?Send)]
 pub trait VaultSource {
@@ -87,12 +109,31 @@ pub trait VaultSource {
     /// Vault-relative POSIX paths of every note (`.md`) and base (`.base`).
     async fn list(&self) -> Result<Vec<String>>;
 
-    async fn read_text(&self, path: &str) -> Result<String>;
+    /// A note's text, with CRLF normalised to LF. **Not the bytes on disk.**
+    ///
+    /// The name is the warning. This translates, and a function that translates
+    /// is not doing what `read_text` claimed to do — so the translation is in the
+    /// name now rather than in a paragraph nobody reads.
+    ///
+    /// Normalising HERE, at the single I/O boundary, rather than in [`Vault`] is
+    /// what makes it stick: every read of a note in the process routes through
+    /// this method, so there is no caller a future change can forget, and the
+    /// question "which line ending does this note use" has no answer to get wrong
+    /// above it. Obsidian writes `\n` on every platform, so CRLF is the FOREIGN
+    /// shape — it arrives from `core.autocrlf=true`, a sync client, or an edit
+    /// made outside Obsidian. `docs/divergences.md` records what that costs.
+    ///
+    /// A cache this feeds holds the NORMALISED text, so "what is cached is what
+    /// is returned" holds rather than being a thing each backend has to remember.
+    /// [`crate::vault::content_hash`] is taken over this text too, which is why a
+    /// CRLF note and its LF twin hash alike and `base_hash` round-trips across
+    /// the two spellings.
+    async fn read_note(&self, path: &str) -> Result<String>;
 
     /// Read the note as it is RIGHT NOW, bypassing any cache.
     ///
-    /// This is what the write path uses, and the distinction from `read_text` is
-    /// the whole point: `read_text` may answer from a snapshot taken earlier in
+    /// This is what the write path uses, and the distinction from `read_note` is
+    /// the whole point: `read_note` may answer from a snapshot taken earlier in
     /// the process's life, which is right for queries and catastrophic for a
     /// write. Reconciling an edit against a stale copy and then writing the
     /// result over the top of whatever the user has since typed destroys their
@@ -100,6 +141,9 @@ pub trait VaultSource {
     ///
     /// Obsidian autosaves continuously, so "the user edited this note in the
     /// last thirty seconds" is the normal case, not an edge case.
+    ///
+    /// Normalised exactly as [`Self::read_note`] is, and separately rather than
+    /// by calling it: a fresh read that went through the cache would not be one.
     async fn read_fresh(&self, path: &str) -> Result<String>;
 
     /// Is there something at `path` RIGHT NOW?
@@ -131,8 +175,15 @@ pub trait VaultSource {
     /// Deliberately NOT the server ETag: a WebDAV server is free to invent one,
     /// and the server this targets does not emit `getetag` at all. Hashing what
     /// we ourselves read is both backend-agnostic and sufficient to detect a
-    /// concurrent write. [`crate::vault::fs::content_hash`] is the one
-    /// definition, and it is the definition every backend calls.
+    /// concurrent write. [`crate::vault::content_hash`] is the one definition,
+    /// and it is the definition every backend calls.
+    ///
+    /// Taken over the text [`Self::read_note`] returns, which makes it the hash
+    /// of what a note MEANS here rather than of how some producer once spelled
+    /// it. A CRLF note and its LF twin are the same note, and hashing the
+    /// difference would refuse a conditional write that had nothing stale about
+    /// it — the agent read the note through this server and got back LF, so the
+    /// bytes on disk are not what it agreed to.
     async fn hash(&self, path: &str) -> Result<String>;
 
     /// Create intermediate collections. A no-op on backends that need none.

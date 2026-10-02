@@ -31,7 +31,9 @@ use std::rc::Rc;
 
 use async_trait::async_trait;
 use bases_mcp::error::BasesError;
-use bases_mcp::vault::{content_hash, is_indexable, FileStat, SourceKind, VaultSource};
+use bases_mcp::vault::{
+    content_hash, is_indexable, normalise_line_endings, FileStat, SourceKind, VaultSource,
+};
 use chrono::{DateTime, FixedOffset};
 
 use super::VaultFile;
@@ -267,6 +269,18 @@ impl MemoryVaultSource {
             .ok_or_else(|| self.refuse(not_found(verb, path, 404)))
     }
 
+    /// The stored text as a READ of it hands it back: CRLF normalised.
+    ///
+    /// [`Self::read`] stays the raw store, because `stat` needs the raw length --
+    /// `file.size` is bytes on disk on both real backends. This is the other half:
+    /// the string every caller above the backend may assume is LF. It is one
+    /// function rather than three `normalise_line_endings` calls so a fourth call
+    /// site cannot forget, which is the whole reason the real backends normalise
+    /// inside `read_note` instead of in each caller.
+    fn read_as_note(&self, path: &str, verb: &str) -> std::result::Result<String, BasesError> {
+        Ok(normalise_line_endings(&self.read(path, verb)?))
+    }
+
     /// Run the fault table for one operation.
     ///
     /// A fault carrying `stored` does not fail. It returns the replacement text,
@@ -382,15 +396,15 @@ impl VaultSource for MemoryVaultSource {
         Ok(paths)
     }
 
-    async fn read_text(&self, rel: &str) -> std::result::Result<String, BasesError> {
+    async fn read_note(&self, rel: &str) -> std::result::Result<String, BasesError> {
         let path = self.normalise_refusing(rel)?;
         self.fire(MemoryOp::Read, &path)?;
-        self.read(&path, "GET")
+        self.read_as_note(&path, "GET")
     }
 
     /// There is no cache here, so a fresh read is the same read.
     async fn read_fresh(&self, rel: &str) -> std::result::Result<String, BasesError> {
-        self.read_text(rel).await
+        self.read_note(rel).await
     }
 
     /// A membership test, which is all this fake has to answer.
@@ -424,7 +438,11 @@ impl VaultSource for MemoryVaultSource {
     async fn hash(&self, rel: &str) -> std::result::Result<String, BasesError> {
         let path = self.normalise_refusing(rel)?;
         self.fire(MemoryOp::Hash, &path)?;
-        Ok(content_hash(&self.read(&path, "GET")?))
+        // Over the NORMALISED text, because that is what a read returns and what
+        // both real backends hash. A fake that hashed the raw bytes would report
+        // a CRLF note differing from its filesystem twin and the equivalence suite
+        // would call it a backend bug.
+        Ok(content_hash(&self.read_as_note(&path, "GET")?))
     }
 
     /// Store text at a vault-relative path, creating whatever collections that
@@ -485,8 +503,8 @@ impl VaultSource for SharedSource {
     async fn list(&self) -> std::result::Result<Vec<String>, BasesError> {
         self.0.list().await
     }
-    async fn read_text(&self, path: &str) -> std::result::Result<String, BasesError> {
-        self.0.read_text(path).await
+    async fn read_note(&self, path: &str) -> std::result::Result<String, BasesError> {
+        self.0.read_note(path).await
     }
     async fn read_fresh(&self, path: &str) -> std::result::Result<String, BasesError> {
         self.0.read_fresh(path).await

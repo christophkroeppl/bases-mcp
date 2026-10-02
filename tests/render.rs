@@ -1008,46 +1008,6 @@ fn project_substitutes_every_region_and_leaves_the_prose_alone() {
     );
 }
 
-/// A Projection must not splice a bare LF into a CRLF Host note.
-///
-/// A Base region on a CRLF line stops before the `\r` (see `split_base_embeds`), so
-/// the prose segment after it begins with `\r\n` — which ends a line exactly as a
-/// `\n` does. Treating that as mid-line output is what a newline-after-every-region
-/// rule would do, and the Projection is what an agent copies its edits out of, so a
-/// bare LF here comes straight back as an edit on the next write.
-///
-/// Projection-only: nothing here reaches disk, and the fence's own body is built
-/// with `\n` whatever the note uses.
-#[test]
-fn a_projection_of_a_crlf_note_contains_no_lone_lf() {
-    let note = parse_note_with_embeds(
-        "Host.md",
-        "# Host\r\n\r\nIntro.\r\n\r\n![[T.base]]\r\n\r\nEnd.\r\n",
-    );
-    let projected = project(&note, |region| {
-        wrap_in_fence(
-            "| rendered |",
-            &FenceProvenance::new().with_path(region.base_path.clone().unwrap_or_default()),
-        )
-        .text
-    });
-
-    assert_eq!(
-        projected,
-        "# Host\r\n\r\nIntro.\r\n\r\n```base-rendered path=\"T.base\"\n| rendered |\n```\r\n\r\nEnd.\r\n"
-    );
-    assert_eq!(
-        lone_lf(&projected),
-        2,
-        "only the fence's own two joins may use LF: {projected:?}"
-    );
-    assert_eq!(
-        stray_cr(&projected),
-        0,
-        "a doubled carriage return reached the Projection: {projected:?}"
-    );
-}
-
 #[test]
 fn base_regions_are_indexed_in_document_order() {
     let text = "---\n---\n\n![[A.base]]\n\n![[B.base#Pinned]]\n\n```base\nviews: []\n```\n";
@@ -1419,164 +1379,59 @@ fn a_region_only_note_still_round_trips() {
     assert_eq!(result.text, "![[Only.base]]\n");
 }
 
-/// A restored Base region must be spliced in with the note's OWN line ending.
+/// **No prose is ever lost**, from a Host note in either line ending.
 ///
-/// Regression, and the second half of the CRLF work in `src/note.rs` (c4af62f).
-/// That commit made a Base region visible in a CRLF note at all; this is what
-/// happens once it is visible again. `push_line` appended `\n` to the joins it
-/// generates, so a deleted region restored into a CRLF Host note came back with a
-/// lone LF beside two CRLF lines. Git, diff tools and Obsidian's own line-ending
-/// handling all read such a file as corrupt or as wholly rewritten, and it
-/// reaches disk whether or not the caller looked at it.
+/// The project's hard constraint, asserted once over both endings. This is
+/// deliberately the only restore test left, and it is deliberately not a shape
+/// assertion: every `\\r` count and every lone-`\\n` count that used to sit here
+/// described a corruption we had already found, each in one direction only, and
+/// `\\r\\r\\n` walked straight through both of them. A word-by-word check over the
+/// line ending is the version that cannot be fooled by the next one.
 ///
-/// An inline ```base fence is the shape that shows it, because the region's byte
-/// span stops at the closing fence and carries no `\r` of its own for a bare `\n`
-/// to accidentally complete. An `![[X.base]]` embed used to span its line's `\r`,
-/// so the same call on an embed produced CRLF by accident rather than by
-/// construction — and once the span was corrected to stop before the `\r`, an
-/// embed joined the fence as a shape this catches for real.
+/// Deleting the Base region is the only edit that makes the reconciler INVENT
+/// bytes rather than copy them, so it is the one that can lose prose, relocate a
+/// region or tear one in half. The re-parse is part of the assertion: a restore
+/// that spliced the bytes in but left them unmatched reports the same refusals and
+/// loses the region on the very next read.
 #[test]
-fn a_restored_region_is_spliced_into_a_crlf_note_with_crlf() {
-    let original = "# Host\r\n\r\nIntro.\r\n\r\n```base\r\nviews: []\r\n```\r\n\r\nEnd.\r\n";
-    // The agent deletes the inline fence and the blank lines around it, so the
-    // restore has to generate its own terminator rather than inherit one.
-    let edited = "# Host\r\n\r\nIntro.\r\n\r\nEnd.\r\n";
+fn no_prose_is_lost_when_a_region_is_deleted_from_either_ending() {
+    for ending in ["\n", "\r\n"] {
+        let original = [
+            "# Host",
+            "",
+            "The opening paragraph.",
+            "",
+            "![[T.base]]",
+            "",
+            "The closing paragraph.",
+            "",
+        ]
+        .join(ending);
+        let edited = original.replace("![[T.base]]", "");
 
-    let result = reconcile_note("Host.md", original, edited);
+        let result = reconcile_note("Host.md", &original, &edited);
 
-    assert!(result.removed_region);
-    assert!(
-        result
-            .refused
-            .iter()
-            .any(|refusal| refusal.reason.contains("was removed")),
-        "the deletion must still be reported: {:?}",
-        result.refused
-    );
-    assert!(
-        result.text.contains("```base\r\nviews: []\r\n```"),
-        "the inline Base region was not restored: {:?}",
-        result.text
-    );
-    for phrase in ["Intro.", "End."] {
-        assert!(result.text.contains(phrase), "prose lost: {phrase:?}");
-    }
-    assert_eq!(
-        lone_lf(&result.text),
-        0,
-        "a bare LF was spliced into a CRLF note: {:?}",
-        result.text
-    );
-    assert_eq!(
-        stray_cr(&result.text),
-        0,
-        "a doubled carriage return was spliced into a CRLF note: {:?}",
-        result.text
-    );
-}
-
-/// Every restore shape in a CRLF Host note comes out pure CRLF — and still parses.
-///
-/// `push_line` generates a join on both sides of the restored region, so each side
-/// is its own way to splice a bare terminator in. The leading join needs text that
-/// does not already end in one, which is why one shape ends without a newline. The
-/// trailing join fires whenever the region's own bytes stop before its terminator,
-/// which an inline fence always does, an embed at end of file does, and — since the
-/// span was corrected to stop before the `\r` of its line — a Base region on a
-/// terminated line does too.
-///
-/// The re-parse is the half that matters. A `\r` absorbed into the region and then
-/// joined with the terminator produces `\r\r\n`, which no amount of counting bare
-/// LFs detects: it contains no lone `\n` at all. The note is byte-visible, contains
-/// the embed, and reports `health: ok` — but the region cannot match a second time,
-/// so the next read returns `regions: []` and the following deletion of that
-/// invisible region is neither refused nor reported. Silent loss, and the counting
-/// assertion that should have caught it looked only in the other direction.
-#[test]
-fn every_restore_shape_in_a_crlf_note_is_pure_crlf() {
-    for (label, original, edited) in [
-        (
-            "an inline fence between prose",
-            "# Host\r\n\r\nIntro.\r\n\r\n```base\r\nviews: []\r\n```\r\n\r\nEnd.\r\n",
-            "# Host\r\n\r\nIntro.\r\n\r\nEnd.\r\n",
-        ),
-        (
-            "an embed at end of file",
-            "# Host\r\n\r\nIntro.\r\n\r\n![[Only.base]]",
-            "# Host\r\n\r\nIntro.\r\n",
-        ),
-        (
-            "edited text ending without a newline",
-            "# Host\r\n\r\nIntro.\r\n\r\n```base\r\nviews: []\r\n```\r\n\r\nEnd.\r\n",
-            "# Host\r\n\r\nIntro.\r\n\r\nEnd.",
-        ),
-        (
-            "a Base region on a terminated line",
-            "# Host\r\n\r\nIntro.\r\n\r\n![[Only.base]]\r\n",
-            "# Host\r\n\r\nIntro.\r\n",
-        ),
-        (
-            "an indented Base region on a terminated line",
-            "# Host\r\n\r\nIntro.\r\n\r\n  ![[Only.base]]  \r\n\r\nEnd.\r\n",
-            "# Host\r\n\r\nIntro.\r\n\r\nEnd.\r\n",
-        ),
-    ] {
-        let result = reconcile_note("Host.md", original, edited);
         assert!(
             result.removed_region,
-            "{label}: the deletion went unreported"
+            "{ending:?}: the deletion went unreported"
         );
+        assert_eq!(result.refused.len(), 1, "{ending:?}: {:?}", result.refused);
+        for word in ["Host", "opening", "paragraph", "closing"] {
+            assert!(
+                result.text.contains(word),
+                "{ending:?}: prose lost: {word:?}\n{}",
+                result.text
+            );
+        }
+        let regions = base_regions(&parse_note_with_embeds("Host.md", &result.text));
         assert_eq!(
-            lone_lf(&result.text),
-            0,
-            "{label}: a bare LF was spliced into a CRLF note: {:?}",
-            result.text
-        );
-        assert_eq!(
-            stray_cr(&result.text),
-            0,
-            "{label}: a doubled carriage return was spliced into a CRLF note: {:?}",
-            result.text
-        );
-
-        // A region the next read cannot see is the failure that costs the note.
-        let stored = base_regions(&parse_note_with_embeds("Host.md", original));
-        let restored = base_regions(&parse_note_with_embeds("Host.md", &result.text));
-        assert_eq!(
-            (stored.len(), restored.len()),
-            (1, 1),
-            "{label}: the restored Base region is not the one that was stored: {:?}",
-            result.text
-        );
-        // Verbatim, and possibly a terminator longer: a region that ended the
-        // note had none, so the restore has to invent one and the next parse
-        // reads it as part of the region.
-        assert!(
-            result.text[restored[0].start..restored[0].end]
-                .starts_with(&original[stored[0].start..stored[0].end]),
-            "{label}: the stored region's bytes were not restored verbatim: {:?}",
+            regions
+                .iter()
+                .map(|region| region.base_path.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("T.base")],
+            "{ending:?}: the Base region did not come back as one:\n{}",
             result.text
         );
     }
-}
-
-/// How many `\n` in `text` are not the second half of a `\r\n`.
-fn lone_lf(text: &str) -> usize {
-    let bytes = text.as_bytes();
-    (0..bytes.len())
-        .filter(|&index| bytes[index] == b'\n' && (index == 0 || bytes[index - 1] != b'\r'))
-        .count()
-}
-
-/// How many `\r` in `text` are not the first half of a `\r\n`.
-///
-/// The other half of [`lone_lf`], and the half that was missing. `\r\r\n` is a
-/// doubled carriage return — a line ending that is neither LF nor CRLF, that no
-/// line-ending detector recognises and that most editors silently rewrite — and it
-/// contains no lone `\n`, so counting LFs alone passes straight through it.
-fn stray_cr(text: &str) -> usize {
-    let bytes = text.as_bytes();
-    (0..bytes.len())
-        .filter(|&index| bytes[index] == b'\r' && bytes.get(index + 1) != Some(&b'\n'))
-        .count()
 }

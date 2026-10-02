@@ -419,7 +419,7 @@ fn an_escape_is_refused_before_any_request_is_made() {
     // later moved. The empty request log is the assertion.
     let server = fake([]);
     let source = source_over(&server);
-    let _ = failure_of(source.read_text("../../etc/passwd"));
+    let _ = failure_of(source.read_note("../../etc/passwd"));
     assert!(server.requests().is_empty());
 }
 
@@ -454,7 +454,7 @@ fn a_backslash_reaches_the_server_as_percent_encoded_and_one_path_segment() {
     // backend makes must name ONE resource inside the vault.
     let server = fake([]);
     let source = source_over(&server);
-    let _ = failure_of(source.read_text(r"..\..\outside\evil.md"));
+    let _ = failure_of(source.read_note(r"..\..\outside\evil.md"));
 
     assert_eq!(
         server.requests()[0].url,
@@ -520,7 +520,7 @@ fn extracts_getlastmodified_as_the_string_the_server_sent() {
 #[test]
 fn drops_a_resource_whose_only_propstat_is_a_404() {
     // A listing can name a file that was deleted between the request and the
-    // response. Indexing it would put a path in `list()` that a later `read_text`
+    // response. Indexing it would put a path in `list()` that a later `read_note`
     // cannot serve.
     let paths: Vec<String> = parse_multistatus(CANNED, BASE_PATH)
         .expect("a multistatus")
@@ -1096,7 +1096,7 @@ fn is_a_snapshot_until_a_write_and_refresh_rereads_it() {
 }
 
 // ---------------------------------------------------------------------------
-// read_text()
+// read_note()
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1109,7 +1109,7 @@ fn serves_the_stored_bytes_encoding_a_path_rather_than_guessing_at_it() {
     let source = source_over(&server);
 
     assert_eq!(
-        run(source.read_text("Café/50%.md")).expect("the note is there"),
+        run(source.read_note("Café/50%.md")).expect("the note is there"),
         content
     );
     let requests = server.requests();
@@ -1124,7 +1124,7 @@ fn a_notes_name_cannot_truncate_the_request_with_a_hash_or_a_question_mark() {
         path: "Q1 #2.md".into(),
         content: "# q\n".into(),
     }]);
-    run(source_over(&server).read_text("Q1 #2.md")).expect("the note is there");
+    run(source_over(&server).read_note("Q1 #2.md")).expect("the note is there");
     assert_eq!(server.requests()[0].url, format!("{BASE_URL}/Q1%20%232.md"));
 }
 
@@ -1137,12 +1137,12 @@ fn caches_under_the_normalised_path_so_two_spellings_are_one_note() {
     let source = source_over(&server);
 
     assert_eq!(
-        run(source.read_text("Tickets/../Root Ticket.md")).expect("a note"),
+        run(source.read_note("Tickets/../Root Ticket.md")).expect("a note"),
         "# ticket\n"
     );
     assert_eq!(server.requests().len(), 1);
     assert_eq!(
-        run(source.read_text("Root Ticket.md")).expect("a note"),
+        run(source.read_note("Root Ticket.md")).expect("a note"),
         "# ticket\n"
     );
     assert_eq!(server.requests().len(), 1);
@@ -1162,7 +1162,7 @@ fn a_missing_note_is_a_structured_404() {
     assert_eq!(error.status, Some(404));
     // And through the trait, the message still names the status, so a caller that
     // never saw `WebdavError` can still tell a 404 from a transport failure.
-    let error = failure_of(source.read_text("Nope.md"));
+    let error = failure_of(source.read_note("Nope.md"));
     assert!(error.message().contains("404"), "{error}");
 }
 
@@ -1435,7 +1435,7 @@ fn a_refused_write_does_not_enter_the_caches_so_the_vault_is_not_left_lying() {
 
     let _ = failure_of(source.write_text("Note.md", "# requested\n"));
     assert_eq!(
-        run(source.read_text("Note.md")).expect("what the server really holds"),
+        run(source.read_note("Note.md")).expect("what the server really holds"),
         swapped
     );
     assert_eq!(
@@ -1455,7 +1455,7 @@ fn overwrites_silently_as_a_put_does_and_as_the_filesystem_backend_does() {
 
     run(source.write_text("Note.md", "second\n")).expect("the write is verified");
     assert_eq!(
-        run(source.read_text("Note.md")).expect("a read"),
+        run(source.read_note("Note.md")).expect("a read"),
         "second\n"
     );
     assert_eq!(run(source.list()).expect("a listing"), ["Note.md"]);
@@ -1661,7 +1661,7 @@ fn sends_http_basic_auth_on_every_request() {
     }]);
     let source = source_over(&server);
     run(source.list()).expect("a listing");
-    run(source.read_text("Note.md")).expect("a read");
+    run(source.read_note("Note.md")).expect("a read");
 
     let requests = server.requests();
     assert!(requests.len() > 1);
@@ -1694,7 +1694,7 @@ fn never_appears_in_an_error_message_whatever_failed() {
     // keep a credential because only the other six were checked.
     let failures = vec![
         failure_of(source.list()),
-        failure_of(source.read_text("Note.md")),
+        failure_of(source.read_note("Note.md")),
         failure_of(source.stat("Note.md")),
         failure_of(source.hash("Note.md")),
         failure_of(source.write_text("Note.md", "# n\n")),
@@ -1716,7 +1716,7 @@ fn never_appears_in_a_url_either() {
         path: "Note.md".into(),
         content: "# n\n".into(),
     }]);
-    run(source_over(&server).read_text("Note.md")).expect("a read");
+    run(source_over(&server).read_note("Note.md")).expect("a read");
     for request in server.requests() {
         assert!(!request.url.contains(PASSWORD), "{}", request.url);
         assert!(!request.url.contains(USER), "{}", request.url);
@@ -1775,7 +1775,7 @@ fn an_unauthenticated_source_sends_no_authorization_header_at_all() {
         content: "# n\n".into(),
     }]);
     let source = source_over_with(&server, None, None, None);
-    run(source.read_text("Note.md")).expect("a read");
+    run(source.read_note("Note.md")).expect("a read");
     assert_eq!(server.requests()[0].authorization, None);
 }
 
@@ -1804,7 +1804,7 @@ fn tolerates_a_trailing_slash_on_the_base_url_which_changes_nothing() {
             .with_transport(Box::new(SharedTransport(Rc::clone(&server)))),
     )
     .expect("a trailing slash is tolerated");
-    run(source.read_text("Note.md")).expect("a read");
+    run(source.read_note("Note.md")).expect("a read");
     assert_eq!(server.requests()[0].url, format!("{BASE_URL}/Note.md"));
     assert_eq!(source.base_url(), BASE_URL);
     // The base PATH keeps the trailing slash it was configured with, while the base

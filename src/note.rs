@@ -485,14 +485,15 @@ pub fn split_base_embeds(segments: &[Segment]) -> Vec<Segment> {
 /// the span is trimmed here instead — which is what keeps the two implementations
 /// byte-identical rather than merely equivalent.
 ///
-/// Leaving the `\r` inside the region makes `push_line` append the note's line
-/// ending to a span that already ends in one, and a CRLF Host note comes back from
-/// `write_note` as `\r\r\n`. Nothing about that is visible: the embed is still in
-/// the file, the write reports `health: ok`, and the doubled carriage return is a
-/// line ending most editors silently rewrite. What it does is make the region
-/// unmatchable — an `![[T.base]]` line followed by `\r\r` has no way to satisfy
-/// `[ \t]*\r?$` — so the next read reports `regions: []`, the agent deletes what it
-/// can see is nothing, and the deletion lands.
+/// **Why this survives normalisation.** Every note this crate reads has been
+/// through [`crate::vault::normalise_line_endings`], so a `\r` never sits before
+/// a `\n` in practice and the `\r?` in the pattern cannot match. It is kept
+/// because `write_note` also parses the text the AGENT sent, which never passed
+/// through the backend: an agent whose editor rewrote a Base region's line to CRLF
+/// would otherwise have the region fail to match here, the reconciler would read
+/// it as deleted, and the restore — which anchors on the surviving regions and
+/// finds none — would append the region to the end of the Host note. A parser that
+/// cannot see a region cannot protect it.
 ///
 /// A match always contains the embed itself, so trimming one byte can never
 /// produce an empty or inverted span.
@@ -963,8 +964,14 @@ fn blank_out(bytes: &[u8]) -> String {
 /// The span of one line: where it starts, where its content ends, and where the
 /// next line begins.
 ///
-/// A single trailing `\r` belongs to the terminator rather than the content,
-/// which is what the TypeScript's `split(/\r?\n/)` did.
+/// `content_end` excludes a single trailing `\r`, which is what the TypeScript's
+/// `split(/\r?\n/)` did and which makes the field mean what its name says. Worth
+/// recording that no consumer currently READS the difference — the fence info
+/// string is `.trim()`ed, a closing fence is matched with `is_ascii_whitespace`,
+/// a task's text is `.trim()`ed, and the two remaining uses count backticks at the
+/// START of a line — so this costs a branch and buys the honest model rather than
+/// an observed behaviour. It was audited rather than assumed, and deleting it is a
+/// safe follow-up for anyone who wants the field gone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Line {
     start: usize,
@@ -1072,14 +1079,13 @@ pattern!(external_scheme_re, r"(?i)^[a-z]+://");
 fn base_embed_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // The trailing `\r?` is load-bearing, and it is also the reason the match
-        // runs past the region it identifies. Rust's `(?m)` treats only `\n` as a
-        // line terminator, so `$` does not match before a `\r`. Without the `\r?` a
-        // CRLF note's Base region is invisible, and `write_note` then persists the
-        // agent's deletion of it and reports success. JavaScript's multiline `$` does
-        // match before `\r`, which is why the TypeScript tree never had this bug and
-        // the port inherited it. A CRLF note comes from `core.autocrlf`, a Windows
-        // sync client, or `sed -i` on an imported file.
+        // The trailing `\r?` matches nothing on any note this crate READ — the
+        // backend normalises CRLF to LF — and is kept for the text the agent
+        // SENT, which never passed through it. Without it, an agent that rewrote a
+        // Base region's line to CRLF would have its region invisible here, and an
+        // invisible region is one the reconciler restores at the wrong place.
+        // JavaScript's multiline `$` matches before `\r`, so the TypeScript tree
+        // never needed this and the port did.
         //
         // Consuming the `\r` also makes the match one byte longer than the span
         // JavaScript produced, so `split_base_embeds` trims it back; see
