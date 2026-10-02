@@ -203,7 +203,7 @@ impl Resolver {
     pub async fn list_bases(&self) -> Result<Vec<BaseSummary>> {
         let mut out = Vec::new();
         for path in self.vault.base_paths() {
-            let text = self.vault.read_text(&path).await?;
+            let text = self.vault.read_note(&path).await?;
             let base = parse_base(&path, &text)?;
             out.push(BaseSummary {
                 path,
@@ -222,7 +222,7 @@ impl Resolver {
 
     pub async fn load_base(&self, path: &str) -> Result<BaseFile> {
         let resolved = self.resolve_base_path(path)?;
-        let text = self.vault.read_text(&resolved).await?;
+        let text = self.vault.read_note(&resolved).await?;
         parse_base(&resolved, &text)
     }
 

@@ -39,7 +39,10 @@ pub mod webdav;
 
 pub use fs::{content_hash, FsVaultSource};
 pub use resolve::{fold_key, match_path, points_at, PathIndex};
-pub use source::{is_base_path, is_indexable, is_note_path, FileStat, SourceKind, VaultSource};
+pub use source::{
+    is_base_path, is_indexable, is_note_path, normalise_line_endings, FileStat, SourceKind,
+    VaultSource,
+};
 pub use webdav::{
     dav_refusal, parse_dav_date, parse_multistatus, vault_path_from_href, vault_relative_path,
     DavOperation, DavRequest, DavRequestOptions, DavResource, DavResponse, Depth, WebdavError,
@@ -167,7 +170,7 @@ impl Vault {
             if !is_note_path(&path) {
                 continue;
             }
-            let text = self.source.read_text(&path).await?;
+            let text = self.source.read_note(&path).await?;
             let stat = self.source.stat(&path).await?;
             let parsed = parse_note_with_embeds(&path, &text);
             let frontmatter = coerce_frontmatter(&parsed.frontmatter, self);
@@ -216,8 +219,9 @@ impl Vault {
         self.notes.borrow().get(path).cloned()
     }
 
-    pub async fn read_text(&self, path: &str) -> Result<String> {
-        self.source.read_text(path).await
+    /// A note's text with CRLF normalised to LF — see [`VaultSource::read_note`].
+    pub async fn read_note(&self, path: &str) -> Result<String> {
+        self.source.read_note(path).await
     }
 
     /// Resolve a link target to a vault path, or `None` when unresolved.

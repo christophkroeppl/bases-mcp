@@ -61,7 +61,7 @@ pub fn load_corpus_from(dir: &Path) -> Vec<VaultFile> {
         let mut files = Vec::new();
         for path in source.list().await.expect("the testing vault is readable") {
             let content = source
-                .read_text(&path)
+                .read_note(&path)
                 .await
                 .expect("the testing vault is readable");
             files.push(VaultFile { path, content });

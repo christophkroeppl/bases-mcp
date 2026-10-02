@@ -90,7 +90,7 @@ fn list_of<S: VaultSource + ?Sized>(source: &S) -> Vec<String> {
 }
 
 fn read_of<S: VaultSource + ?Sized>(source: &S, path: &str) -> Result<String, BasesError> {
-    run(source.read_text(path))
+    run(source.read_note(path))
 }
 
 fn hash_of<S: VaultSource + ?Sized>(source: &S, path: &str) -> String {
@@ -423,7 +423,7 @@ fn stat_hands_out_a_fresh_value_so_one_caller_cannot_move_every_other_comparison
 // ---------------------------------------------------------------------------
 
 #[test]
-fn read_text_resolves_a_redundant_path_to_the_same_note_on_both_backends() {
+fn read_note_resolves_a_redundant_path_to_the_same_note_on_both_backends() {
     let corpus = load_corpus();
     let fs = fs_source();
     let memory = memory_source(&corpus);
@@ -436,13 +436,13 @@ fn read_text_resolves_a_redundant_path_to_the_same_note_on_both_backends() {
 }
 
 #[test]
-fn read_text_refuses_a_path_that_escapes_the_vault_root_on_both_backends() {
+fn read_note_refuses_a_path_that_escapes_the_vault_root_on_both_backends() {
     let corpus = load_corpus();
     let fs = fs_source();
     let memory = memory_source(&corpus);
     for escapee in ["../outside.md", "/etc/passwd", "Tickets/../../outside.md"] {
-        let from_fs = failure_of(fs.read_text(escapee));
-        let from_memory = failure_of(memory.read_text(escapee));
+        let from_fs = failure_of(fs.read_note(escapee));
+        let from_memory = failure_of(memory.read_note(escapee));
         assert!(
             from_fs.message().contains("escapes the vault root"),
             "{from_fs}"
@@ -459,12 +459,12 @@ fn read_text_refuses_a_path_that_escapes_the_vault_root_on_both_backends() {
 }
 
 #[test]
-fn read_text_refuses_to_read_a_file_that_is_not_there_on_both_backends() {
+fn read_note_refuses_to_read_a_file_that_is_not_there_on_both_backends() {
     let corpus = load_corpus();
     let fs = fs_source();
     let memory = memory_source(&corpus);
-    let from_fs = failure_of(fs.read_text("Nope.md"));
-    let from_memory = failure_of(memory.read_text("Nope.md"));
+    let from_fs = failure_of(fs.read_note("Nope.md"));
+    let from_memory = failure_of(memory.read_note("Nope.md"));
     assert!(from_fs.message().contains("Nope.md"), "{from_fs}");
     assert!(from_memory.message().contains("404"), "{from_memory}");
     assert_eq!(memory.last_status(), Some(404));
@@ -676,7 +676,7 @@ fn the_filesystem_backend_refuses_a_backslash_in_a_vault_relative_path() {
         // One of them passing would be a path the backend can resolve on this
         // platform and not on another.
         for refusal in [
-            failure_of(fs.read_text(escapee)),
+            failure_of(fs.read_note(escapee)),
             failure_of(fs.read_fresh(escapee)),
             failure_of(fs.write_text(escapee, "# escaped\n")),
             failure_of(fs.ensure_dir(escapee)),
@@ -923,7 +923,7 @@ fn a_simulated_500_surfaces_as_a_structured_refusal() {
     source
         .inject(MemoryFault::on("Tickets.base", MemoryOp::Read, 500))
         .expect("the fault is well formed");
-    let error = failure_of(source.read_text("Tickets.base"));
+    let error = failure_of(source.read_note("Tickets.base"));
     assert_eq!(source.last_status(), Some(500));
     assert!(error.message().contains("500"), "{error}");
     assert_eq!(source.refusals().len(), 1);
@@ -935,7 +935,7 @@ fn a_fault_fires_only_as_many_times_as_it_is_given() {
     source
         .inject(MemoryFault::on("Root Ticket.md", MemoryOp::Read, 503).times(1))
         .expect("the fault is well formed");
-    let error = failure_of(source.read_text("Root Ticket.md"));
+    let error = failure_of(source.read_note("Root Ticket.md"));
     assert!(error.message().contains("503"), "{error}");
     assert!(read_of(&source, "Root Ticket.md")
         .expect("the fault is spent")
@@ -1445,7 +1445,7 @@ fn a_markdown_link_property_becomes_a_link_and_a_url_property_does_not() {
 
 /// The escape guard compares path components, and every absolute path starts with
 /// the root component — so against `/` the guard would be inert and
-/// `read_text("/etc/passwd")` would succeed. No vault is the filesystem root, so
+/// `read_note("/etc/passwd")` would succeed. No vault is the filesystem root, so
 /// the configuration is refused rather than served.
 #[test]
 fn a_vault_rooted_at_the_filesystem_root_is_refused() {

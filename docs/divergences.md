@@ -165,6 +165,85 @@ plugin, or a bad merge — which is exactly the shape a limit is for.
 
 ---
 
+## D8 — CRLF is normalised to LF on read
+
+| | |
+|---|---|
+| **Construct** | A note whose bytes on disk are CRLF, read through this server |
+| **Ours** | `VaultSource::read_note` and `read_fresh` replace `\r\n` with `\n` before anything above the backend sees the note. A lone `\r` is left alone. Every read, every cache entry and every `content_hash` taken above the backend is therefore over LF. |
+| **Obsidian** | Does not normalise at read time. It normalises on OPEN: opening a CRLF note converts it to LF in the app, and the conversion reaches disk the next time the note is saved. Until then the bytes stay CRLF, and so do any other reader's. |
+| **Evidence** | The five sources under "Obsidian writes LF on every platform", including the Obsidian staff reply that there is no way to change this. Our side is measured by `the_two_spellings_of_a_note_get_the_same_base_hash` and `a_base_hash_from_a_crlf_note_round_trips_through_an_obsidian_resave` in `tests/service.rs`. |
+| **verify-in-obsidian** | no — the staff reply is decisive on the direction, and the open-time conversion is reported from three independent threads |
+
+**Where it is observable.** In `get_note`'s `raw`, and only there. An agent asking
+for a CRLF note gets LF back, and the bytes on disk do not match what it was
+handed. Everything else agrees: `get_note`'s `content` is built from the same
+normalised text, so the Projection of a CRLF note is byte-identical to the
+Projection of its LF twin. And `write_note` writes back what the reconciler
+produced, which is built from a normalised read, so an edited CRLF note comes back
+LF — Obsidian's own answer for the same file, arrived at a moment earlier.
+
+**Why at the backend rather than in `Vault`.** `Vault` has one `read_note` that
+delegates, so normalising there would be one line in the right place — and one
+line a future caller could route around, because `service.rs` calls
+`self.backend().read_fresh` directly in two places and will do so again. At the
+trait, no read in the process can avoid it. The trait method is named `read_note`
+rather than `read_text` because it does not return the text on disk, and a
+function that translates is not doing what its name says.
+
+**Why `\r\n`, and never a bare `\r`.** `note::Lines` finds `\n` and nothing else,
+so a CR-only note is ONE line to this crate. Replacing every `\r` would make it
+one line per carriage return, inventing a line count it never had, and would stop
+it round-tripping byte for byte. Leaving a lone `\r` alone keeps it exact.
+`\r\r\n` becomes `\r\n`, because the pair at the end of it is still a pair and
+degrading a doubled carriage return on the way to being normalised is strictly
+better than passing it up.
+
+**What it buys.** `content_hash` is taken over normalised text, so a CRLF note and
+its LF twin hash alike. Two classes of failure go with that:
+
+- **The refusal that was not a refusal.** Obsidian converts CRLF to LF when it
+  opens a note, so the bytes behind a note can turn over between an agent's read
+  and its write with no human involved. `write_note`'s `base_hash` check compares
+  against a fresh read, so that turn used to be reported as "changed since you
+  read it" — an error telling the agent to re-read and retry, which lands on the
+  same answer for as long as the two spellings disagree.
+- **The rewrite of an untouched note.** Prose differing only in its line endings
+  is byte-identical once normalised, so a clean `get_note` → `write_note` round
+  trip produces `changed: false` and the file is not touched. Measured: a CRLF Host
+  note put through a full Projection round trip goes 48 bytes on disk before and 48
+  bytes after, still CRLF. Without normalisation the same round trip rewrites it —
+  48 bytes to 49, a bare LF spliced in after the Base region and one extra blank
+  line — which is the corruption recorded under "Bugs found in this implementation"
+  reached through a path nobody was watching. **Measured, not pinned by a test:** it
+  was observed with a throwaway harness rather than added as one, because the shape
+  tests this replaced are gone and a round-trip-no-op assertion for LF already
+  exists (`an_edit_that_changes_nothing_does_not_touch_the_file`).
+
+**What it does not buy, and what must stay true elsewhere.** `content_hash` itself
+normalises nothing: it is a pure function of its argument, because the WebDAV
+write verification hashes the bytes it PUT against the bytes the server stored,
+and a hash that folded CRLF would stop being able to see a server that rewrites
+endings. Every caller above the backend is handed already-normalised text, and
+that obligation is pinned by a test.
+
+The PARSER is also still total over CRLF, deliberately. `base_embed_re` still
+consumes a `\r` before the line end and `split_base_embeds` still trims it back,
+because `write_note` parses what the agent sent — text that never passed through
+the backend. An agent whose editor rewrote a Base region's line ending would
+otherwise have the region fail to match, the reconciler read it as deleted, and
+the restore — which anchors on the surviving regions and finds none — append the
+region to the end of the Host note. A parser that cannot see a region cannot
+protect it.
+
+**The TypeScript tree differs here.** `ts-implementation` preserves line endings:
+`line_ending` there and here both honoured the note, and both are gone. A CRLF note
+round-trips through that tree with its endings intact and comes back from this one
+as LF. This is the one place the two implementations are knowingly not equivalent,
+and the registry is where that belongs rather than a comment in either tree.
+
+---
+
 ## Behaviour probes that are NOT divergences
 
 Recorded because they were non-obvious and cost real probing time. We match
@@ -206,19 +285,25 @@ There is **no setting**. Sources:
 
 **What this means for us.** CRLF is the FOREIGN shape, not the native one. It
 arrives from `core.autocrlf=true` on a Windows checkout, a sync client that
-forces CRLF, or editing outside Obsidian — never from Obsidian. So the CRLF paths
-in `src/note.rs` and `src/render/project.rs` exist for a note in flight between
-those producers, not for a note Obsidian authored.
+forces CRLF, or editing outside Obsidian — never from Obsidian. What we do about
+it is D8, and the short version is that we stop carrying the question: a note read
+through this server is LF above the backend, always.
 
-Two consequences worth stating, because both were learned the hard way:
+Two consequences are worth stating, because both were learned the hard way and
+one of them no longer applies:
 
-1. **We must not write CRLF ourselves.** `line_ending` (`src/render/project.rs`)
-   honours whatever the note already uses rather than normalising, so a CRLF note
-   stays CRLF until Obsidian next opens it. Normalising on write would fight the
-   user's tooling and break byte-exact round-trips.
+1. **We must not write CRLF ourselves.** Obsidian writes `\n`, so a note this
+   server writes is LF whether or not it arrived that way. That is D8, and it
+   replaced an older rule here: `line_ending` honoured whatever the note already
+   used rather than normalising, which kept a CRLF note CRLF until Obsidian next
+   opened it. Honouring the note was wrong because it kept the question alive in
+   every join this crate generates.
 2. **A Base region must not own its line ending.** See "Bugs found in this
    implementation" — a span that included the `\r` produced `\r\r\n` on restore,
-   which hid the region permanently.
+   which hid the region permanently. `split_base_embeds` still trims that byte and
+   `base_embed_re` still consumes it, because `write_note` parses what the AGENT
+   sent and not only what the backend returned. What no longer exists is the
+   machinery that matched a generated join to the note's own ending.
 
 ---
 
@@ -476,6 +561,14 @@ information, so the looser reading is the one that loses data.
 
 ### A restored Base region was spliced into a CRLF Host note with a bare LF
 
+> **Now unreachable.** D8 removed the machinery this entry describes.
+> `line_ending` and the `ending` argument to `push_line` are gone; every join this
+> crate generates is `\n`. Above the backend a note cannot be CRLF, so there is
+> nothing to match a join against. Kept as history, because the reason it was
+> built — "match the note's own ending, and pick the FIRST terminator so repeated
+> writes converge" — is the reasoning that made normalising on read the obvious
+> next step.
+
 `push_line` appended `\n` to the joins it generates, so a deleted region restored
 into a CRLF Host note came back as `…\n` between two CRLF lines — a mixed-ending
 file, which is what the CRLF work in `src/note.rs` (c4af62f) existed to prevent. The
@@ -486,8 +579,8 @@ point an embed whose own line ended CRLF appeared immune, because its span swall
 the `\r` and `push_line`'s bare `\n` completed the pair. It was not immune; it was
 wrong in the other direction, which is the next entry.
 
-`reconcile_note` now detects the note's line ending once, from the first terminator
-in the original, and writes both joins with it. First, deliberately: `write_note`
+`reconcile_note` detected the note's line ending once, from the first terminator in
+the original, and wrote both joins with it. First, deliberately: `write_note`
 re-reads the note on every call, so a rule that depended on where the note was
 edited from — the terminator beside the restore point, the majority, the last one —
 could pick a different answer on the next write and rewrite the file's endings
@@ -499,10 +592,19 @@ now differ in one documented place: the tree asks whether a `\r\n` appears
 *anywhere*, this one asks which terminator comes *first*. They disagree only on a
 note that is already mixed, and most often on one Windows paste inside an
 otherwise LF note — where "anywhere" picks CRLF for a region restored beside LF
-prose. Recorded here rather than left as a silent difference between two trees that
-are meant to be equivalent.
+prose. That difference is also gone: neither implementation has a second question
+to ask.
 
 ### A restored Base region came back as `\r\r\n`, and then vanished
+
+> **The span fix stands; the doubling it caused cannot recur.** `split_base_embeds`
+> still trims the byte `base_embed_re` over-consumes, because `write_note` parses
+> what the AGENT sent and that text never passed through the backend — see D8. The
+> `\r\r\n` on disk needed TWO CRLF artefacts meeting: a span that already ended in a
+> terminator, and a `push_line` that appended the note's own ending again. Only the
+> second is gone, so the doubling is unreachable. Kept as history, and kept in this
+> section rather than deleted, because the lesson recorded at the end of it is the
+> one that produced the loss test which replaced its regression coverage.
 
 A CRLF Host note whose Base region sat on a **terminated** line came back from
 `write_note` with a doubled carriage return where the region's terminator used to
@@ -536,16 +638,23 @@ became a load-bearing one.
 Fixed in the span rather than in the pattern, because the `regex` crate has no
 look-around to say "…but not that `\r`": `split_base_embeds` trims the match back to
 where JavaScript's ended, which also makes the two trees byte-identical here
-instead of merely equivalent. `ends_its_own_line` now reads a leading `\r\n` as the
-line boundary it is, so the Projection of a CRLF note no longer splices a bare LF
-after a region either.
+instead of merely equivalent.
 
-Pinned on all three surfaces: the span against the exact bytes JavaScript produces
-(`expected_region` in `tests/note.rs`), every restore shape for both bare LFs and
-doubled carriage returns plus a re-parse (`tests/render.rs`), and two consecutive
-deletions through the tool surface, because the first corrupts the file and the
-second loses the region — asserting only the first cannot tell a repaired restore
-from a slightly wrong one (`tests/tools.rs`).
+The regression tests this entry cited — `expected_region`, `every_restore_shape_in_a_crlf_note_is_pure_crlf`,
+`stray_cr`, and a two-deletion run through the tool surface — are **deleted**. They
+asserted the SHAPE of the repair, each in one direction, and the shape they
+described is gone with the machinery. What replaced them is
+`no_prose_is_lost_when_a_region_is_deleted_from_either_ending` in `tests/render.rs`,
+which loops over both endings and asserts the hard constraint — every prose word
+survives and the Base region is a Base region again — with no counting in it at all.
+
+The tool-surface test that went with them, two consecutive deletions through
+`write_note`, is gone for a stronger reason than "the shape changed". Above the
+backend a note is LF, so a restored region is restored from LF text and a second
+deletion takes the same path as the first: the corruption needed a CRLF artefact
+the server can no longer see. The measurement under D8 is what remains of it —
+the file is not touched at all on a clean round trip, so there is nothing for a
+second write to corrupt.
 
 The lesson generalises past this bug: the assertion was written to describe the
 shape we *expected* rather than the property that must hold. "No `\r` outside a
@@ -583,6 +692,12 @@ surface the parity suite compares against the Obsidian CLI.
 `serde_json`'s `preserve_order` feature is enabled so insertion order is kept
 rather than sorted; the remaining difference is the order the payload is built
 in, which is a presentation choice with no bearing on the result.
+
+**One case is no longer equivalent, deliberately.** Line endings. `develop`
+normalises CRLF to LF on read (D8); `ts-implementation` preserves them. The eleven
+cases above contain no CRLF note, so the measurement stands as measured — but a
+CRLF note would now round-trip through one tree and not the other, and that is a
+recorded Divergence rather than a bug in either.
 
 ## The Rust parity harness fails loudly rather than skipping
 

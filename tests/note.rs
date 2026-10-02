@@ -9,7 +9,12 @@
 //! concatenate back to the note itself, byte for byte, and every segment's span
 //! indexes its own text. That is asserted over the real testing vault rather
 //! than over examples, because an offset bug only shows up on notes with
-//! umlauts, CRLF line endings and embeds at the end of the file.
+//! umlauts, embeds at the end of the file, and a Base region on the last line.
+//!
+//! CRLF is not one of those shapes any more: every note this crate reads has been
+//! through `normalise_line_endings`. It still gets tested here because `write_note`
+//! also parses what the AGENT sent, and a parser that dropped bytes on input it can
+//! be handed would corrupt a Host note the moment an editor rewrote a line ending.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -543,106 +548,52 @@ fn the_testing_vault_has_the_base_regions_it_is_a_fixture_for() {
     );
 }
 
-/// A CRLF note's Base region must still be a Base region, and must span the same
-/// bytes the TypeScript tree's did.
+/// A note round-trips byte for byte, whichever line ending it was spelled with.
 ///
-/// Regression. Rust's `(?m)` treats only `\n` as a line terminator, so `$` does
-/// not match before a `\r`. That made every CRLF note's region invisible, and
-/// `write_note` then persisted the agent's deletion of it while reporting
-/// `health: ok` — silent vault corruption on a note the tool claimed to have
-/// protected. JavaScript's multiline `$` does match before `\r`, so this was a
-/// port regression rather than inherited behaviour.
+/// **LF is the only shape the server ever reads** — `normalise_line_endings` runs
+/// on the way in — so the LF column is the one that describes production. The
+/// other two are here because `write_note` also parses the text an AGENT sent,
+/// which never passed through the backend, and a parser that lost bytes on input
+/// it can be handed would corrupt a Host note the moment an editor rewrote a line
+/// ending for it.
 ///
-/// Making the region VISIBLE was only half of it. Matching it needs a `\r?` the
-/// pattern consumes, so the span arrived one byte longer than JavaScript's, and a
-/// region that owns its `\r` is a region `push_line` then joins to `\r\r\n`. The
-/// span is pinned here for the same reason the match is: byte for byte, and equal
-/// to what the TypeScript produced.
+/// **CR is the column that earns them.** `Lines` finds `\n` and nothing else, so a
+/// CR-only note is ONE line to this crate. Normalising every `\r` would have made
+/// it one line per carriage return, inventing a line count the note never had;
+/// leaving a lone `\r` alone is what keeps it round-tripping exactly. Rewriting
+/// CR-only text is the obvious wrong version of this rule, and no assertion about
+/// `\r\n` would catch it — which is why the third column exists.
+///
+/// Every shape is built by joining the same lines with the ending, so the three
+/// columns differ in nothing but the bytes under test.
 #[test]
-fn a_crlf_host_note_still_has_a_base_region() {
-    for (label, text) in [
-        ("plain", "# Host\r\n\r\n![[T.base]]\r\n"),
-        ("indented", "# Host\r\n\r\n  ![[T.base]]  \r\n"),
-        ("with view", "# Host\r\n\r\n![[T.base#View]]\r\n"),
-        ("no trailing newline", "# Host\r\n\r\n![[T.base]]"),
-    ] {
-        let note = parse_note_with_embeds("Host.md", text);
-        let regions: Vec<_> = note.segments.iter().filter(|s| is_base_region(s)).collect();
-        assert_eq!(
-            regions.len(),
-            1,
-            "{label}: expected exactly one Base region, found {}",
-            regions.len()
-        );
-        // The region covers its own line and stops before the `\r`. JavaScript's
-        // multiline `$` matches there, so the TypeScript tree's span stopped
-        // there too and the `\r` belonged to the prose that followed. Rust's
-        // `(?m)` `$` does not match before a `\r`, so `base_embed_re` has to
-        // consume it to reach `$`; `split_base_embeds` trims the match back to
-        // this span rather than letting the region absorb a line ending it does
-        // not own — an absorbed `\r` plus the `\r\n` `push_line` appends is
-        // `\r\r\n`, which the next read cannot match at all.
-        assert_eq!(
-            &text[regions[0].start()..regions[0].end()],
-            expected_region(label),
-            "{label}: the region must span the line and nothing else"
-        );
-        assert_eq!(
-            regions[0].base_path(),
-            Some("T.base"),
-            "{label}: the region must name its Base"
-        );
-    }
-}
-
-/// The byte span a Base region must occupy for each CRLF shape below.
-///
-/// Byte-identical to what the TypeScript tree produced, which is the point: the
-/// two implementations are meant to agree on every span, and a region that owns
-/// its `\r` agrees with neither JavaScript nor `push_line`.
-fn expected_region(label: &str) -> &'static str {
-    match label {
-        "indented" => "  ![[T.base]]  ",
-        "with view" => "![[T.base#View]]",
-        "no trailing newline" => "![[T.base]]",
-        _ => "![[T.base]]",
-    }
-}
-
-/// A CRLF note must round-trip byte for byte, like every other note.
-#[test]
-fn a_crlf_note_round_trips_exactly() {
-    for (label, text) in [
-        (
-            "a Base region on a terminated line",
-            "# Host\r\n\r\nintro\r\n\r\n![[T.base]]\r\n\r\ntail\r\n",
-        ),
-        (
-            "a Base region at end of file",
-            "# Host\r\n\r\nintro\r\n\r\n![[T.base]]",
-        ),
-        (
-            "a Base region pinning a view",
-            "# Host\r\n\r\n![[T.base#View]]\r\n",
-        ),
-        (
-            "an indented Base region with trailing spaces",
-            "# Host\r\n\r\n  ![[T.base]]  \r\n",
-        ),
-        (
-            "an inline fence",
-            "# Host\r\n\r\n```base\r\nviews: []\r\n```\r\n",
-        ),
-        (
-            "the same note with LF",
-            "# Host\n\nintro\n\n![[T.base]]\n\ntail\n",
-        ),
-        (
-            "a mixed note, left exactly as found",
-            "# Host\r\n\nintro\n\n![[T.base]]\n",
-        ),
-    ] {
-        let note = parse_note_with_embeds("Host.md", text);
-        assert_eq!(serialise(&note.segments), text, "{label}: lost bytes");
+fn a_note_round_trips_exactly_whatever_its_line_ending() {
+    let shapes: [&[&str]; 7] = [
+        &["# Host", "", "intro", "", "![[T.base]]", "", "tail", ""],
+        &["# Host", "", "intro", "", "![[T.base]]"],
+        &["# Host", "", "![[T.base#View]]", ""],
+        &["# Host", "", "  ![[T.base]]  ", ""],
+        &["# Host", "", "```base", "views: []", "```", ""],
+        &["---", "status: active", "---", "", "![[T.base]]", ""],
+        &[
+            "# Host",
+            "",
+            "![[T.base]]",
+            "",
+            "```base",
+            "views: []",
+            "```",
+        ],
+    ];
+    for ending in ["\n", "\r\n", "\r"] {
+        for (index, lines) in shapes.iter().enumerate() {
+            let text = lines.join(ending);
+            let note = parse_note_with_embeds("Host.md", &text);
+            assert_eq!(
+                serialise(&note.segments),
+                text,
+                "{ending:?} shape {index}: lost bytes"
+            );
+        }
     }
 }
