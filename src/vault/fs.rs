@@ -149,6 +149,11 @@ impl FsVaultSource {
     }
 
     /// Guard against a path escaping the vault root.
+    ///
+    /// Both refusals run before any I/O, and both are about the path's TEXT rather
+    /// than about the tree: a path this backend cannot interpret the same way on
+    /// every platform it might run on is refused rather than resolved on one of
+    /// them and discovered on another.
     fn abs(&self, rel: &str) -> Result<PathBuf> {
         // A leading `/` names an absolute path, and the resolution below would
         // otherwise fold it onto the root as though it were relative — which is
@@ -156,6 +161,26 @@ impl FsVaultSource {
         // before any I/O.
         if rel.starts_with('/') {
             return Err(escapes_root(rel));
+        }
+        // `\` is the same class of mistake and the more dangerous of the two,
+        // because the check at the bottom is COMPONENT-based and `PathBuf::push`
+        // is not. The loop below splits on `/` only, so `..\..\outside\evil.md` is
+        // one segment and the root does start with the result — but
+        // `Path::components` splits on either separator on Windows, so the
+        // operating system sees four segments there and the write lands outside
+        // the root.
+        //
+        // Unconditional, deliberately, and NOT `#[cfg(windows)]`: a rule whose
+        // safety depends on which binary it was compiled into is the defect itself
+        // rather than its repair, and it is also the one part of the fix this test
+        // suite could not otherwise reach from Linux. The cost is real and is
+        // stated here rather than discovered: a Linux vault holding a file whose
+        // name literally contains a backslash is indexed by `walk`, and reading it
+        // now fails. That name is not portable to Windows in the first place, and
+        // `VaultSource::list` documents its paths as vault-relative POSIX, in which
+        // a backslash is not a legal character.
+        if rel.contains('\\') {
+            return Err(backslash_in_path(rel));
         }
         let mut out = self.root.clone();
         for segment in rel.split('/') {
@@ -179,6 +204,14 @@ impl FsVaultSource {
 
 fn escapes_root(rel: &str) -> BasesError {
     BasesError::new(format!("Path escapes the vault root: {rel}"))
+}
+
+fn backslash_in_path(rel: &str) -> BasesError {
+    BasesError::new(format!(
+        "Path contains a backslash, which this backend will not resolve: {rel}. A vault path is \
+         POSIX-relative and uses `/`; a backslash is a path separator on Windows, where the same \
+         argument would name a different file or walk out of the root."
+    ))
 }
 
 /// `path.resolve(root)`: absolute, with `.` and `..` folded out.
