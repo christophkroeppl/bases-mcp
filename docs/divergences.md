@@ -5,8 +5,15 @@ Every row is a deliberate, documented difference from Obsidian. None is a bug.
 Each entry records the construct, our behaviour, Obsidian's behaviour, the
 evidence, and whether a human must re-verify it by hand in the Obsidian UI.
 
-**Obsidian version:** 1.13.7 (installer 1.12.4). Recorded in Phase 0. Parity
-tests fail loudly on a version bump; that is the intended signal, not a flake.
+**Obsidian version:** 1.13.7 (installer 1.12.4). Recorded in Phase 0.
+
+⚠️ **The version gate described here does not exist yet.** Every parity result
+below was measured against 1.13.7, and nothing in `tests/parity.rs` asserts the
+version — it reads no version at all. So an Obsidian upgrade would silently
+re-baseline every claim in this file rather than failing loudly. Closing that
+means recording the CLI version into the parity snapshot and asserting it; until
+then, treat the version above as "the version these entries were measured
+against", not as a check.
 
 Evidence shorthand: `probe` = a `.base` file written into `test/vault` and
 queried with `obsidian base:query`, then deleted. `cli` = the same without a
@@ -131,6 +138,33 @@ it would be refusing our own output.
 
 ---
 
+## D7 — A Base deeper than 96 nesting levels is refused
+
+| | |
+|---|---|
+| **Construct** | A filter or formula nesting groups more than 96 levels deep, e.g. `((((…status != null…))))` |
+| **Ours** | A hard error naming the construct and the limit. Nothing is written. |
+| **Obsidian** | Renders the Base. A stack overflow is not catchable in Rust, so the alternative to a limit is a process abort: the MCP client sees the transport drop with no tool result, and every tool stays dead until the server restarts. |
+| **Evidence** | Measured on `develop` at `f377887`: 2500 levels evaluated, 3000 evaluated, 4000 → `fatal runtime error: stack overflow, aborting`, exit 134. After the guard: 96 levels is a refusal naming `Expression` and the number; 4000 is the same refusal, exit 0. |
+| **verify-in-obsidian** | no — the crash is ours, not Obsidian's |
+
+The parser, the evaluator and the three filter-tree walks spend from one shared
+budget (`src/depth.rs`). **Why 96.** The parser is the binding constraint: it
+survives 472 and dies at 473 at `opt-level = 0` in a 2 MiB thread, so 96 sits
+4.9x below that edge with the stack mostly unspent — the margin that matters,
+because a frame that grew by half would otherwise move the edge to 314. It is
+also roughly 2x deeper than anything a person writes; the deepest legitimate
+expression this project has been asked to accept is fifty. Deliberately **not**
+64: `serde_yaml` already caps a filter tree at 63, so a filter may nest `and:`
+63 deep *and* carry a 96-deep expression, and a shared limit would refuse a Base
+for no reason.
+
+**Obsidian will never produce one of these notes.** It writes LF on every
+platform (see below), so a nested expression arrives only from a hand edit, a
+plugin, or a bad merge — which is exactly the shape a limit is for.
+
+---
+
 ## Behaviour probes that are NOT divergences
 
 Recorded because they were non-obvious and cost real probing time. We match
@@ -148,6 +182,43 @@ Obsidian on all of these; each is pinned by a test so it cannot regress.
 | Exit codes | Obsidian prints `Error:` and still exits 0 | The exit code is meaningless; only output shape is trustworthy. |
 | Ambiguous link resolution | Resolves to the **shortest path**, not a same-folder sibling | `[[Root Project]]` resolves to `Root Project.md`, not anything under `Projects/`. |
 | `format=md` cell alignment | Every cell is **centred**, short values padded with spaces on both sides | Centred text is harder to scan than left-aligned, so it is tempting to "fix" — but `flat` is byte-compared against the CLI, so the centring is load-bearing. Only `structured` left-aligns. See D2. |
+| **Notes are always LF** | Obsidian writes `\n` on every platform, and converts a note's CRLF back to LF when it opens it | It looks like a bug when a Windows vault is full of CRLF and Obsidian "changed" every file on open. It is Obsidian doing the normalising, not the server. |
+
+
+### Obsidian writes LF on every platform
+
+This is the load-bearing fact behind the CRLF handling in `src/note.rs`, so it is
+recorded with sources rather than left as folklore.
+
+| Platform | What Obsidian writes | What it does to a CRLF note it opens |
+|---|---|---|
+| Windows | `\n` | Converts back to `\n` |
+| macOS | `\n` | — |
+| Linux | `\n` | — |
+
+There is **no setting**. Sources:
+
+- [Changing the storage format of a Markdown file from unix- to windows format](https://forum.obsidian.md/t/changing-the-storage-format-of-a-markdown-file-from-unix-to-windows-format/79822) (Apr 2024). Question: *"The files Obsidian produces use the `\n` instead of `\r\n`. I'm on a Windows machine and I would like the default line ending to be `\r\n`. I've looked through the options but I can't find anything that controls it."* Obsidian staff: *"There's no way in the app itself."*
+- [Can I select CRLF line endings?](https://forum.obsidian.md/t/can-i-select-crlf-line-endings/5206) (2020): *"When I create new notes they are created with CRLF (I have Windows 10, Obsidian v 0.8.9) but when I start writing on them they turn LF."*
+- [Being able to select line endings CRLF - LF](https://forum.obsidian.md/t/being-able-to-select-line-endings-crlf-lf/5294) (2020), a pinned feature request that stays open.
+- [Obsidian crashes in very specific circumstances due to LF vs CRLF](https://forum.obsidian.md/t/obsidian-crashes-in-very-specific-circumstances-due-to-lf-vs-crlf/85190) (Jul 2024): *"When re-opening the note, Obsidian should convert CRLF → LF like it usually does."*
+- [Solving Git Sync Issues Caused by Different System Line Endings](https://forum.obsidian.md/t/solving-git-sync-issues-caused-by-different-system-line-endings/92253) (Nov 2024): *"Apple and Linux use LF, and Obsidian's default line ending is also LF."*
+
+**What this means for us.** CRLF is the FOREIGN shape, not the native one. It
+arrives from `core.autocrlf=true` on a Windows checkout, a sync client that
+forces CRLF, or editing outside Obsidian — never from Obsidian. So the CRLF paths
+in `src/note.rs` and `src/render/project.rs` exist for a note in flight between
+those producers, not for a note Obsidian authored.
+
+Two consequences worth stating, because both were learned the hard way:
+
+1. **We must not write CRLF ourselves.** `line_ending` (`src/render/project.rs`)
+   honours whatever the note already uses rather than normalising, so a CRLF note
+   stays CRLF until Obsidian next opens it. Normalising on write would fight the
+   user's tooling and break byte-exact round-trips.
+2. **A Base region must not own its line ending.** See "Bugs found in this
+   implementation" — a span that included the `\r` produced `\r\r\n` on restore,
+   which hid the region permanently.
 
 ---
 
@@ -190,6 +261,22 @@ restart, so a draft id that fails to resolve means starting the handshake again
 without `draft_id`. A successful commit **consumes** the draft id; a failed
 verify does not, so the same id is resent with the corrected content until it
 expires.
+
+Draft paths are held to Obsidian's own portability rules, not just to "ends in
+`.md`". `add_note_to_base` refuses a segment containing `\` (a separator on
+Windows, where the same string walks out of the vault root), a segment starting
+with `.` (`is_indexable` skips such files, so the note would be written, reported
+`verified: true`, and then invisible to every query), a segment ending with `.`
+or a space (Windows strips both silently), and the 28 device names Windows
+reserves (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, and the
+superscript variants — with or without an extension, so `NUL.tar.gz` matches).
+See <https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>.
+
+Those rules apply on **every** platform, not only where they bite, because a
+guard whose safety depends on the compilation target is the defect rather than
+its repair, and a `cfg`-gated rule never runs where it matters. The read side is
+unaffected: an existing Linux file named `NUL.md` stays readable; only *creating*
+one through `add_note_to_base` is refused.
 
 ## Bugs found in this implementation
 
@@ -240,6 +327,46 @@ A refactor briefly routed the `base` argument through `assertNotePath`, which
 refuses anything ending in `.base` — refusing the only valid value. Corrected
 to check that `base` is present without asserting it is a note.
 
+### CI was red on every push and nobody saw it
+
+`cargo test --all-targets -- --skip parity` does not exclude the parity suite.
+`--skip` filters by test NAME, and only one of the four CLI-dependent tests in
+`tests/parity.rs` has "parity" in its name. The other three ran, found no
+Obsidian, and panicked at the guard:
+
+```
+$ OBSIDIAN_BIN=/nonexistent/obsidian cargo test --all-targets -- --skip parity
+test our_json_matches_the_cli ... FAILED
+test our_markdown_matches_the_cli_byte_for_byte ... FAILED
+test the_cli_cannot_bind_this_and_returns_an_empty_result ... FAILED
+test result: FAILED. 4 passed; 3 failed; 1 filtered out
+```
+
+The workflow comment said parity was excluded. The command did not exclude it.
+This went unnoticed from `f377887` until it was looked for, which is a long time
+for a red build.
+
+**Fix.** A Cargo feature gate rather than name filtering, so the property does
+not depend on anyone's naming:
+
+```toml
+[features]
+parity = []
+
+[[test]]
+name = "parity"
+required-features = ["parity"]
+```
+
+Plain `cargo test` then never builds the target at all, and `just parity` becomes
+`cargo test --features parity --test parity` — still loud by design when the CLI
+cannot answer. A CI step runs the plain command with `OBSIDIAN_BIN` pointed at a
+nonexistent path and requires success, so the property cannot rot again.
+
+`--skip parity` was also silently dropping two ordinary tests that have nothing
+to do with the CLI (`render_is_the_flat_cli_parity_surface`,
+`resolve_base_says_which_of_its_two_surfaces_is_the_parity_one`). Both run now.
+
 ### The parity suite passed vacuously when Obsidian was down
 
 Seven `if (!available) return;` guards made the suite report green with zero
@@ -280,13 +407,6 @@ replaced the live fence with nothing.
 
 Fixed in the Rust port by pairing two inline regions on their pinned view alone.
 The TypeScript tree still has this bug; it is not yet repaired there.
-
-### `project` appended a spurious newline
-
-The Projection builder added a newline after each rendered region unconditionally.
-Because `write_note` reconciles rather than writes, that newline came back as an
-edit the agent never made. Fixed by adding one only where the boundary does not
-already have it.
 
 ### Date cells lost their `dateOnly` flag
 
@@ -426,6 +546,22 @@ doubled carriage returns plus a re-parse (`tests/render.rs`), and two consecutiv
 deletions through the tool surface, because the first corrupts the file and the
 second loses the region — asserting only the first cannot tell a repaired restore
 from a slightly wrong one (`tests/tools.rs`).
+
+The lesson generalises past this bug: the assertion was written to describe the
+shape we *expected* rather than the property that must hold. "No `\r` outside a
+`\r\n`" catches every corruption in the class; "no lone `\n`" catches one of them,
+and passed straight through this one.
+
+## Branches
+
+| Branch | What it is |
+|---|---|
+| `develop` | The Rust implementation. The shipping one. |
+| `main` | Frozen at `0fbef40`. The TypeScript implementation, kept as the cross-implementation oracle. |
+| `ts-implementation` | `main` plus the four data-loss fixes ported to TypeScript. |
+
+`test/unit/*.ts` and `test/parity/*.test.ts` are cited by entries in this file and
+live on those two branches only; `develop` is Rust alone.
 
 ## TypeScript and Rust: verified equivalent
 
