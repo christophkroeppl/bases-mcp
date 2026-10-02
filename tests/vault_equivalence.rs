@@ -647,6 +647,100 @@ fn delete_removes_the_file_and_both_backends_stop_listing_it() {
 }
 
 // ---------------------------------------------------------------------------
+// The filesystem backend's own path guard
+// ---------------------------------------------------------------------------
+
+/// These are NOT equivalence tests, and they are in this file only because this is
+/// where the two backends' path handling is compared — so the place a reader looks
+/// when asking why they disagree is also where the disagreement is written down.
+///
+/// [`FsVaultSource::abs`] resolves a vault-relative path, and the guard that keeps
+/// the result inside the root compares whole COMPONENTS. That is sound for `/` and
+/// for `..`, and it was silently unsound for `\`: `PathBuf::push` appended a
+/// backslashed string as ONE component, so `[vault, ..\..\evil.md]` does start with
+/// `[vault]` and the check passed. `Path::components` splits on `\` on Windows, so
+/// there the same argument is four segments and the write lands outside the root.
+///
+/// Windows is not available to this suite, so what is pinned here is the REFUSAL,
+/// which is platform-independent: a path this backend cannot interpret the same way
+/// on two platforms is refused rather than guessed at. That is also what makes the
+/// rule testable at all from Linux — a `#[cfg(windows)]` guard would be the one
+/// piece of the fix nothing in CI could reach.
+#[test]
+fn the_filesystem_backend_refuses_a_backslash_in_a_vault_relative_path() {
+    let (dir, fs, _memory) = pair();
+    let outside = dir.path().parent().expect("a temp dir has a parent");
+
+    for escapee in [r"..\..\outside\evil.md", r"Tickets\..\..\outside\evil.md"] {
+        // Every read and every write funnels through `abs`, so all of them refuse.
+        // One of them passing would be a path the backend can resolve on this
+        // platform and not on another.
+        for refusal in [
+            failure_of(fs.read_text(escapee)),
+            failure_of(fs.read_fresh(escapee)),
+            failure_of(fs.write_text(escapee, "# escaped\n")),
+            failure_of(fs.ensure_dir(escapee)),
+            failure_of(fs.exists(escapee)),
+            failure_of(fs.delete(escapee)),
+            failure_of(fs.hash(escapee)),
+            failure_of(fs.stat(escapee)),
+        ] {
+            assert!(
+                refusal.message().contains("backslash"),
+                "{escapee}: {refusal}"
+            );
+        }
+        assert!(
+            !outside.join("outside").exists(),
+            "{escapee}: a directory appeared outside the vault"
+        );
+    }
+    assert!(
+        !outside.join("evil.md").exists(),
+        "no file appeared beside the vault either"
+    );
+    assert_eq!(
+        list_of(&fs),
+        load_corpus()
+            .into_iter()
+            .map(|file| file.path)
+            .collect::<Vec<_>>(),
+        "and the vault is byte-for-byte what it was"
+    );
+}
+
+/// The guard above is an ADDITION, not a replacement. A `..` that pops past the
+/// root was already refused, and it is pinned here at the backend rather than
+/// through `add_note_to_base` because the two are independent: the tool boundary
+/// also refuses a `..` for a different reason (a dot-prefixed segment), so a test
+/// that only asked the tool could not tell which guard was holding.
+#[test]
+fn the_filesystem_backend_still_refuses_a_path_that_walks_out_of_the_root() {
+    let (dir, fs, _memory) = pair();
+    let outside = dir.path().parent().expect("a temp dir has a parent");
+
+    for escapee in ["../../outside/escaped.md", "../outside.md"] {
+        let refusal = failure_of(fs.write_text(escapee, "# escaped\n"));
+        assert!(
+            refusal.message().contains("escapes the vault root"),
+            "{escapee}: {refusal}"
+        );
+    }
+    assert!(
+        !outside.join("outside").exists(),
+        "the write walked out of the vault root"
+    );
+    assert_eq!(
+        list_of(&fs),
+        load_corpus()
+            .into_iter()
+            .map(|file| file.path)
+            .collect::<Vec<_>>(),
+        "and the vault is unchanged"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Link resolution
 // ---------------------------------------------------------------------------
 

@@ -423,6 +423,45 @@ fn an_escape_is_refused_before_any_request_is_made() {
     assert!(server.requests().is_empty());
 }
 
+/// A backslash is a literal here, and stays one all the way onto the wire.
+///
+/// This is where the two backends genuinely disagree, and the disagreement is
+/// deliberate. `VaultSource::list` documents its paths as vault-relative POSIX, and
+/// `\` is not a legal character in one — but over HTTP it cannot walk out of the
+/// vault even so, because `encode_segment` percent-encodes it and the server
+/// decodes `%5C` back to a character rather than to a separator. So the same
+/// argument that the filesystem backend has to refuse is here an ordinary file
+/// name, and refusing it would make a note this server genuinely holds unreadable.
+///
+/// The place the two are made to agree is `assert_note_path`, which every backend
+/// passes through, rather than here.
+#[test]
+fn a_backslash_stays_a_literal_segment_rather_than_walking_out_of_the_vault() {
+    assert_eq!(
+        vault_relative_path(r"..\..\outside\evil.md").expect("not an escape over HTTP"),
+        r"..\..\outside\evil.md"
+    );
+    assert_eq!(
+        vault_relative_path(r"Tickets\..\..\outside\evil.md").expect("not an escape over HTTP"),
+        r"Tickets\..\..\outside\evil.md"
+    );
+}
+
+#[test]
+fn a_backslash_reaches_the_server_as_percent_encoded_and_one_path_segment() {
+    // The encoding is load-bearing rather than incidental: a literal `\` in a URL
+    // path is legal but a server is free to normalise it, and the request this
+    // backend makes must name ONE resource inside the vault.
+    let server = fake([]);
+    let source = source_over(&server);
+    let _ = failure_of(source.read_text(r"..\..\outside\evil.md"));
+
+    assert_eq!(
+        server.requests()[0].url,
+        format!("{BASE_URL}/..%5C..%5Coutside%5Cevil.md")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A 207 Multi-Status body
 // ---------------------------------------------------------------------------

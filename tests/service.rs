@@ -1209,6 +1209,231 @@ fn a_refused_commit_leaves_the_draft_live_and_resendable() {
 }
 
 // ---------------------------------------------------------------------------
+// A path that cannot name a note in a vault
+// ---------------------------------------------------------------------------
+
+/// A note whose name the vault would refuse to index.
+///
+/// `is_indexable` drops every segment that starts with `.`, and that is the rule
+/// keeping `.obsidian/` out of every Base. So a note written under one is on disk,
+/// comes back `verified: true`, and is invisible to every query the agent can run
+/// — which is why the tests below assert the WHOLE consequence rather than that
+/// an error arrived.
+const HIDDEN: &str = "Notes/.hidden.md";
+
+/// Every file under `dir`, dot-prefixed names INCLUDED, relative and sorted.
+///
+/// `count_files` skips those on purpose, because it measures the oracle. This
+/// measures what actually reached disk, which is the only place a note written
+/// somewhere the index refuses to look can be seen.
+fn every_file_on_disk(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_files(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(root, &path, out);
+        } else {
+            out.push(
+                path.strip_prefix(root)
+                    .expect("a path under the root")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+}
+
+#[test]
+fn a_dot_prefixed_note_path_is_refused_and_never_reaches_disk() {
+    let (dir, resolver) = sandbox();
+    let before = every_file_on_disk(dir.path());
+
+    // Deliberately not `message_of`, which would only prove an error came back.
+    // The defect was that the note reached disk AND came back verified while the
+    // index refused it, so an error-only assertion passes against broken code.
+    let message = match add(&resolver, vec![("base", "AllNotes.base"), ("path", HIDDEN)]) {
+        Ok(outcome) => panic!("a dot-prefixed note path was accepted as {outcome:?}"),
+        Err(error) => error.message().to_string(),
+    };
+    assert!(message.contains("may start with `.`"), "{message}");
+
+    // No file appeared, dot-prefixed or otherwise; no draft was handed out, so
+    // there is no id a later call could commit under; and the path is not a row.
+    assert_eq!(
+        every_file_on_disk(dir.path()),
+        before,
+        "the vault gained a file the index will never show"
+    );
+    assert!(
+        resolver.drafts().is_empty(),
+        "a draft was handed out for a path that cannot name a note"
+    );
+    assert!(
+        !paths(&resolver).contains(&HIDDEN.to_string()),
+        "the path is not indexed"
+    );
+}
+
+#[test]
+fn a_dot_prefixed_note_path_is_refused_on_the_commit_call_too() {
+    let (dir, resolver) = sandbox();
+    let proposal = draft_for(&resolver, SCRATCH, Some(HOST), None);
+
+    // The commit re-checks whatever path it is handed, and does so BEFORE
+    // comparing it with the draft. Comparing first would report a mismatch, which
+    // is true and says nothing about the path that was actually the problem.
+    let message = message_of(|| {
+        add(
+            &resolver,
+            vec![
+                ("draft_id", &proposal.draft_id),
+                ("content", &proposal.content),
+                ("path", HIDDEN),
+            ],
+        )
+    });
+    assert!(message.contains("may start with `.`"), "{message}");
+    assert!(
+        !every_file_on_disk(dir.path()).contains(&HIDDEN.to_string()),
+        "the note reached disk"
+    );
+    assert!(
+        !paths(&resolver).contains(&HIDDEN.to_string()),
+        "or the index"
+    );
+}
+
+#[test]
+fn a_backslash_in_a_note_path_is_refused() {
+    let (dir, resolver) = sandbox();
+    // Both spellings, because only one of them tripped anything before. A path
+    // whose first character is `.` was caught incidentally by the dot rule on the
+    // way in; one that starts with a real segment was not, and went all the way to
+    // a write.
+    for escapee in [r"..\..\outside\evil.md", r"Tickets\..\..\outside\evil.md"] {
+        let message =
+            message_of(|| add(&resolver, vec![("base", "Tickets.base"), ("path", escapee)]));
+        assert!(message.contains("POSIX-relative"), "{escapee}: {message}");
+        assert!(
+            !every_file_on_disk(dir.path())
+                .iter()
+                .any(|written| written.contains("evil.md")),
+            "{escapee}: the note reached disk"
+        );
+    }
+}
+#[test]
+fn a_directory_name_ending_in_a_period_or_a_space_is_refused() {
+    let (dir, resolver) = sandbox();
+    let before = directory_names(dir.path());
+    // Only a non-final segment can end this way, because the path itself has to end
+    // in `.md` -- which is also why the rule is about the DIRECTORY names here.
+    for path in ["Notes./Alpha.md", "Notes /Alpha.md", "Notes./Sub./Alpha.md"] {
+        let message = message_of(|| add(&resolver, vec![("base", "Tickets.base"), ("path", path)]));
+        assert!(
+            message.contains("may end with `.` or a space"),
+            "{path}: {message}"
+        );
+    }
+    assert_eq!(
+        directory_names(dir.path()),
+        before,
+        "a folder the vault could never name was created"
+    );
+}
+
+#[test]
+fn a_windows_reserved_note_name_is_refused_however_it_is_spelled() {
+    let (_dir, resolver) = sandbox();
+    // The device names, in the spellings Windows reserves: any case, any extension
+    // (the stem is what counts, so `NUL.md.md` is `NUL`), and the ISO 8859-1
+    // superscript digits Windows recognises as digits.
+    for name in [
+        "NUL.md",
+        "nul.md",
+        "CON.md",
+        "con.md",
+        "PRN.md",
+        "AUX.md",
+        "COM1.md",
+        "COM9.md",
+        "LPT1.md",
+        "LPT9.md",
+        "COM¹.md",
+        "COM².md",
+        "COM³.md",
+        "LPT¹.md",
+        "NUL.md.md",
+        "Tickets/NUL.md",
+    ] {
+        let message = message_of(|| add(&resolver, vec![("base", "Tickets.base"), ("path", name)]));
+        assert!(
+            message.contains("reserves for a device"),
+            "{name}: {message}"
+        );
+    }
+
+    // The neighbourhood must NOT be refused. `CON` is reserved and `CONCERT` is a
+    // perfectly ordinary note; `COM10` is past the reserved range. A check that
+    // matched on a prefix would take both, and a check that only matched the exact
+    // name would let `NUL.txt` through.
+    for name in [
+        "CONCERT.md",
+        "NULL.md",
+        "COM10.md",
+        "LPT10.md",
+        "C.md",
+        "Tickets/AUXILIARY.md",
+    ] {
+        let proposal = draft(add(
+            &resolver,
+            vec![("base", "Tickets.base"), ("path", name)],
+        ));
+        assert_eq!(
+            proposal.path, name,
+            "{name} was refused even though it is not a device name"
+        );
+    }
+}
+
+#[test]
+fn dots_and_spaces_in_the_middle_of_a_note_name_are_still_accepted() {
+    let (dir, resolver) = sandbox();
+    // Two of the corpus's own names, so the control is not a shape invented for
+    // this test. Neither is close to any of the rules above, and both have to keep
+    // working or the corpus stops being a corpus.
+    for note in ["Root Project.md", "Tickets/Invoice export.md"] {
+        let view = futures_block_on(resolver.read_note(note, NoteOptions::raw())).expect("reads");
+        assert!(!view.raw.is_empty(), "{note} still reads");
+    }
+
+    // And a note NAME may carry dots mid-string, which is what the trailing-period
+    // rule must not over-reach onto.
+    let dotted = "Tickets/Q1 report. final.md";
+    let proposal = draft(add(
+        &resolver,
+        vec![("base", "AllNotes.base"), ("path", dotted)],
+    ));
+    let result = commit(&resolver, &proposal.draft_id, &proposal.content).expect("verifies");
+    assert_eq!(result.written(), Some(dotted));
+    assert!(dir.path().join(dotted).is_file(), "the note is on disk");
+    assert!(
+        paths(&resolver).contains(&dotted.to_string()),
+        "and indexed"
+    );
+    assert!(row_paths(&resolver, "AllNotes.base", HOST).contains(&dotted.to_string()));
+}
+
+// ---------------------------------------------------------------------------
 // The host note's path depth does not change the verdict
 // ---------------------------------------------------------------------------
 

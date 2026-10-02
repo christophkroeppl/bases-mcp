@@ -372,13 +372,27 @@ fn assert_note_absent(resolver: &Resolver, path: &str) -> Result<()> {
     Ok(())
 }
 
-/// A row is a note, and a note is a `.md` file.
+/// A row is a note, and a note is a `.md` file at a path a vault can hold.
 ///
 /// `.base` is refused outright: no note operation ever writes a Base, and a Base
 /// region is the one thing an agent must not be able to overwrite by accident.
 /// Anything that is not `.md` is refused too, because the vault index only
 /// recognises `.md` — such a file would be written and then never appear in the
 /// Base, which is the exact silent failure this tool exists to prevent.
+///
+/// The four rules in [`assert_portable_path`] are that same failure by another
+/// route. Each of them names a `.md` file the index will not list, so each would
+/// commit with `verified: true` and then be invisible to every query the agent can
+/// run — the backslash excepted, which on Windows is worse than invisible.
+///
+/// They are here AND in [`crate::vault::fs::FsVaultSource::abs`], because they are
+/// two different guards answering two different questions. These four are vault
+/// semantics — what `is_indexable` will hold, which is a property of Obsidian and
+/// the same over both backends, so the refusal belongs above `VaultSource` where
+/// one message covers them all. The backslash is a property of the FILESYSTEM,
+/// which resolves it one way on Linux and another on Windows, so it is also refused
+/// where the resolution happens: a caller that reaches a backend without passing
+/// through this function must not be able to walk out of the root either.
 fn assert_note_path(path: &str) -> Result<()> {
     if path.trim().is_empty() {
         return Err(BasesError::new("A note path is required."));
@@ -391,6 +405,12 @@ fn assert_note_path(path: &str) -> Result<()> {
         ))
         .with_note(path));
     }
+    if let Some(refusal) = assert_portable_path(path) {
+        return Err(refusal);
+    }
+    // Last, though it is the rule the tool is named for: a segment that cannot
+    // name a file is the more useful thing to say, and it stays true after the
+    // agent fixes whatever else was wrong with the extension.
     if !path.ends_with(".md") {
         return Err(BasesError::new(format!(
             "Refusing to write {path}: a row in a Base has to be a .md note, because a .md note is \
@@ -399,6 +419,107 @@ fn assert_note_path(path: &str) -> Result<()> {
         .with_note(path));
     }
     Ok(())
+}
+
+/// What each segment of a vault path may be, and why each rule is here.
+///
+/// Four rules, one failure: every one of them produces a note the vault index
+/// refuses, so every one of them would commit and then be invisible. They are
+/// checked per segment rather than per path because the rule belongs to a name,
+/// not to a path — `Notes./Alpha.md` is wrong for exactly the reason
+/// `Notes.` is, and `Tickets/NUL.md` for exactly the reason `NUL.md` is.
+///
+/// A note the vault cannot hold is a defect in the TOOL, not in the note: the agent
+/// asked for a row, the tool reported `verified: true`, and there was no row. So
+/// each refusal says what the rule is rather than only that a path was refused.
+fn assert_portable_path(path: &str) -> Option<BasesError> {
+    for segment in path.split('/') {
+        if segment.contains('\\') {
+            return Some(backslash(path));
+        }
+        if segment.starts_with('.') {
+            return Some(dot_prefixed(path, segment));
+        }
+        if segment.ends_with('.') || segment.ends_with(' ') {
+            return Some(trailing_dot_or_space(path, segment));
+        }
+        if let Some(device) = windows_device_name(segment) {
+            return Some(reserved_device(path, device));
+        }
+    }
+    None
+}
+
+/// Every name Windows reserves for a device, in every directory.
+///
+/// The list is Microsoft's, from
+/// <https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>, and the
+/// comparison below folds ASCII case only — which is the whole of the case folding
+/// any of these names needs, since the superscript digits have none.
+const RESERVED_DEVICE_NAMES: [&str; 28] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "COM¹", "COM²", "COM³", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
+    "LPT9", "LPT¹", "LPT²", "LPT³",
+];
+
+/// The device name a segment names, or `None`.
+///
+/// The STEM is what counts, not the whole name: `NUL.md` and `NUL.tar.gz` are both
+/// `NUL`, because Windows takes the device name before the first period and does
+/// not care what follows. A prefix check would take `CONCERT.md` with it.
+fn windows_device_name(segment: &str) -> Option<&'static str> {
+    let stem = segment.split('.').next().unwrap_or(segment);
+    RESERVED_DEVICE_NAMES
+        .iter()
+        .find(|reserved| stem.eq_ignore_ascii_case(reserved))
+        .copied()
+}
+
+fn backslash(path: &str) -> BasesError {
+    BasesError::new(format!(
+        "Refusing to write {path}: a vault path is POSIX-relative, and a backslash is a path \
+         separator on Windows. The same path therefore names one file on this platform and several \
+         on that one -- and `..\\..\\outside\\evil.md` walks out of the vault entirely there. \
+         Separate segments with `/`."
+    ))
+    .with_note(path)
+}
+
+fn dot_prefixed(path: &str, segment: &str) -> BasesError {
+    BasesError::new(format!(
+        "Refusing to write {path}: no segment of a vault path may start with `.`, and {segment} \
+         does. The vault never indexes such a file -- that is the rule that keeps `.obsidian/` out \
+         of every Base -- so the note would be written, reported verified, and then invisible to \
+         every query."
+    ))
+    .with_note(path)
+}
+
+fn trailing_dot_or_space(path: &str, segment: &str) -> BasesError {
+    BasesError::new(format!(
+        "Refusing to write {path}: no segment of a vault path may end with `.` or a space, and \
+         {segment} does. Windows strips both without saying so, so the note would be created under \
+         a different name there, or not created at all."
+    ))
+    .with_note(path)
+}
+
+/// Refused on every platform, not only the one where the name is a device.
+///
+/// It costs nothing on Linux, where `NUL.md` is a legal and quite ordinary file
+/// name, and it buys a vault that stays readable when it is moved to Windows —
+/// which is the point of refusing here at all. The alternative, a rule that only
+/// fires on the target platform, is a rule nobody can test in the environment where
+/// it fires; that is not a hypothetical, it is how the backslash defect above
+/// survived. A note called `NUL` is nonsense in a vault on either platform, so
+/// refusing it everywhere loses nothing real.
+fn reserved_device(path: &str, device: &str) -> BasesError {
+    BasesError::new(format!(
+        "Refusing to write {path}: {device} is a name Windows reserves for a device, in every \
+         directory and with or without an extension, so the note could not be opened there at \
+         all. Pick another name."
+    ))
+    .with_note(path)
 }
 
 // ---------------------------------------------------------------------------
