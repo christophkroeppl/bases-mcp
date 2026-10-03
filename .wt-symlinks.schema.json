@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/christophkroeppl/agent-repo-layout/main/.wt-symlinks.schema.json",
+  "title": "Worktree root symlink manifest",
+  "description": "Declares which files from the primary worktree are exposed as relative symlinks at the bare repo root, so tools invoked from the repo root find the branch's agent config. Read by the post-checkout hook.",
+  "type": "object",
+  "required": ["links"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path or URL to this schema, for editor completion and CI validation."
+    },
+    "links": {
+      "type": "array",
+      "description": "One entry per symlink to create at the bare repo root.",
+      "items": { "$ref": "#/$defs/link" }
+    }
+  },
+  "$defs": {
+    "link": {
+      "type": "object",
+      "required": ["from"],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to the file, directory or symlink INSIDE the primary worktree, relative to the worktree root. E.g. \"AGENTS.md\", \".agents\", \"apps/api/opencode.jsonc\"."
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of the symlink at the bare repo root. Defaults to the basename of \"from\", so omit it for the common case. Set it to rename: {\"from\":\"worktree/AGENTS.md\",\"to\":\"CLAUDE.md\"} produces <repo>/CLAUDE.md -> <primary-worktree>/worktree/AGENTS.md."
+        }
+      }
+    }
+  }
+}

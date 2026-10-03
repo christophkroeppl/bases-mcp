@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# post-checkout: symlink agent config from the primary worktree into the bare
+# repo root, driven by a manifest committed to the branch (.wt-symlinks.json).
+#
+# One script for every repo. The per-repo knowledge lives in the manifest, not in
+# a hand-edited copy of this file — that is what stops the three divergent
+# copies that used to exist.
+#
+# Install location:
+#   core.hooksPath NOT set -> <bare-repo>/.git/hooks/post-checkout
+#   core.hooksPath=.githooks -> <worktree>/.githooks/post-checkout (tracked, so
+#   `wt switch --create` inherits it with no manual step)
+#
+# Args: $1=old ref, $2=new ref, $3=1 branch checkout, 0 file checkout.
+# Exits 0 in every non-error path: a symlink helper must never block a checkout.
+set -uo pipefail
+
+[[ "${3:-0}" == "1" ]] || exit 0
+
+log() { printf '[post-checkout] %s\n' "$*" >&2; }
+
+MANIFEST_NAME=.wt-symlinks.json
+
+# ── Locate the bare git dir ────────────────────────────────────────
+# git exports GIT_DIR (and often GIT_WORK_TREE) when running hooks, so a bare
+# `git rev-parse --git-common-dir` can resolve to "." and dirname "." to ".",
+# making the container undetectable and this hook a silent no-op. Prefer the
+# environment, then absolutise.
+COMMON_DIR="${GIT_COMMON_DIR:-}"
+if [[ -z "$COMMON_DIR" || ! -d "$COMMON_DIR" ]]; then
+  COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+fi
+[[ -n "$COMMON_DIR" && -d "$COMMON_DIR" ]] || { log "cannot locate git dir — skipping"; exit 0; }
+COMMON_DIR=$(cd "$COMMON_DIR" && pwd) || exit 0
+
+# The git dir MUST be named .git: BARE_ROOT is its parent, and that parent is
+# where the symlinks land. `git clone --bare url repo.git` makes the hook write
+# into an unrelated directory.
+BARE_ROOT=$(dirname "$COMMON_DIR")
+[[ "$(basename "$COMMON_DIR")" == ".git" ]] || { log "git dir is not named .git ($COMMON_DIR) — skipping"; exit 0; }
+[[ "$(git --git-dir="$COMMON_DIR" rev-parse --is-bare-repository 2>/dev/null || echo false)" == "true" ]] || exit 0
+
+# ── Map branch -> worktree path, from git's own metadata ───────────
+# Read <git-dir>/worktrees/*/, never assume $BARE_ROOT/<branch>: worktrunk
+# sanitises branch names into directory names, so the two can differ.
+declare -A WORKTREE_OF=()
+while IFS= read -r meta; do
+  [[ -d "$meta" ]] || continue
+  # Regex, not the glob 'ref:refs/heads/*': git writes "ref: refs/heads/<b>"
+  # WITH a space after the colon, so the glob matches nothing, the map comes out
+  # empty, and the hook degrades to its last resort while still exiting 0.
+  head_ref=$(cat "$meta/HEAD" 2>/dev/null) || continue
+  [[ "$head_ref" =~ ^ref:[[:space:]]*refs/heads/(.+)$ ]] || continue
+  gitdir_path=$(cat "$meta/gitdir" 2>/dev/null) || continue
+  [[ -n "$gitdir_path" ]] || continue
+  [[ "$gitdir_path" == /* ]] || gitdir_path="$meta$gitdir_path"
+  wt_path="${gitdir_path%/.git}"
+  [[ -d "$wt_path" ]] || continue
+  WORKTREE_OF["${BASH_REMATCH[1]}"]="$wt_path"
+done < <(find "$COMMON_DIR/worktrees" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+
+# ── Pick the primary worktree ───────────────────────────────────────
+# First candidate that is BOTH a ref AND checked out on disk wins. No branch name
+# is hardcoded, so a rename cannot break this.
+#   1. worktrunk default branch
+#   2. git default branch (the bare repo's HEAD)
+#   3. any single remaining checked-out branch (only when there is exactly one)
+# Both conditions are tested INSIDE the loop; testing the ref and then bailing
+# when the directory is missing abandons a valid lower-ranked candidate.
+#
+# Collected into a string and read with <<<: `break`ing a `while read` fed by
+# process substitution kills the writer with "printf: write error: Broken pipe".
+CANDIDATES="$(
+  git --git-dir="$COMMON_DIR" config --get worktrunk.default-branch 2>/dev/null
+  git --git-dir="$COMMON_DIR" symbolic-ref --short -q HEAD 2>/dev/null
+)"
+
+PRIMARY_WT=""
+while IFS= read -r cand; do
+  [[ -n "$cand" ]] || continue
+  git --git-dir="$COMMON_DIR" show-ref --verify --quiet "refs/heads/$cand" || continue
+  if [[ -n "${WORKTREE_OF[$cand]:-}" ]]; then
+    PRIMARY_WT="${WORKTREE_OF[$cand]}"
+    break
+  fi
+done <<< "$CANDIDATES"
+
+if [[ -z "$PRIMARY_WT" && "${#WORKTREE_OF[@]}" -eq 1 ]]; then
+  PRIMARY_WT="${WORKTREE_OF[*]}"
+fi
+
+[[ -n "$PRIMARY_WT" ]] || { log "no primary worktree resolved — skipping"; exit 0; }
+
+# ── Read the manifest ───────────────────────────────────────────────
+MANIFEST="$PRIMARY_WT/$MANIFEST_NAME"
+if [[ ! -f "$MANIFEST" ]]; then
+  log "no $MANIFEST_NAME in $PRIMARY_WT — skipping"
+  exit 0
+fi
+
+# Parse with python3 (present everywhere these repos run) rather than a shell
+# JSON parser. It emits one "from<TAB>to" line per link into a temp file: a
+# variable cannot hold multiple lines here, and `while read` fed by process
+# substitution must not be `break` out of (the writer dies with a broken-pipe
+# error on every checkout).
+LINKS_FILE=$(mktemp "${TMPDIR:-/tmp}/wt-symlinks.XXXXXX") || exit 0
+trap 'rm -f "$LINKS_FILE"' EXIT
+
+MANIFEST="$MANIFEST" python3 - >"$LINKS_FILE" 2>/dev/null <<'PY' || true
+import json, os, sys
+try:
+    data = json.load(open(os.environ["MANIFEST"]))
+except Exception:
+    sys.exit(0)
+if not isinstance(data, dict):
+    sys.exit(0)
+for link in data.get("links") or []:
+    if not isinstance(link, dict):
+        continue
+    src, dst = link.get("from"), link.get("to")
+    if not isinstance(src, str) or not src:
+        continue
+    if not isinstance(dst, str) or not dst:
+        dst = src
+    if "\t" in src or "\t" in dst:
+        continue
+    print(f"{src}\t{dst}")
+PY
+
+if [[ ! -s "$LINKS_FILE" ]]; then
+  log "manifest $MANIFEST_NAME has no usable links — skipping"
+  exit 0
+fi
+
+# ── Create the symlinks ─────────────────────────────────────────────
+# Relative targets keep the layout portable across machines and mounts.
+REL=$(realpath --relative-to="$BARE_ROOT" "$PRIMARY_WT" 2>/dev/null)
+[[ -n "$REL" && "$REL" != "." ]] || REL=$(basename "$PRIMARY_WT")
+
+changed=0
+while IFS=$'\t' read -r src dst; do
+  [[ -n "$src" && -n "$dst" ]] || continue
+  if [[ ! -e "$PRIMARY_WT/$src" ]]; then
+    log "manifest names '$src' but $PRIMARY_WT has no such file — skipping $dst"
+    continue
+  fi
+  target="$BARE_ROOT/$dst"
+  if [[ -L "$target" ]]; then
+    rm -f "$target"          # re-point our own previous link
+  elif [[ -e "$target" ]]; then
+    # A real file or directory at the root is not ours to touch.
+    log "$dst already exists at the repo root and is not a symlink — skipping"
+    continue
+  fi
+  ln -s "$REL/$src" "$target" && changed=$((changed + 1))
+  log "$dst -> $REL/$src"
+done <"$LINKS_FILE"
+
+log "$changed link(s) from $(basename "$PRIMARY_WT")"
+exit 0
