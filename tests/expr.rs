@@ -41,7 +41,9 @@ fn make_ctx(options: Option<AccessorsOptions>) -> EvalContext {
         mtime: Arc::new(|| bases_mcp::value::BasesDate::from_millis(1_767_225_600_000)),
         size: Arc::new(|| 42),
         tasks: Arc::new(Vec::new),
-        resolve: Arc::new(|target: &str| Some(FileValue::new(target.to_string(), accessors_shim()))),
+        resolve: Arc::new(|target: &str| {
+            Some(FileValue::new(target.to_string(), accessors_shim()))
+        }),
         links_to: Arc::new(|_: &str| false),
     };
     let file = FileValue::new(

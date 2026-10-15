@@ -223,7 +223,8 @@ pub struct FileAccessors {
     pub links: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
     pub embeds: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
     pub backlinks: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
-    pub properties: std::sync::Arc<dyn Fn() -> std::collections::BTreeMap<String, BasesValue> + Send + Sync>,
+    pub properties:
+        std::sync::Arc<dyn Fn() -> std::collections::BTreeMap<String, BasesValue> + Send + Sync>,
     pub ctime: std::sync::Arc<dyn Fn() -> BasesDate + Send + Sync>,
     pub mtime: std::sync::Arc<dyn Fn() -> BasesDate + Send + Sync>,
     pub size: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,

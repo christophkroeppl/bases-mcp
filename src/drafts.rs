@@ -27,9 +27,9 @@
 //! `DraftHost` trait — Rust's module system already states the direction, and a
 //! one-implementor trait would only restate it.
 
-use std::sync::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
@@ -208,7 +208,8 @@ impl DraftStore {
             expires_at: now_ms() + self.ttl_ms,
         };
         self.drafts
-            .write().unwrap()
+            .write()
+            .unwrap()
             .insert(record.id.clone(), record.clone());
         record
     }
@@ -247,7 +248,8 @@ impl DraftStore {
     fn prune(&self) {
         let now = now_ms();
         self.drafts
-            .write().unwrap()
+            .write()
+            .unwrap()
             .retain(|_, draft| draft.expires_at > now);
     }
 }

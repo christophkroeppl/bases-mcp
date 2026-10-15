@@ -10,9 +10,9 @@
 //! hood — the right amount of ceremony for a stdio server whose vault lives on
 //! a local disk and whose latency budget is milliseconds.
 
-use std::sync::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
@@ -285,7 +285,8 @@ impl VaultSource for FsVaultSource {
             .map_err(|e| io("read", &abs, e))?;
         let text = normalise_line_endings(&String::from_utf8_lossy(&bytes));
         self.text_cache
-            .write().unwrap()
+            .write()
+            .unwrap()
             .insert(rel.to_string(), text.clone());
         Ok(text)
     }
@@ -302,7 +303,8 @@ impl VaultSource for FsVaultSource {
         // Keep the cache consistent with disk, so a later `read_note` cannot
         // hand back the pre-write copy we just superseded.
         self.text_cache
-            .write().unwrap()
+            .write()
+            .unwrap()
             .insert(rel.to_string(), text.clone());
         self.hash_cache.write().unwrap().remove(rel);
         Ok(text)
@@ -347,7 +349,8 @@ impl VaultSource for FsVaultSource {
         // normalised form; caching the raw bytes here would hand the next
         // `read_note` line endings no read of this file could ever produce.
         self.text_cache
-            .write().unwrap()
+            .write()
+            .unwrap()
             .insert(rel.to_string(), normalise_line_endings(data));
         self.hash_cache.write().unwrap().remove(rel);
         *self.files.write().unwrap() = None;
@@ -375,7 +378,8 @@ impl VaultSource for FsVaultSource {
         }
         let hash = content_hash(&self.read_note(rel).await?);
         self.hash_cache
-            .write().unwrap()
+            .write()
+            .unwrap()
             .insert(rel.to_string(), hash.clone());
         Ok(hash)
     }

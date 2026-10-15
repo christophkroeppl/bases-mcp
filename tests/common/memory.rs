@@ -25,9 +25,9 @@
 //! It is a FAKE, so it is wrong in the ways a fake must be: see `delete`, which
 //! mirrors the filesystem's forgiving behaviour.
 
-use std::sync::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use async_trait::async_trait;
 use bases_mcp::error::BasesError;
@@ -252,7 +252,11 @@ impl MemoryVaultSource {
 
     /// The status of the most recent refusal, if there was one.
     pub fn last_status(&self) -> Option<u16> {
-        self.refusals.read().unwrap().last().map(|refusal| refusal.status)
+        self.refusals
+            .read()
+            .unwrap()
+            .last()
+            .map(|refusal| refusal.status)
     }
 
     /// Normalise a caller-supplied path, logging the refusal if it escapes.
@@ -263,7 +267,8 @@ impl MemoryVaultSource {
     /// The stored text, or the refusal a server would have given.
     fn read(&self, path: &str, verb: &str) -> std::result::Result<String, BasesError> {
         self.files
-            .read().unwrap()
+            .read()
+            .unwrap()
             .get(path)
             .cloned()
             .ok_or_else(|| self.refuse(not_found(verb, path, 404)))
@@ -387,7 +392,8 @@ impl VaultSource for MemoryVaultSource {
         self.fire(MemoryOp::List, ANY_PATH)?;
         let mut paths: Vec<String> = self
             .files
-            .read().unwrap()
+            .read()
+            .unwrap()
             .keys()
             .filter(|p| is_indexable(p))
             .cloned()
@@ -455,7 +461,8 @@ impl VaultSource for MemoryVaultSource {
         let path = self.normalise_refusing(rel)?;
         let swapped = self.fire(MemoryOp::Write, &path)?;
         self.files
-            .write().unwrap()
+            .write()
+            .unwrap()
             .insert(path, swapped.unwrap_or_else(|| data.to_string()));
         Ok(())
     }

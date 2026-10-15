@@ -619,12 +619,13 @@ pub struct LambdaCall<'a> {
 /// Runs a lambda body once per element, against the budget its call site holds.
 ///
 /// The lifetime is the borrow of that budget. It rides on the type rather than in
-/// the argument because the runner is stored in an `Rc` and so has to outlive the
+/// the argument because the runner is stored in an `Arc` and so has to outlive the
 /// call, and the two ways to give it a budget are both worse than this: a field
 /// on [`LambdaCall`] widens a public struct that nothing else needs widened, and a
 /// parameter on [`crate::stdlib::run_higher_order`] pushes that function to eight
 /// arguments for a value it only forwards.
-pub type LambdaRunner<'depth> = Arc<dyn Fn(LambdaCall<'_>) -> Result<BasesValue> + 'depth>;
+pub type LambdaRunner<'depth> =
+    Arc<dyn Fn(LambdaCall<'_>) -> Result<BasesValue> + Send + Sync + 'depth>;
 
 fn evaluate_call(
     callee: &Node,

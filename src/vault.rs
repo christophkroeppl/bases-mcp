@@ -49,11 +49,11 @@ pub use webdav::{
     WebdavMethod, WebdavTransport, WebdavVaultOptions, WebdavVaultSource,
 };
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use chrono::{DateTime, FixedOffset};
 use regex::Regex;

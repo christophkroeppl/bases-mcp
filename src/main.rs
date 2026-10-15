@@ -1,38 +1,50 @@
-//! The stdio MCP server entrypoint.
+//! The server entrypoint: two transports, one vault, one tool surface.
 //!
-//! Everything here exists to protect one thing: stdout. On a stdio transport
-//! stdout IS the protocol stream, so a single stray `println!` anywhere in the
-//! dependency chain — ours, the SDK's, or a future tool's — injects a line of
-//! prose into JSON-RPC and the client drops the connection. The rule is
-//! therefore absolute: startup diagnostics go to stderr, and nothing goes to
-//! stdout except what the transport itself writes. Once the server is serving
-//! this file is silent forever.
+//! # stdout is sacred on the stdio path
 //!
-//! The other job is refusing to start against the wrong vault. This server is
-//! one vault per process, configured by environment, and every path where that
-//! configuration is absent, blank, incomplete or unusable is a hard failure
-//! naming the variable to set. The tempting alternative — defaulting
-//! `BASES_MCP_VAULT` to `test/vault` or the home directory — is worse than not
-//! starting at all: a server answering confidently from the wrong vault is a
-//! corruption no agent downstream can see.
+//! On stdio, stdout IS the protocol stream, so a single stray `println!`
+//! anywhere in the dependency chain injects a line of prose into JSON-RPC and
+//! the client drops the connection. The rule is absolute: diagnostics go to
+//! stderr, and nothing goes to stdout except what the transport itself writes.
+//! The HTTP path is not subject to that rule — its transport owns the socket —
+//! but it honours it anyway, so one code path cannot teach a habit the other
+//! one forbids.
 //!
-//! Every failure below is fatal by design. A half-started MCP server is worse
-//! than one that never ran: the client sees a process that accepted a connection
-//! and then answered from nothing.
+//! # Both transports are the same server
+//!
+//! [`serve_stdio`] and [`serve_http`] differ only in how they hand bytes to
+//! rmcp. Both index the same vault through [`Resolver::open`] and both serve the
+//! same [`ToolSurface`], so `tools/list` and `tools/call` cannot drift between
+//! them — there is one definition of the surface, in `tools::tool_definitions`.
+//! `tests/http_transport.rs` asserts that over the wire.
 
 use std::process::ExitCode;
 
-use rmcp::transport::stdio;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::ServiceExt;
 
 use bases_mcp::config::{open_source, parse_config, process_env, ConfigResult, NAME};
 use bases_mcp::service::Resolver;
 use bases_mcp::tools::ToolSurface;
+use bases_mcp::transport::{select_transport, Transport, HTTP_PATH};
 
-/// Start the server on stdio, or exit non-zero explaining why not.
+/// Start the server on the named transport, or exit non-zero explaining why not.
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run().await {
+    let transport = match select_transport(std::env::args().skip(1)) {
+        Ok(transport) => transport,
+        Err(message) => {
+            warn(&message);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let outcome = match transport {
+        Transport::Stdio => serve_stdio().await,
+        Transport::Http => serve_http().await,
+    };
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             warn(&message);
@@ -41,12 +53,62 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Serve until the client disconnects.
+/// Serve one client over stdin/stdout, until it disconnects.
+async fn serve_stdio() -> Result<(), String> {
+    let resolver = open_resolver().await?;
+
+    // Past this line, silence. The transport owns stdout from here on.
+    let server = ToolSurface::new(std::sync::Arc::new(resolver));
+    let service = server
+        .serve(rmcp::transport::stdio())
+        .await
+        .map_err(|error| error.to_string())?;
+    let reason = service.waiting().await.map_err(|error| error.to_string())?;
+    warn(&format!("disconnected: {reason:?}"));
+    Ok(())
+}
+
+/// Serve any number of clients over Streamable HTTP, until the process is
+/// killed.
 ///
-/// Wrapped in a `LocalSet` because rmcp's `local` mode spawns the serve loop
-/// with `spawn_local`: the handler holds an `Arc<Vault>`, which is the honest
-/// shape for a single-threaded vault index and is why the mode is on at all.
-async fn run() -> Result<(), String> {
+/// Each `initialize` creates a session; the id comes back on the
+/// `Mcp-Session-Id` header and the client echoes it on every later request.
+async fn serve_http() -> Result<(), String> {
+    let resolver = open_resolver().await?;
+
+    // One vault, one Resolver, shared by every session. `Arc` rather than a
+    // per-session clone because the index is the same bytes for every client,
+    // and the `RwLock` inside it is what makes sharing it sound. rmcp calls the
+    // factory per session, so each session gets its own `ToolSurface` wrapping
+    // the shared state.
+    let factory = std::sync::Arc::new(resolver);
+    let service = StreamableHttpService::new(
+        move || Ok(ToolSurface::new(std::sync::Arc::clone(&factory))),
+        std::sync::Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
+
+    // The service is a tower `Service`, and axum drives it directly. It handles
+    // every method itself — POST for a request, GET for the SSE stream, DELETE
+    // to close a session — so the whole router is that one service at `HTTP_PATH`.
+    let app = axum::Router::new().nest_service(HTTP_PATH, service);
+    let address = Transport::Http.http_address();
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .map_err(|error| format!("cannot bind {address}: {error}"))?;
+
+    eprintln!("{NAME}: listening on http://{address}{HTTP_PATH} (streamable HTTP)");
+    axum::serve(listener, app)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Parse the environment and index the vault it names.
+///
+/// Shared by both transports, so a bad `BASES_MCP_VAULT` is refused with the
+/// same message however the client arrived. Every failure is fatal: a
+/// half-started server is worse than one that never ran.
+async fn open_resolver() -> Result<Resolver, String> {
     let config = match parse_config(&process_env()) {
         ConfigResult::Ok { config, warnings } => {
             for warning in warnings {
@@ -62,24 +124,9 @@ async fn run() -> Result<(), String> {
     // would otherwise index as a vault with no notes, and every Base would come
     // back with zero rows. See `config::open_source`.
     let source = open_source(&config).map_err(|error| error.message().to_string())?;
-    let resolver = Resolver::open(source)
+    Resolver::open(source)
         .await
-        .map_err(|error| error.message().to_string())?;
-
-    // Past this line, silence. The transport owns stdout from here on.
-    let server = ToolSurface::new(std::sync::Arc::new(resolver));
-    let transport = stdio();
-    tokio::task::LocalSet::new()
-        .run_until(async move {
-            let service = server
-                .serve(transport)
-                .await
-                .map_err(|error| error.to_string())?;
-            let reason = service.waiting().await.map_err(|error| error.to_string())?;
-            warn(&format!("disconnected: {reason:?}"));
-            Ok(())
-        })
-        .await
+        .map_err(|error| error.message().to_string())
 }
 
 /// A diagnostic on stderr. Never stdout, at no point, for any reason.

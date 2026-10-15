@@ -38,18 +38,19 @@ name = "parity"
 required-features = ["parity"]
 
 [dependencies]
-                                                                             
-                                                                              
-                                                                          
-                              
- 
-                                                                        
-                                                                            
-                                                                              
-                                                                     
-                                                                               
-                                                                        
-                                          
+
+# The official Rust MCP SDK, so the wire format cannot drift from the clients
+# this has to talk to. `schemars` is not optional here: tool input schemas are
+# derived from the parameter types, and a tool with no schema is a tool an
+# agent cannot call correctly.
+#
+# `transport-streamable-http-server` is the second transport this binary
+# speaks, selected by `--transport http` (see `src/main.rs`). The Streamable
+# HTTP service is a tower `Service`, so it is mounted on a minimal axum router
+# rather than wrapped in a second process: one binary, one vault, two
+# transports. `local` is NOT enabled: the vault index is behind `RwLock` rather
+# than `RefCell`, so the handler is `Send + Sync` and the multi-threaded
+# runtime can run it — see `src/vault.rs`.
 rmcp = { version = "3", features = ["server", "transport-io", "schemars", "transport-streamable-http-server"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs", "net"] }
 # Mounts rmcp's Streamable HTTP service at a path. `http1` and `tokio` are all

@@ -17,8 +17,8 @@
 //! about the REQUESTS it makes, and a transport seam is the only place those
 //! claims are observable.
 
-use std::sync::RwLock;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::RwLock;
 
 use async_trait::async_trait;
 use bases_mcp::error::{BasesError, Result};
@@ -93,7 +93,10 @@ impl FakeDav {
     /// `'static`, so it cannot borrow a local), and a builder that returned a
     /// borrow would be lending a reference to something the caller cannot keep.
     pub fn refusing(&self, path: &str, status: Status) {
-        self.refuse.write().unwrap().insert(path.to_string(), status);
+        self.refuse
+            .write()
+            .unwrap()
+            .insert(path.to_string(), status);
     }
 
     /// The mtime every `getlastmodified` reports, so no assertion is against a
@@ -129,7 +132,10 @@ impl FakeDav {
             dirs.insert(segments[..depth].join("/"));
         }
         drop(dirs);
-        self.files.write().unwrap().insert(path.to_string(), content);
+        self.files
+            .write()
+            .unwrap()
+            .insert(path.to_string(), content);
     }
 
     /// The href for a vault path, encoded the way a server encodes one.
@@ -193,7 +199,8 @@ impl FakeDav {
     }
 
     fn propfind(&self, path: &str, depth: Option<&str>) -> DavResponse {
-        let known = self.dirs.read().unwrap().contains(path) || self.files.read().unwrap().contains_key(path);
+        let known = self.dirs.read().unwrap().contains(path)
+            || self.files.read().unwrap().contains_key(path);
         if !known {
             return refusal(404, "Not Found");
         }
@@ -209,7 +216,13 @@ impl FakeDav {
         let properties = if collection {
             "<D:resourcetype><D:collection/></D:resourcetype>".to_string()
         } else {
-            let size = self.files.read().unwrap().get(path).map(String::len).unwrap_or(0);
+            let size = self
+                .files
+                .read()
+                .unwrap()
+                .get(path)
+                .map(String::len)
+                .unwrap_or(0);
             format!("<D:resourcetype/><D:getcontentlength>{size}</D:getcontentlength>")
         };
         format!(
@@ -222,7 +235,8 @@ impl FakeDav {
     }
 
     fn mkcol(&self, path: &str) -> DavResponse {
-        if self.dirs.read().unwrap().contains(path) || self.files.read().unwrap().contains_key(path) {
+        if self.dirs.read().unwrap().contains(path) || self.files.read().unwrap().contains_key(path)
+        {
             return refusal(405, "Method Not Allowed");
         }
         if !self.dirs.read().unwrap().contains(parent_of(path).as_str()) {
@@ -284,7 +298,12 @@ impl WebdavTransport for FakeDav {
                 None => refusal(404, "Not Found"),
             },
             "PUT" => {
-                if !self.dirs.read().unwrap().contains(parent_of(&path).as_str()) {
+                if !self
+                    .dirs
+                    .read()
+                    .unwrap()
+                    .contains(parent_of(&path).as_str())
+                {
                     refusal(409, "Conflict")
                 } else {
                     self.store(&path, request.body.unwrap_or_default());

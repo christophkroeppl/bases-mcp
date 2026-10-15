@@ -30,9 +30,9 @@
 //! (`children_of`), and a `delete` of something absent is tolerated rather than
 //! reported as a success it was not (`delete`).
 
-use std::sync::RwLock;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -1752,7 +1752,8 @@ impl VaultSource for WebdavVaultSource {
         // holding others. Normalised, because that is what the next
         // [`VaultSource::read_note`] of this resource will hand back.
         self.text_cache
-            .write().unwrap()
+            .write()
+            .unwrap()
             .insert(path.clone(), normalise_line_endings(data));
         self.hash_cache.write().unwrap().remove(&path);
         *self.files.write().unwrap() = None;
