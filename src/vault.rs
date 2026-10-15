@@ -49,7 +49,8 @@ pub use webdav::{
     WebdavMethod, WebdavTransport, WebdavVaultOptions, WebdavVaultSource,
 };
 
-use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -86,18 +87,18 @@ pub struct Vault {
     /// borrowed. The map is a `BTreeMap` rather than an insertion-ordered one
     /// because `list()` is sorted on every backend, so key order IS registration
     /// order -- and registration order is what breaks link ties.
-    notes: RefCell<BTreeMap<String, Arc<NoteRecord>>>,
-    bases: RefCell<Vec<String>>,
-    by_path: RefCell<PathIndex>,
-    ready: Cell<bool>,
+    notes: RwLock<BTreeMap<String, Arc<NoteRecord>>>,
+    bases: RwLock<Vec<String>>,
+    by_path: RwLock<PathIndex>,
+    ready: AtomicBool,
 }
 
 impl std::fmt::Debug for Vault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Vault")
             .field("source", &self.source.kind())
-            .field("notes", &self.notes.borrow().len())
-            .field("bases", &self.bases.borrow().len())
+            .field("notes", &self.notes.read().unwrap().len())
+            .field("bases", &self.bases.read().unwrap().len())
             .finish()
     }
 }
@@ -111,10 +112,10 @@ impl Vault {
     pub fn with_source(source: Arc<dyn VaultSource>) -> Self {
         Self {
             source,
-            notes: RefCell::new(BTreeMap::new()),
-            bases: RefCell::new(Vec::new()),
-            by_path: RefCell::new(PathIndex::new()),
-            ready: Cell::new(false),
+            notes: RwLock::new(BTreeMap::new()),
+            bases: RwLock::new(Vec::new()),
+            by_path: RwLock::new(PathIndex::new()),
+            ready: AtomicBool::new(false),
         }
     }
 
@@ -139,7 +140,7 @@ impl Vault {
     /// Build the index. Safe to call repeatedly; use [`Vault::reload`] to force a
     /// rebuild after writes.
     pub async fn load(&self) -> Result<()> {
-        if self.ready.get() {
+        if self.ready.load(Ordering::Acquire) {
             return Ok(());
         }
         self.rebuild().await
@@ -199,24 +200,24 @@ impl Vault {
         }
         bases.sort();
 
-        *self.notes.borrow_mut() = notes;
-        *self.bases.borrow_mut() = bases;
-        *self.by_path.borrow_mut() = by_path;
-        self.ready.set(true);
+        *self.notes.write().unwrap() = notes;
+        *self.bases.write().unwrap() = bases;
+        *self.by_path.write().unwrap() = by_path;
+        self.ready.store(true, Ordering::Release);
         Ok(())
     }
 
     /// Every indexed note, in registration order.
     pub fn note_paths(&self) -> Vec<String> {
-        self.notes.borrow().keys().cloned().collect()
+        self.notes.read().unwrap().keys().cloned().collect()
     }
 
     pub fn base_paths(&self) -> Vec<String> {
-        self.bases.borrow().clone()
+        self.bases.read().unwrap().clone()
     }
 
     pub fn note(&self, path: &str) -> Option<Arc<NoteRecord>> {
-        self.notes.borrow().get(path).cloned()
+        self.notes.read().unwrap().get(path).cloned()
     }
 
     /// A note's text with CRLF normalised to LF — see [`VaultSource::read_note`].
@@ -226,7 +227,7 @@ impl Vault {
 
     /// Resolve a link target to a vault path, or `None` when unresolved.
     pub fn resolve(&self, target: &str) -> Option<String> {
-        match_path(target, &self.by_path.borrow())
+        match_path(target, &self.by_path.read().unwrap())
     }
 
     /// A `FileValue` with accessors bound to this vault.

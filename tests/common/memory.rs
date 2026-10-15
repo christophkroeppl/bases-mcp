@@ -25,7 +25,7 @@
 //! It is a FAKE, so it is wrong in the ways a fake must be: see `delete`, which
 //! mirrors the filesystem's forgiving behaviour.
 
-use std::cell::RefCell;
+use std::sync::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -170,8 +170,8 @@ struct ArmedFault {
 }
 
 pub struct MemoryVaultSource {
-    files: RefCell<HashMap<String, String>>,
-    armed: RefCell<Vec<ArmedFault>>,
+    files: RwLock<HashMap<String, String>>,
+    armed: RwLock<Vec<ArmedFault>>,
     /// Collections `ensure_dir` was asked to create.
     ///
     /// A `HashMap` of files has no directories, so `write_text` has no parents
@@ -179,14 +179,14 @@ pub struct MemoryVaultSource {
     /// exists so a test can still assert that `ensure_dir` was CALLED with the
     /// parent, which is the part of the contract a real backend has to honour
     /// and a map alone would hide.
-    pub dirs: RefCell<std::collections::BTreeSet<String>>,
+    pub dirs: RwLock<std::collections::BTreeSet<String>>,
     /// Every refusal this source has issued, newest last.
     ///
     /// The trait's error type carries a message but not a status, so a test that
     /// wanted the status structurally had nowhere to find it. The log is that
     /// somewhere: it is the fake's account of what it refused, which is the
     /// thing a test about fault injection is actually asserting on.
-    refusals: RefCell<Vec<MemoryVaultError>>,
+    refusals: RwLock<Vec<MemoryVaultError>>,
 }
 
 impl MemoryVaultSource {
@@ -197,10 +197,10 @@ impl MemoryVaultSource {
             files.insert(path, file.content);
         }
         Self {
-            files: RefCell::new(files),
-            armed: RefCell::new(Vec::new()),
-            dirs: RefCell::new(Default::default()),
-            refusals: RefCell::new(Vec::new()),
+            files: RwLock::new(files),
+            armed: RwLock::new(Vec::new()),
+            dirs: RwLock::new(Default::default()),
+            refusals: RwLock::new(Vec::new()),
         }
     }
 
@@ -233,7 +233,7 @@ impl MemoryVaultSource {
                  `stored` bytes to accept the write and keep.",
             ));
         }
-        self.armed.borrow_mut().push(ArmedFault {
+        self.armed.write().unwrap().push(ArmedFault {
             remaining: fault.times,
             fault,
         });
@@ -242,17 +242,17 @@ impl MemoryVaultSource {
 
     /// Disarm everything. Lets one test reuse a source without inheriting faults.
     pub fn clear_faults(&self) {
-        self.armed.borrow_mut().clear();
+        self.armed.write().unwrap().clear();
     }
 
     /// The refusals this source has issued, newest last.
     pub fn refusals(&self) -> Vec<MemoryVaultError> {
-        self.refusals.borrow().clone()
+        self.refusals.read().unwrap().clone()
     }
 
     /// The status of the most recent refusal, if there was one.
     pub fn last_status(&self) -> Option<u16> {
-        self.refusals.borrow().last().map(|refusal| refusal.status)
+        self.refusals.read().unwrap().last().map(|refusal| refusal.status)
     }
 
     /// Normalise a caller-supplied path, logging the refusal if it escapes.
@@ -263,7 +263,7 @@ impl MemoryVaultSource {
     /// The stored text, or the refusal a server would have given.
     fn read(&self, path: &str, verb: &str) -> std::result::Result<String, BasesError> {
         self.files
-            .borrow()
+            .read().unwrap()
             .get(path)
             .cloned()
             .ok_or_else(|| self.refuse(not_found(verb, path, 404)))
@@ -291,7 +291,7 @@ impl MemoryVaultSource {
     /// the write would be overwritten by the write and the fault would be a
     /// no-op that looked armed.
     fn fire(&self, at: MemoryOp, path: &str) -> std::result::Result<Option<String>, BasesError> {
-        let mut armed = self.armed.borrow_mut();
+        let mut armed = self.armed.write().unwrap();
         let mut replacement: Option<String> = None;
         for entry in armed.iter_mut() {
             if entry.remaining == Some(0) {
@@ -340,7 +340,7 @@ impl MemoryVaultSource {
     /// file. A test that has to remember to log its own failures logs the easy
     /// ones.
     fn refuse(&self, error: MemoryVaultError) -> BasesError {
-        self.refusals.borrow_mut().push(error.clone());
+        self.refusals.write().unwrap().push(error.clone());
         error.into()
     }
 }
@@ -367,7 +367,7 @@ fn not_found(verb: &str, path: &str, status: u16) -> MemoryVaultError {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl VaultSource for MemoryVaultSource {
     fn kind(&self) -> SourceKind {
         SourceKind::Webdav
@@ -387,7 +387,7 @@ impl VaultSource for MemoryVaultSource {
         self.fire(MemoryOp::List, ANY_PATH)?;
         let mut paths: Vec<String> = self
             .files
-            .borrow()
+            .read().unwrap()
             .keys()
             .filter(|p| is_indexable(p))
             .cloned()
@@ -417,7 +417,7 @@ impl VaultSource for MemoryVaultSource {
     async fn exists(&self, rel: &str) -> std::result::Result<bool, BasesError> {
         let path = self.normalise_refusing(rel)?;
         self.fire(MemoryOp::Exists, &path)?;
-        Ok(self.files.borrow().contains_key(&path))
+        Ok(self.files.read().unwrap().contains_key(&path))
     }
 
     async fn stat(&self, rel: &str) -> std::result::Result<FileStat, BasesError> {
@@ -455,7 +455,7 @@ impl VaultSource for MemoryVaultSource {
         let path = self.normalise_refusing(rel)?;
         let swapped = self.fire(MemoryOp::Write, &path)?;
         self.files
-            .borrow_mut()
+            .write().unwrap()
             .insert(path, swapped.unwrap_or_else(|| data.to_string()));
         Ok(())
     }
@@ -467,7 +467,7 @@ impl VaultSource for MemoryVaultSource {
     async fn ensure_dir(&self, rel: &str) -> std::result::Result<(), BasesError> {
         let path = self.normalise_refusing(rel)?;
         self.fire(MemoryOp::Write, &path)?;
-        self.dirs.borrow_mut().insert(path);
+        self.dirs.write().unwrap().insert(path);
         Ok(())
     }
 
@@ -482,7 +482,7 @@ impl VaultSource for MemoryVaultSource {
     async fn delete(&self, rel: &str) -> std::result::Result<(), BasesError> {
         let path = self.normalise_refusing(rel)?;
         self.fire(MemoryOp::Delete, &path)?;
-        self.files.borrow_mut().remove(&path);
+        self.files.write().unwrap().remove(&path);
         Ok(())
     }
 }
@@ -495,7 +495,7 @@ impl VaultSource for MemoryVaultSource {
 /// objects, and only one of them is a fake.
 pub struct SharedSource(pub Arc<MemoryVaultSource>);
 
-#[async_trait(?Send)]
+#[async_trait]
 impl VaultSource for SharedSource {
     fn kind(&self) -> SourceKind {
         self.0.kind()

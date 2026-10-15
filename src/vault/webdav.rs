@@ -30,7 +30,7 @@
 //! (`children_of`), and a `delete` of something absent is tolerated rather than
 //! reported as a success it was not (`delete`).
 
-use std::cell::RefCell;
+use std::sync::RwLock;
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
@@ -219,8 +219,8 @@ impl DavResponse {
 /// vocabulary of the backend — a URL, a method, headers, an optional body and a
 /// budget — so a change to it is a change to what this client is able to do, and
 /// every test double in the suite is a `Map` rather than an HTTP mock library.
-#[async_trait(?Send)]
-pub trait WebdavTransport {
+#[async_trait]
+pub trait WebdavTransport: Send + Sync {
     async fn send(&self, request: DavRequest) -> Result<DavResponse>;
 }
 
@@ -239,7 +239,7 @@ impl HttpTransport {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl WebdavTransport for HttpTransport {
     async fn send(&self, request: DavRequest) -> Result<DavResponse> {
         let method = reqwest::Method::from_bytes(request.method.as_str().as_bytes())
@@ -1289,13 +1289,13 @@ pub struct WebdavVaultSource {
     authorization: Option<String>,
     timeout: Duration,
     transport: Box<dyn WebdavTransport>,
-    files: RefCell<Option<Vec<String>>>,
+    files: RwLock<Option<Vec<String>>>,
     /// Note text, NORMALISED — the same string [`VaultSource::read_note`] returns.
     /// The equivalence suite reads this backend and the filesystem one through the
     /// same calls, so a cache that held raw bytes here and normalised bytes there
     /// would show up as a phantom backend difference.
-    text_cache: RefCell<HashMap<String, String>>,
-    hash_cache: RefCell<HashMap<String, String>>,
+    text_cache: RwLock<HashMap<String, String>>,
+    hash_cache: RwLock<HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for WebdavVaultSource {
@@ -1378,9 +1378,9 @@ impl WebdavVaultSource {
             authorization,
             timeout: Duration::from_millis(options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS)),
             transport,
-            files: RefCell::new(None),
-            text_cache: RefCell::new(HashMap::new()),
-            hash_cache: RefCell::new(HashMap::new()),
+            files: RwLock::new(None),
+            text_cache: RwLock::new(HashMap::new()),
+            hash_cache: RwLock::new(HashMap::new()),
         })
     }
 
@@ -1402,9 +1402,9 @@ impl WebdavVaultSource {
     /// this server holds one vault for its whole life, and re-reading it is an
     /// explicit decision rather than a side effect of asking.
     pub fn refresh(&self) {
-        *self.files.borrow_mut() = None;
-        self.text_cache.borrow_mut().clear();
-        self.hash_cache.borrow_mut().clear();
+        *self.files.write().unwrap() = None;
+        self.text_cache.write().unwrap().clear();
+        self.hash_cache.write().unwrap().clear();
     }
 
     /// Depth-first, one `PROPFIND` per collection.
@@ -1578,30 +1578,30 @@ fn base64_encode(plain: String) -> String {
     base64::engine::general_purpose::STANDARD.encode(plain)
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl VaultSource for WebdavVaultSource {
     fn kind(&self) -> SourceKind {
         SourceKind::Webdav
     }
 
     async fn list(&self) -> Result<Vec<String>> {
-        if let Some(files) = self.files.borrow().clone() {
+        if let Some(files) = self.files.read().unwrap().clone() {
             return Ok(files);
         }
         let mut out: Vec<String> = Vec::new();
         self.walk("", &mut out, &[]).await?;
         out.sort();
-        *self.files.borrow_mut() = Some(out.clone());
+        *self.files.write().unwrap() = Some(out.clone());
         Ok(out)
     }
 
     async fn read_note(&self, rel: &str) -> Result<String> {
         let path = vault_relative_path(rel)?;
-        if let Some(text) = self.text_cache.borrow().get(&path) {
+        if let Some(text) = self.text_cache.read().unwrap().get(&path) {
             return Ok(text.clone());
         }
         let text = normalise_line_endings(&self.fetch_text(DavOperation::Read, &path).await?);
-        self.text_cache.borrow_mut().insert(path, text.clone());
+        self.text_cache.write().unwrap().insert(path, text.clone());
         Ok(text)
     }
 
@@ -1614,7 +1614,7 @@ impl VaultSource for WebdavVaultSource {
     async fn read_fresh(&self, rel: &str) -> Result<String> {
         let path = vault_relative_path(rel)?;
         let text = normalise_line_endings(&self.fetch_text(DavOperation::Read, &path).await?);
-        self.text_cache.borrow_mut().insert(path, text.clone());
+        self.text_cache.write().unwrap().insert(path, text.clone());
         Ok(text)
     }
 
@@ -1654,11 +1654,11 @@ impl VaultSource for WebdavVaultSource {
     /// always passes or always fails.
     async fn hash(&self, rel: &str) -> Result<String> {
         let path = vault_relative_path(rel)?;
-        if let Some(hash) = self.hash_cache.borrow().get(&path) {
+        if let Some(hash) = self.hash_cache.read().unwrap().get(&path) {
             return Ok(hash.clone());
         }
         let hash = content_hash(&self.read_note(&path).await?);
-        self.hash_cache.borrow_mut().insert(path, hash.clone());
+        self.hash_cache.write().unwrap().insert(path, hash.clone());
         Ok(hash)
     }
 
@@ -1752,10 +1752,10 @@ impl VaultSource for WebdavVaultSource {
         // holding others. Normalised, because that is what the next
         // [`VaultSource::read_note`] of this resource will hand back.
         self.text_cache
-            .borrow_mut()
+            .write().unwrap()
             .insert(path.clone(), normalise_line_endings(data));
-        self.hash_cache.borrow_mut().remove(&path);
-        *self.files.borrow_mut() = None;
+        self.hash_cache.write().unwrap().remove(&path);
+        *self.files.write().unwrap() = None;
         Ok(())
     }
 
@@ -1806,9 +1806,9 @@ impl VaultSource for WebdavVaultSource {
             DavRequestOptions::default(),
         )
         .await?;
-        self.text_cache.borrow_mut().remove(&path);
-        self.hash_cache.borrow_mut().remove(&path);
-        *self.files.borrow_mut() = None;
+        self.text_cache.write().unwrap().remove(&path);
+        self.hash_cache.write().unwrap().remove(&path);
+        *self.files.write().unwrap() = None;
         Ok(())
     }
 }

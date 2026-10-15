@@ -207,11 +207,11 @@ fn source_answering(response: DavResponse) -> WebdavVaultSource {
 /// A transport that answers with whatever the closure decides.
 pub struct ClosureTransport<F>(pub F);
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl<F, Fut> WebdavTransport for ClosureTransport<F>
 where
-    F: Fn(DavRequest) -> Fut,
-    Fut: std::future::Future<Output = Result<DavResponse, BasesError>>,
+    F: Fn(DavRequest) -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = Result<DavResponse, BasesError>> + Send,
 {
     async fn send(&self, request: DavRequest) -> Result<DavResponse, BasesError> {
         (self.0)(request).await
@@ -224,7 +224,7 @@ where
 /// made the request has to be able to read the log afterwards.
 pub struct SharedTransport(pub Arc<FakeDav>);
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl WebdavTransport for SharedTransport {
     async fn send(&self, request: DavRequest) -> Result<DavResponse, BasesError> {
         self.0.send(request).await
@@ -1745,7 +1745,7 @@ fn a_username_without_a_password_is_a_misconfiguration_not_anonymous_access() {
     let transport = || {
         Box::new(ClosureTransport(|_r: DavRequest| async {
             Ok(DavResponse::new(200, "OK", Vec::new()))
-        })) as Box<dyn WebdavTransport>
+        })) as Box<dyn WebdavTransport + Send + Sync>
     };
     let only_user = WebdavVaultSource::new(
         WebdavVaultOptions::new(BASE_URL)

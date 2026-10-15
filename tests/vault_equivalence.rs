@@ -576,7 +576,7 @@ fn write_text_creates_its_parents_and_the_two_vaults_agree_afterwards() {
     // fs created a real collection; the fake recorded that it was asked to. A map
     // of files has no directories, so without this the parent-creating half of
     // `createNote` would go untested on the fake forever.
-    assert!(memory.dirs.borrow().contains("Sandbox/Deep/Nested"));
+    assert!(memory.dirs.read().unwrap().contains("Sandbox/Deep/Nested"));
     let created =
         std::fs::read_dir(dir.path().join("Sandbox/Deep/Nested")).expect("the collection exists");
     assert_eq!(created.flatten().count(), 1);
@@ -1012,7 +1012,7 @@ fn the_memory_source_presents_the_same_async_api_behind_a_trait_object() {
 
     write_of(source.as_mut(), "Note.md", "# n\n");
     mkdir_of(source.as_mut(), "Sandbox");
-    assert!(shared.dirs.borrow().contains("Sandbox"));
+    assert!(shared.dirs.read().unwrap().contains("Sandbox"));
     delete_of(source.as_mut(), "Note.md");
     assert!(!list_of(shared.as_ref()).contains(&"Note.md".to_string()));
 }

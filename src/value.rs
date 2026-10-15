@@ -176,7 +176,7 @@ pub enum BasesValue {
 }
 
 /// Turn a link-ish string into a `FileValue`, or `None` when unresolvable.
-pub type Resolver = std::sync::Arc<dyn Fn(&str) -> Option<FileValue>>;
+pub type Resolver = std::sync::Arc<dyn Fn(&str) -> Option<FileValue> + Send + Sync>;
 
 /// A file plus the accessors the vault supplies.
 ///
@@ -219,19 +219,19 @@ impl PartialEq for FileValue {
 /// unprintable.
 #[derive(Clone)]
 pub struct FileAccessors {
-    pub tags: std::sync::Arc<dyn Fn() -> Vec<BasesValue>>,
-    pub links: std::sync::Arc<dyn Fn() -> Vec<BasesValue>>,
-    pub embeds: std::sync::Arc<dyn Fn() -> Vec<BasesValue>>,
-    pub backlinks: std::sync::Arc<dyn Fn() -> Vec<BasesValue>>,
-    pub properties: std::sync::Arc<dyn Fn() -> std::collections::BTreeMap<String, BasesValue>>,
-    pub ctime: std::sync::Arc<dyn Fn() -> BasesDate>,
-    pub mtime: std::sync::Arc<dyn Fn() -> BasesDate>,
-    pub size: std::sync::Arc<dyn Fn() -> u64>,
+    pub tags: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
+    pub links: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
+    pub embeds: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
+    pub backlinks: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
+    pub properties: std::sync::Arc<dyn Fn() -> std::collections::BTreeMap<String, BasesValue> + Send + Sync>,
+    pub ctime: std::sync::Arc<dyn Fn() -> BasesDate + Send + Sync>,
+    pub mtime: std::sync::Arc<dyn Fn() -> BasesDate + Send + Sync>,
+    pub size: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
     /// `file.tasks` is an extension: absent in Obsidian 1.13.7, which returns
     /// `null`. See `docs/divergences.md` D3.
-    pub tasks: std::sync::Arc<dyn Fn() -> Vec<BasesValue>>,
+    pub tasks: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
     pub resolve: Resolver,
-    pub links_to: std::sync::Arc<dyn Fn(&str) -> bool>,
+    pub links_to: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 impl std::fmt::Debug for FileAccessors {
