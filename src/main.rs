@@ -16,18 +16,21 @@
 //! rmcp. Both index the same vault through [`Resolver::open`] and both serve the
 //! same [`ToolSurface`], so `tools/list` and `tools/call` cannot drift between
 //! them — there is one definition of the surface, in `tools::tool_definitions`.
-//! `tests/http_transport.rs` asserts that over the wire.
+//! `tests/http_transport.rs` asserts both over the wire: the HTTP transport
+//! ends to end, and the stdio transport's handshake.
 
 use std::process::ExitCode;
 
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::ServiceExt;
 
 use bases_mcp::config::{open_source, parse_config, process_env, ConfigResult, NAME};
 use bases_mcp::service::Resolver;
 use bases_mcp::tools::ToolSurface;
-use bases_mcp::transport::{select_transport, usage, wants_help, Transport, HTTP_PATH};
+use bases_mcp::transport::{
+    select_transport, usage, wants_help, HttpEndpoint, Transport, HTTP_PATH,
+};
 
 /// Start the server on the named transport, or exit non-zero explaining why not.
 #[tokio::main]
@@ -83,6 +86,13 @@ async fn serve_stdio() -> Result<(), String> {
 async fn serve_http() -> Result<(), String> {
     let resolver = open_resolver().await?;
 
+    // The endpoint is parsed here rather than read at bind time: a bad
+    // MCP_HTTP_HOST or MCP_HTTP_PORT is refused before anything is opened, and
+    // `allowed_hosts` is derived from the same value the listener binds so the
+    // two cannot disagree — see `HttpEndpoint`.
+    let endpoint = HttpEndpoint::from_env()?;
+    let address = endpoint.address();
+
     // One vault, one Resolver, shared by every session. `Arc` rather than a
     // per-session clone because the index is the same bytes for every client,
     // and the `RwLock` inside it is what makes sharing it sound. rmcp calls the
@@ -92,18 +102,27 @@ async fn serve_http() -> Result<(), String> {
     let service = StreamableHttpService::new(
         move || Ok(ToolSurface::new(std::sync::Arc::clone(&factory))),
         std::sync::Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
+        endpoint.rmcp_config(),
     );
 
     // The service is a tower `Service`, and axum drives it directly. It handles
     // every method itself — POST for a request, GET for the SSE stream, DELETE
     // to close a session — so the whole router is that one service at `HTTP_PATH`.
     let app = axum::Router::new().nest_service(HTTP_PATH, service);
-    let address = Transport::Http.http_address();
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .map_err(|error| format!("cannot bind {address}: {error}"))?;
 
+    // `0.0.0.0` means rmcp was told to accept any `Host`, which is the
+    // operator's choice and is not a default they can undo. Saying so on stderr
+    // is the only place a listener that serves every interface announces it.
+    if endpoint.allowed_hosts().is_empty() {
+        eprintln!(
+            "{NAME}: {address} is every interface, so every Host header is accepted. \
+             This listener is network-accessible and has no authentication; it is \
+             safe only on a network you trust. See docs/divergences.md."
+        );
+    }
     eprintln!("{NAME}: listening on http://{address}{HTTP_PATH} (streamable HTTP)");
     axum::serve(listener, app)
         .await

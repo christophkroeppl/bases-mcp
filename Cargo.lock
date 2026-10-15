@@ -109,6 +109,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "chrono",
+ "futures",
  "hex",
  "percent-encoding",
  "quick-xml",
