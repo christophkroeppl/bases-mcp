@@ -3,14 +3,23 @@
 #
 # Not just the schema: the actual tool bodies, including the query pipeline,
 # the note projection and the error envelope.
+#
+# Invoked by `just probe-tool-bodies`. Everything is resolved relative to this
+# script, so the probe works from any worktree and any checkout.
 set -uo pipefail
 
-WT=/media/data/projects/ACTIVE/bases-mcp/feat-mcp-http-transport
-BIN="$WT/target/debug/bases-mcp"
-VAULT="$WT/test/vault"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN="$HERE/target/debug/bases-mcp"
+VAULT="$HERE/test/vault"
 PORT=8794
 
-cd "$WT" || exit 1
+cd "$HERE" || exit 1
+
+if [[ ! -x "$BIN" ]]; then
+  echo "no debug binary at $BIN — run \`cargo build\` first" >&2
+  exit 1
+fi
+
 export BASES_MCP_VAULT="$VAULT"
 
 TOOL_CALLS=(
@@ -23,11 +32,11 @@ TOOL_CALLS=(
   '{"name":"resolve_base","arguments":{"base":"Nope.base"}}'
 )
 
-                                                                               
-                                                                           
-                                                                              
-                                             
-: > /tmp/bodies.stdio
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"; kill "${HTTP_PID:-}" 2>/dev/null' EXIT
+
+# The stdio run: one handshake, then one request per call.
+: > "$WORK/bodies.stdio"
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"p","version":"0"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
@@ -36,22 +45,27 @@ TOOL_CALLS=(
     id=$((id + 1))
     printf '{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":%s}\n' "$id" "$call"
   done
-} | "$BIN" --transport stdio > /tmp/bodies.stdio 2>/dev/null
+} | "$BIN" --transport stdio > "$WORK/bodies.stdio" 2>/dev/null
 
-                                                                               
-MCP_HTTP_PORT=$PORT "$BIN" --transport http > /dev/null 2>/dev/null &
+               
+MCP_HTTP_PORT=$PORT "$BIN" --transport http > /dev/null 2> "$WORK/http.err" &
 HTTP_PID=$!
-trap 'kill $HTTP_PID 2>/dev/null' EXIT
 for _ in $(seq 1 50); do
   ss -ltn 2>/dev/null | grep -q ":$PORT " && break
   sleep 0.1
 done
 
-curl -sS -D /tmp/bodies.headers -o /dev/null -X POST "http://127.0.0.1:$PORT/mcp" \
+curl -sS -D "$WORK/bodies.headers" -o /dev/null -X POST "http://127.0.0.1:$PORT/mcp" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"p","version":"0"}}}' > /dev/null
-SID=$(tr -d '\r' < /tmp/bodies.headers | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')
+SID=$(tr -d '\r' < "$WORK/bodies.headers" | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')
+
+if [ -z "$SID" ]; then
+  echo "FAIL: no Mcp-Session-Id from initialize" >&2
+  sed -n '1,20p' "$WORK/http.err" >&2
+  exit 1
+fi
 
 curl -sS -o /dev/null -X POST "http://127.0.0.1:$PORT/mcp" \
   -H 'Content-Type: application/json' \
@@ -60,7 +74,7 @@ curl -sS -o /dev/null -X POST "http://127.0.0.1:$PORT/mcp" \
   -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 
 # One request per call, so a failure names the call that failed.
-: > /tmp/bodies.http
+: > "$WORK/bodies.http"
 id=1
 for call in "${TOOL_CALLS[@]}"; do
   id=$((id + 1))
@@ -69,23 +83,25 @@ for call in "${TOOL_CALLS[@]}"; do
     -H 'Accept: application/json, text/event-stream' \
     -H "Mcp-Session-Id: $SID" \
     -d "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":$call}" \
-    | tr -d '\r' | grep '^data: {' | sed 's/^data: //' >> /tmp/bodies.http
+    | tr -d '\r' | grep '^data: {' | sed 's/^data: //' >> "$WORK/bodies.http"
 done
 
-python3 - <<'PY'
+python3 - "$WORK" <<'PY'
 import json, sys
 
-def by_id(path):
+work = sys.argv[1]
+
+def by_id(name):
     out = {}
-    for line in open(path):
+    for line in open(f"{work}/{name}"):
         line = line.strip()
         if line:
-            m = json.loads(line)
-            out[m["id"]] = m
+            message = json.loads(line)
+            out[message["id"]] = message
     return out
 
-std = by_id("/tmp/bodies.stdio")
-http = by_id("/tmp/bodies.http")
+std = by_id("bodies.stdio")
+http = by_id("bodies.http")
 
 ok = True
 for id in sorted(k for k in std if k >= 2):

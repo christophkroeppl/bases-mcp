@@ -3,44 +3,57 @@
 #
 # Same vault, same binary, two transports. If the schemas differ, the
 # requirement "identical over HTTP and stdio" is broken.
+#
+# Invoked by `just probe-transport`. Everything is resolved relative to this
+# script, so the probe works from any worktree and any checkout without an
+# author-specific path in it.
 set -uo pipefail
 
-WT=/media/data/projects/ACTIVE/bases-mcp/feat-mcp-http-transport
-BIN="$WT/target/debug/bases-mcp"
-VAULT="$WT/test/vault"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN="$HERE/target/debug/bases-mcp"
+VAULT="$HERE/test/vault"
 PORT=8793
 
-cd "$WT" || exit 1
+cd "$HERE" || exit 1
+
+if [[ ! -x "$BIN" ]]; then
+  echo "no debug binary at $BIN — run \`cargo build\` first" >&2
+  exit 1
+fi
 
 export BASES_MCP_VAULT="$VAULT"
 
-                                                                              
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"; kill "${HTTP_PID:-}" 2>/dev/null' EXIT
+
+# The stdio run: one process, four messages, four answers.
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"p","version":"0"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_bases","arguments":{}}}'
-} | "$BIN" --transport stdio > /tmp/stdio.out 2> /tmp/stdio.err
+} | "$BIN" --transport stdio > "$WORK/stdio.out" 2> "$WORK/stdio.err"
 
-                                                                             
-MCP_HTTP_PORT=$PORT "$BIN" --transport http > /tmp/http.out 2> /tmp/http.err &
+# The HTTP run: initialize, then the same two calls on the session it issued.
+MCP_HTTP_PORT=$PORT "$BIN" --transport http > "$WORK/http.out" 2> "$WORK/http.err" &
 HTTP_PID=$!
-trap 'kill $HTTP_PID 2>/dev/null' EXIT
 
 for _ in $(seq 1 50); do
   ss -ltn 2>/dev/null | grep -q ":$PORT " && break
   sleep 0.1
 done
 
-curl -sS -D /tmp/http-init.headers -o /tmp/http-init.body -X POST "http://127.0.0.1:$PORT/mcp" \
+curl -sS -D "$WORK/http-init.headers" -o "$WORK/http-init.body" -X POST "http://127.0.0.1:$PORT/mcp" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"p","version":"0"}}}' > /dev/null
 
-SID=$(tr -d '\r' < /tmp/http-init.headers | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')
+SID=$(tr -d '\r' < "$WORK/http-init.headers" | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')
 
 if [ -z "$SID" ]; then
-  echo "FAIL: no Mcp-Session-Id from initialize"; exit 1
+  echo "FAIL: no Mcp-Session-Id from initialize" >&2
+  sed -n '1,20p' "$WORK/http.err" >&2
+  exit 1
 fi
 curl -sS -o /dev/null -X POST "http://127.0.0.1:$PORT/mcp" \
   -H 'Content-Type: application/json' \
@@ -52,29 +65,29 @@ curl -sS -X POST "http://127.0.0.1:$PORT/mcp" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -H "Mcp-Session-Id: $SID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' > /tmp/http-tools.out
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' > "$WORK/http-tools.out"
 
 curl -sS -X POST "http://127.0.0.1:$PORT/mcp" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -H "Mcp-Session-Id: $SID" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_bases","arguments":{}}}' > /tmp/http-call.out
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_bases","arguments":{}}}' > "$WORK/http-call.out"
 
-                                                                              
-python3 - <<'PY'
+python3 - "$WORK" <<'PY'
 import json, sys
 
+work = sys.argv[1]
+
+def read(name):
+    with open(f"{work}/{name}") as handle:
+        return handle.read()
+
 def stdio_lines():
-    out = []
-    for line in open("/tmp/stdio.out"):
-        line = line.strip()
-        if line:
-            out.append(json.loads(line))
-    return out
+    return [json.loads(line) for line in read("stdio.out").splitlines() if line.strip()]
 
 def sse_data(path):
     """Pull the JSON-RPC payload out of a text/event-stream body."""
-    for line in open(path, newline="").read().split("\n"):
+    for line in read(path).splitlines():
         line = line.rstrip("\r")
         if line.startswith("data: ") and line.strip() != "data:":
             payload = line[len("data: "):]
@@ -83,9 +96,9 @@ def sse_data(path):
     raise SystemExit(f"no JSON-RPC payload in {path}")
 
 std = {m["id"]: m for m in stdio_lines() if "id" in m}
-http_init = sse_data("/tmp/http-init.body")
-http_tools = sse_data("/tmp/http-tools.out")
-http_call = sse_data("/tmp/http-call.out")
+http_init = sse_data("http-init.body")
+http_tools = sse_data("http-tools.out")
+http_call = sse_data("http-call.out")
 
 ok = True
 
@@ -111,12 +124,9 @@ else:
 
 # 3. initialize: same server identity and capabilities.
 si, hi = std[1]["result"], http_init["result"]
-if si.get("serverInfo") != hi.get("serverInfo"):
-    print("FAIL: serverInfo differs"); ok = False
-if si.get("capabilities") != hi.get("capabilities"):
-    print("FAIL: capabilities differ"); ok = False
-if si.get("protocolVersion") != hi.get("protocolVersion"):
-    print("FAIL: protocolVersion differs"); ok = False
+for field in ("serverInfo", "capabilities", "protocolVersion"):
+    if si.get(field) != hi.get(field):
+        print(f"FAIL: {field} differs"); ok = False
 if ok:
     print(f"initialize: protocolVersion/serverInfo/capabilities identical ({si['serverInfo']['name']} {si['serverInfo']['version']})")
 
