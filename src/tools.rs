@@ -47,12 +47,12 @@
 //!     `LocalSet`. See `tests/tools.rs`.
 //!
 //! rmcp's `local` feature is enabled in `Cargo.toml` and is not optional: the
-//! Resolver holds an `Rc<Vault>` and every accessor into it is a `RefCell`, so
+//! Resolver holds an `Arc<Vault>` and every accessor into it is a `RefCell`, so
 //! the handler is `!Send` by construction. `local` is what tells rmcp that.
 
 use std::borrow::Cow;
 use std::future::Future;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
@@ -104,15 +104,15 @@ impl Health {
 /// snapshot is reloaded, and this type never touches I/O outside the tools.
 #[derive(Debug, Clone)]
 pub struct ToolSurface {
-    resolver: Rc<Resolver>,
+    resolver: Arc<Resolver>,
 }
 
 impl ToolSurface {
-    pub fn new(resolver: Rc<Resolver>) -> Self {
+    pub fn new(resolver: Arc<Resolver>) -> Self {
         Self { resolver }
     }
 
-    pub fn resolver(&self) -> &Rc<Resolver> {
+    pub fn resolver(&self) -> &Arc<Resolver> {
         &self.resolver
     }
 

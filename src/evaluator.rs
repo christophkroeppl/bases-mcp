@@ -11,7 +11,7 @@
 //! function of its context and can be tested without a vault at all.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::ast::{BinOp, Node, NodeKind, UnaryOp};
 use crate::depth::{Depth, EXPRESSION};
@@ -173,9 +173,9 @@ fn resolve_identifier(name: &str, ctx: &EvalContext) -> Result<BasesValue> {
             let tc = ctx.this_value.as_ref().ok_or_else(|| MissingThisContext {
                 base: "this".into(),
             })?;
-            BasesValue::File(Rc::new(this_as_file(tc)))
+            BasesValue::File(Arc::new(this_as_file(tc)))
         }
-        "file" => BasesValue::File(Rc::new(ctx.file.clone())),
+        "file" => BasesValue::File(Arc::new(ctx.file.clone())),
         "note" => namespace_map(&ctx.note),
         "formula" => namespace_map(&ctx.formula),
         // Bound only inside a lambda. Outside one they are simply absent, which
@@ -193,7 +193,7 @@ fn resolve_identifier(name: &str, ctx: &EvalContext) -> Result<BasesValue> {
 /// does. An empty map reads as `Null` so `note.nothing.length` is null rather
 /// than a type error.
 fn namespace_map(map: &BTreeMap<String, BasesValue>) -> BasesValue {
-    BasesValue::Namespace(Rc::new(map.clone()))
+    BasesValue::Namespace(Arc::new(map.clone()))
 }
 
 fn resolve_property_path(path: &str, ctx: &EvalContext) -> Result<BasesValue> {
@@ -213,7 +213,7 @@ fn resolve_property_path(path: &str, ctx: &EvalContext) -> Result<BasesValue> {
             if parts.first() == Some(&"note") {
                 lookup_path(&namespace_map(&tc.note), &parts[1..])
             } else if parts.first() == Some(&"file") {
-                lookup_path(&BasesValue::File(Rc::new(this_as_file(tc))), &parts[1..])
+                lookup_path(&BasesValue::File(Arc::new(this_as_file(tc))), &parts[1..])
             } else {
                 // Otherwise the spelling is ambiguous and real vaults use both
                 // senses: `this.path` is a File member while `this.projects` is
@@ -222,11 +222,11 @@ fn resolve_property_path(path: &str, ctx: &EvalContext) -> Result<BasesValue> {
                 if !matches!(as_note, BasesValue::Null) {
                     as_note
                 } else {
-                    lookup_path(&BasesValue::File(Rc::new(this_as_file(tc))), &parts)
+                    lookup_path(&BasesValue::File(Arc::new(this_as_file(tc))), &parts)
                 }
             }
         }
-        "file" => lookup_path(&BasesValue::File(Rc::new(ctx.file.clone())), &parts),
+        "file" => lookup_path(&BasesValue::File(Arc::new(ctx.file.clone())), &parts),
         "note" => lookup_path(&namespace_map(&ctx.note), &parts),
         "formula" => lookup_path(&namespace_map(&ctx.formula), &parts),
         _ => {
@@ -247,7 +247,7 @@ fn resolve_property_path(path: &str, ctx: &EvalContext) -> Result<BasesValue> {
 /// through every file method.
 fn this_as_file(tc: &ThisContext) -> FileValue {
     let mut f = tc.file.clone();
-    f.overrides = Some(Rc::new(tc.note.clone()));
+    f.overrides = Some(Arc::new(tc.note.clone()));
     f
 }
 
@@ -359,7 +359,7 @@ fn read_file_member(file: &FileValue, name: &str) -> BasesValue {
         "embeds" => BasesValue::List((a.embeds)()),
         "backlinks" => BasesValue::List((a.backlinks)()),
         "properties" => namespace_map(&(a.properties)()),
-        "file" => BasesValue::File(Rc::new(file.clone())),
+        "file" => BasesValue::File(Arc::new(file.clone())),
         // Not in the official `file.*` table; Obsidian returns null. We ship it
         // as a documented extension. See docs/divergences.md D3.
         "tasks" => BasesValue::List((a.tasks)()),
@@ -624,7 +624,7 @@ pub struct LambdaCall<'a> {
 /// on [`LambdaCall`] widens a public struct that nothing else needs widened, and a
 /// parameter on [`crate::stdlib::run_higher_order`] pushes that function to eight
 /// arguments for a value it only forwards.
-pub type LambdaRunner<'depth> = Rc<dyn Fn(LambdaCall<'_>) -> Result<BasesValue> + 'depth>;
+pub type LambdaRunner<'depth> = Arc<dyn Fn(LambdaCall<'_>) -> Result<BasesValue> + 'depth>;
 
 fn evaluate_call(
     callee: &Node,
@@ -667,7 +667,7 @@ fn evaluate_call(
             // because `&Depth` is `Copy` and `Depth::enter` spends through a
             // `Cell`, which keeps this closure `Fn` — and keeps the depth out of
             // [`crate::stdlib::run_higher_order`]'s signature.
-            let runner: LambdaRunner<'_> = Rc::new(|call: LambdaCall<'_>| {
+            let runner: LambdaRunner<'_> = Arc::new(|call: LambdaCall<'_>| {
                 let mut bindings = call.ctx.bindings.clone().unwrap_or_default();
                 bindings.insert("value".into(), call.value.clone());
                 bindings.insert("index".into(), BasesValue::Number(call.index as f64));

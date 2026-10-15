@@ -44,7 +44,7 @@ async fn main() -> ExitCode {
 /// Serve until the client disconnects.
 ///
 /// Wrapped in a `LocalSet` because rmcp's `local` mode spawns the serve loop
-/// with `spawn_local`: the handler holds an `Rc<Vault>`, which is the honest
+/// with `spawn_local`: the handler holds an `Arc<Vault>`, which is the honest
 /// shape for a single-threaded vault index and is why the mode is on at all.
 async fn run() -> Result<(), String> {
     let config = match parse_config(&process_env()) {
@@ -67,7 +67,7 @@ async fn run() -> Result<(), String> {
         .map_err(|error| error.message().to_string())?;
 
     // Past this line, silence. The transport owns stdout from here on.
-    let server = ToolSurface::new(std::rc::Rc::new(resolver));
+    let server = ToolSurface::new(std::sync::Arc::new(resolver));
     let transport = stdio();
     tokio::task::LocalSet::new()
         .run_until(async move {

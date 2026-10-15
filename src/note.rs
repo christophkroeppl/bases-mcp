@@ -24,7 +24,7 @@
 //! cannot claim to be both.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -92,7 +92,7 @@ impl SegmentBody {
 pub struct Frontmatter {
     /// The parsed properties, shared with [`ParsedNote::frontmatter`] so a
     /// lookup is not a second copy of the block.
-    pub data: Rc<Properties>,
+    pub data: Arc<Properties>,
     /// True when the block was present but failed to parse.
     pub malformed: bool,
 }
@@ -299,7 +299,7 @@ pub struct ParsedNote {
     pub path: String,
     pub segments: Vec<Segment>,
     /// The note's frontmatter properties, shared with its frontmatter segment.
-    pub frontmatter: Rc<Properties>,
+    pub frontmatter: Arc<Properties>,
     /// Every link in the body, in document order.
     pub links: Vec<WikiLink>,
     /// The embeds among those links, in document order.
@@ -339,18 +339,18 @@ pub fn parse_note(path: impl Into<String>, text: &str) -> ParsedNote {
     let mut pos = 0;
 
     // Frontmatter must be the very first thing in the file.
-    let mut properties: Rc<Properties> = Rc::new(Properties::new());
+    let mut properties: Arc<Properties> = Arc::new(Properties::new());
     let mut malformed = false;
     if let Some(block) = frontmatter_block(text) {
         let (parsed, is_malformed) = parse_frontmatter(block.yaml);
-        properties = Rc::new(parsed);
+        properties = Arc::new(parsed);
         malformed = is_malformed;
         let span = Span {
             start: 0,
             end: block.raw.len(),
         };
         let body = SegmentBody::Frontmatter(Frontmatter {
-            data: Rc::clone(&properties),
+            data: Arc::clone(&properties),
             malformed,
         });
         segments.push(Segment::slice(text, span, body));
@@ -598,7 +598,7 @@ fn yaml_value(value: &Yaml) -> BasesValue {
         Yaml::Number(n) => yaml_number(n),
         Yaml::String(s) => BasesValue::String(s.clone()),
         Yaml::Sequence(items) => BasesValue::List(items.iter().map(yaml_value).collect()),
-        Yaml::Mapping(_) => BasesValue::Namespace(Rc::new(yaml_properties(value))),
+        Yaml::Mapping(_) => BasesValue::Namespace(Arc::new(yaml_properties(value))),
         Yaml::Tagged(tagged) => yaml_value(&tagged.value),
     }
 }

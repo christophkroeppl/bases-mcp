@@ -44,7 +44,7 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use bases_mcp::base::{
     order_formulas, parse_base, query_base, BaseFile, Direction, FilterNode, QueryOptions,
@@ -61,18 +61,18 @@ use common::{count_files, futures_block_on, vault_dir, CORPUS_SIZE};
 // ---------------------------------------------------------------------------
 
 /// The testing vault, indexed. Read-only: nothing in this file writes to it.
-fn testing_vault() -> Rc<Vault> {
+fn testing_vault() -> Arc<Vault> {
     load(vault_dir())
 }
 
 /// A fixture vault, resolved by pointing the backend at its own directory.
-fn fixture_vault(name: &str) -> Rc<Vault> {
+fn fixture_vault(name: &str) -> Arc<Vault> {
     load(fixtures_dir().join(name))
 }
 
-fn load(dir: impl AsRef<Path>) -> Rc<Vault> {
+fn load(dir: impl AsRef<Path>) -> Arc<Vault> {
     let source = FsVaultSource::new(dir).expect("a vault directory");
-    let vault = Rc::new(Vault::new(Box::new(source)));
+    let vault = Arc::new(Vault::new(Box::new(source)));
     futures_block_on(vault.load()).expect("the vault is readable");
     vault
 }
@@ -90,7 +90,7 @@ fn base_of(vault: &Vault, path: &str) -> BaseFile {
 }
 
 /// Resolve one view of a base against the testing vault.
-fn query(vault: &Rc<Vault>, path: &str, view: Option<&str>, context: Option<&str>) -> QueryResult {
+fn query(vault: &Arc<Vault>, path: &str, view: Option<&str>, context: Option<&str>) -> QueryResult {
     let base = base_of(vault, path);
     let options = QueryOptions {
         context: context.map(str::to_string),
@@ -100,7 +100,7 @@ fn query(vault: &Rc<Vault>, path: &str, view: Option<&str>, context: Option<&str
 }
 
 /// The refusal a query produced, or a failure saying it unexpectedly succeeded.
-fn refusal(vault: &Rc<Vault>, path: &str, options: QueryOptions) -> BasesError {
+fn refusal(vault: &Arc<Vault>, path: &str, options: QueryOptions) -> BasesError {
     let base = base_of(vault, path);
     match query_base(vault, path, &base, &options) {
         Err(error) => error,

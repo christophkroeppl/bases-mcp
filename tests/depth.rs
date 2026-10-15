@@ -21,7 +21,7 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use bases_mcp::ast::{Literal, Node, NodeKind, Span, UnaryOp};
 use bases_mcp::base::{parse_base, query_base, BaseFile, QueryOptions};
@@ -37,9 +37,9 @@ use common::{count_files, futures_block_on, vault_dir, CORPUS_SIZE};
 // Harness
 // ---------------------------------------------------------------------------
 
-fn testing_vault() -> Rc<Vault> {
+fn testing_vault() -> Arc<Vault> {
     let source = FsVaultSource::new(vault_dir()).expect("a vault directory");
-    let vault = Rc::new(Vault::new(Box::new(source)));
+    let vault = Arc::new(Vault::new(Box::new(source)));
     futures_block_on(vault.load()).expect("the testing vault is readable");
     vault
 }
@@ -127,17 +127,17 @@ fn message(error: &BasesError) -> String {
 /// A one-note vault's context, for evaluating a hand-built tree.
 fn ctx() -> EvalContext {
     let accessors = bases_mcp::value::FileAccessors {
-        tags: Rc::new(Vec::new),
-        links: Rc::new(Vec::new),
-        embeds: Rc::new(Vec::new),
-        backlinks: Rc::new(Vec::new),
-        properties: Rc::new(BTreeMap::new),
-        ctime: Rc::new(|| bases_mcp::value::BasesDate::from_millis(0)),
-        mtime: Rc::new(|| bases_mcp::value::BasesDate::from_millis(0)),
-        size: Rc::new(|| 0),
-        tasks: Rc::new(Vec::new),
-        resolve: Rc::new(|_: &str| None),
-        links_to: Rc::new(|_: &str| false),
+        tags: Arc::new(Vec::new),
+        links: Arc::new(Vec::new),
+        embeds: Arc::new(Vec::new),
+        backlinks: Arc::new(Vec::new),
+        properties: Arc::new(BTreeMap::new),
+        ctime: Arc::new(|| bases_mcp::value::BasesDate::from_millis(0)),
+        mtime: Arc::new(|| bases_mcp::value::BasesDate::from_millis(0)),
+        size: Arc::new(|| 0),
+        tasks: Arc::new(Vec::new),
+        resolve: Arc::new(|_: &str| None),
+        links_to: Arc::new(|_: &str| false),
     };
     EvalContext::new(FileValue::new("Note.md".to_string(), accessors))
 }

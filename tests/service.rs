@@ -22,7 +22,7 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use bases_mcp::base::QueryOptions;
 use bases_mcp::drafts::{
@@ -50,26 +50,26 @@ const HOST: &str = "Projects/SomeProject.md";
 /// The copy is seeded from the same loader the read-only tests use, so a write
 /// test and a read test see identical content and the only difference is whether
 /// the directory is disposable.
-fn sandbox() -> (TempDir, Rc<Resolver>) {
+fn sandbox() -> (TempDir, Arc<Resolver>) {
     let dir = TempDir::new().expect("a temp dir is writable");
     seed_dir(dir.path(), &load_corpus_from(&vault_dir()));
     let resolver = futures_block_on(Resolver::open_dir(dir.path()))
         .unwrap_or_else(|error| panic!("the sandbox vault opens: {error}"));
-    (dir, Rc::new(resolver))
+    (dir, Arc::new(resolver))
 }
 
 /// A Resolver over the real testing vault. Never writes.
-fn oracle() -> Rc<Resolver> {
-    Rc::new(
+fn oracle() -> Arc<Resolver> {
+    Arc::new(
         futures_block_on(Resolver::open_dir(vault_dir()))
             .unwrap_or_else(|error| panic!("the testing vault opens: {error}")),
     )
 }
 
 /// A Resolver over one fixture vault.
-fn fixture(name: &str) -> Rc<Resolver> {
+fn fixture(name: &str) -> Arc<Resolver> {
     let dir = fixtures_dir().join(name);
-    Rc::new(
+    Arc::new(
         futures_block_on(Resolver::open_dir(&dir))
             .unwrap_or_else(|error| panic!("the {name} fixture opens: {error}")),
     )
@@ -1836,7 +1836,7 @@ fn stringified_renders_the_shapes_obsidian_stringifies() {
 fn a_namespace_is_json_because_a_record_has_no_display_form() {
     use bases_mcp::service::{stringified, to_json_value};
     use bases_mcp::value::BasesValue;
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     let map = std::collections::BTreeMap::from([
         ("b".to_string(), BasesValue::String("two".into())),
@@ -1845,7 +1845,7 @@ fn a_namespace_is_json_because_a_record_has_no_display_form() {
             BasesValue::List(vec![BasesValue::Number(1.0)]),
         ),
     ]);
-    let namespace = BasesValue::Namespace(Rc::new(map));
+    let namespace = BasesValue::Namespace(Arc::new(map));
     assert_eq!(
         stringified(Some(&namespace)).as_deref(),
         Some(r#"{"a":[1],"b":"two"}"#)
@@ -2055,7 +2055,7 @@ fn the_two_spellings_of_a_note_get_the_same_base_hash() {
     ] {
         std::fs::write(dir.path().join(name), text).expect("the note is on disk");
     }
-    let resolver = Rc::new(
+    let resolver = Arc::new(
         futures_block_on(Resolver::open_dir(dir.path()))
             .unwrap_or_else(|error| panic!("the mixed vault opens: {error}")),
     );
@@ -2101,7 +2101,7 @@ fn a_base_hash_from_a_crlf_note_round_trips_through_an_obsidian_resave() {
     let dir = TempDir::new().expect("a temp dir is writable");
     seed_dir(dir.path(), &load_corpus_from(&vault_dir()));
     std::fs::write(dir.path().join(NOTE), ORIGINAL).expect("the CRLF note is on disk");
-    let resolver = Rc::new(
+    let resolver = Arc::new(
         futures_block_on(Resolver::open_dir(dir.path()))
             .unwrap_or_else(|error| panic!("the CRLF vault opens: {error}")),
     );

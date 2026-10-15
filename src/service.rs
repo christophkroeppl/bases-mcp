@@ -4,7 +4,7 @@
 //! through the [`crate::vault::VaultSource`] and never writes, except in
 //! [`Resolver::write_note`] and [`Resolver::create_note`].
 //!
-//! The vault is held as an `Rc<Vault>` rather than owned, for the same reason
+//! The vault is held as an `Arc<Vault>` rather than owned, for the same reason
 //! every `file.*` accessor in [`crate::vault::Vault`] is: those accessors are
 //! closures that have to reach back into the index from inside the evaluator.
 //! That makes the Resolver `!Send`, which is why the MCP handler is built in
@@ -17,7 +17,7 @@
 //! one an agent reads.
 
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use serde_json::{json, Map, Value as Json};
 
@@ -141,14 +141,14 @@ impl From<(String, ReconcileResult)> for WriteNoteResult {
 /// The Resolver.
 #[derive(Debug)]
 pub struct Resolver {
-    vault: Rc<Vault>,
+    vault: Arc<Vault>,
     drafts: crate::drafts::DraftStore,
 }
 
 impl Resolver {
     /// Index a vault from any backend.
     pub async fn open(source: Box<dyn VaultSource>) -> Result<Self> {
-        let vault = Rc::new(Vault::new(source));
+        let vault = Arc::new(Vault::new(source));
         vault.load().await?;
         Ok(Self {
             vault,
@@ -163,7 +163,7 @@ impl Resolver {
     }
 
     /// The index every tool reads through.
-    pub fn vault(&self) -> &Rc<Vault> {
+    pub fn vault(&self) -> &Arc<Vault> {
         &self.vault
     }
 
@@ -179,7 +179,7 @@ impl Resolver {
     /// coercion are exactly the machinery a filter like
     /// `project.contains(link(this.file.name))` depends on, and a hand-built
     /// stand-in would be a second, drifting implementation of all three.
-    pub fn shared_backend(&self) -> Rc<dyn VaultSource> {
+    pub fn shared_backend(&self) -> Arc<dyn VaultSource> {
         self.vault.shared_source()
     }
 

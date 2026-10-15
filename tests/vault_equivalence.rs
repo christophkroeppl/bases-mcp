@@ -44,7 +44,7 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use bases_mcp::error::BasesError;
 use bases_mcp::value::BasesValue;
@@ -993,8 +993,8 @@ fn a_source_whose_list_fails_reports_the_failure_rather_than_an_empty_vault() {
 /// is executable rather than asserted in a comment.
 #[test]
 fn the_memory_source_presents_the_same_async_api_behind_a_trait_object() {
-    let shared = Rc::new(memory_source(&load_corpus()));
-    let mut source: Box<dyn VaultSource> = Box::new(SharedSource(Rc::clone(&shared)));
+    let shared = Arc::new(memory_source(&load_corpus()));
+    let mut source: Box<dyn VaultSource> = Box::new(SharedSource(Arc::clone(&shared)));
 
     assert_eq!(source.kind(), SourceKind::Webdav);
     assert_eq!(list_of(source.as_ref()), list_of(shared.as_ref()));
@@ -1034,8 +1034,8 @@ fn strip_extension(path: &str) -> String {
 // and each of these is a behaviour the rest of the project is entitled to rely on.
 
 /// A loaded index over the oracle vault.
-fn loaded() -> Rc<Vault> {
-    let vault = Rc::new(Vault::new(Box::new(
+fn loaded() -> Arc<Vault> {
+    let vault = Arc::new(Vault::new(Box::new(
         FsVaultSource::new(vault_dir()).expect("the oracle is a directory"),
     )));
     run(vault.load()).expect("the oracle vault loads");

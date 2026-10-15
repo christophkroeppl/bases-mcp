@@ -29,7 +29,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
@@ -707,7 +707,7 @@ async fn verification_failures(
 /// may read another) and written into the bag as each is computed, because that
 /// is the graph the query pipeline builds.
 fn draft_eval_context(
-    vault: &Rc<Vault>,
+    vault: &Arc<Vault>,
     path: &str,
     base: &BaseFile,
     context: Option<&str>,
@@ -1402,8 +1402,8 @@ fn basename(path: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 /// The real vault with one unsaved note spliced in, and read-only.
-async fn vault_with_draft(inner: Rc<dyn VaultSource>, path: &str, content: &str) -> Rc<Vault> {
-    let vault = Rc::new(Vault::new(Box::new(DraftVaultSource {
+async fn vault_with_draft(inner: Arc<dyn VaultSource>, path: &str, content: &str) -> Arc<Vault> {
+    let vault = Arc::new(Vault::new(Box::new(DraftVaultSource {
         inner,
         path: path.to_string(),
         content: content.to_string(),
@@ -1419,7 +1419,7 @@ async fn vault_with_draft(inner: Rc<dyn VaultSource>, path: &str, content: &str)
 
 /// The overlay the verify step reads through.
 struct DraftVaultSource {
-    inner: Rc<dyn VaultSource>,
+    inner: Arc<dyn VaultSource>,
     path: String,
     content: String,
 }

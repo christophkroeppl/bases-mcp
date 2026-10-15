@@ -41,7 +41,7 @@ use bases_mcp::vault::webdav::{
     WebdavTransport, WebdavVaultOptions, WebdavVaultSource, DAV_PROPFIND_BODY,
 };
 use bases_mcp::vault::{is_indexable, FsVaultSource, VaultSource};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use common::fake_dav::{FakeDav, Recorded, Status, BASE_PATH, BASE_URL};
 use common::{futures_block_on, load_corpus, vault_dir, VaultFile, CORPUS_SIZE};
@@ -165,23 +165,23 @@ const EMPTY_LISTING: &str = r#"<?xml version="1.0"?><D:multistatus xmlns:D="DAV:
 /// `Rc` because the transport a source owns is `'static`: it cannot borrow a
 /// local, so the fake has to outlive the constructor that hands it over. Every
 /// test keeps its own handle so it can read the request log afterwards.
-fn fake(seed: impl IntoIterator<Item = VaultFile>) -> Rc<FakeDav> {
-    Rc::new(FakeDav::new(seed))
+fn fake(seed: impl IntoIterator<Item = VaultFile>) -> Arc<FakeDav> {
+    Arc::new(FakeDav::new(seed))
 }
 
 /// A source over a fake server, with Basic auth, at the fake's base URL.
-fn source_over(server: &Rc<FakeDav>) -> WebdavVaultSource {
+fn source_over(server: &Arc<FakeDav>) -> WebdavVaultSource {
     source_over_with(server, Some(USER), Some(PASSWORD), None)
 }
 
 fn source_over_with(
-    server: &Rc<FakeDav>,
+    server: &Arc<FakeDav>,
     user: Option<&str>,
     password: Option<&str>,
     timeout_ms: Option<u64>,
 ) -> WebdavVaultSource {
     let mut options = WebdavVaultOptions::new(BASE_URL)
-        .with_transport(Box::new(SharedTransport(Rc::clone(server))));
+        .with_transport(Box::new(SharedTransport(Arc::clone(server))));
     if let Some(user) = user {
         options.user = Some(user.to_string());
     }
@@ -222,7 +222,7 @@ where
 /// local cannot be borrowed by one. `Rc` rather than `Arc` because the transport
 /// futures are `?Send` for the same reason the source's are, and the test that
 /// made the request has to be able to read the log afterwards.
-pub struct SharedTransport(pub Rc<FakeDav>);
+pub struct SharedTransport(pub Arc<FakeDav>);
 
 #[async_trait::async_trait(?Send)]
 impl WebdavTransport for SharedTransport {
@@ -244,7 +244,7 @@ fn canned_by_path() -> std::collections::BTreeMap<String, bases_mcp::vault::webd
         .collect()
 }
 
-fn corpus_source(server: &Rc<FakeDav>) -> WebdavVaultSource {
+fn corpus_source(server: &Arc<FakeDav>) -> WebdavVaultSource {
     source_over(server)
 }
 
@@ -1801,7 +1801,7 @@ fn tolerates_a_trailing_slash_on_the_base_url_which_changes_nothing() {
     }]);
     let source = WebdavVaultSource::new(
         WebdavVaultOptions::new(format!("{BASE_URL}/"))
-            .with_transport(Box::new(SharedTransport(Rc::clone(&server)))),
+            .with_transport(Box::new(SharedTransport(Arc::clone(&server)))),
     )
     .expect("a trailing slash is tolerated");
     run(source.read_note("Note.md")).expect("a read");

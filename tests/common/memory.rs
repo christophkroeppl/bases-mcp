@@ -27,7 +27,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bases_mcp::error::BasesError;
@@ -493,7 +493,7 @@ impl VaultSource for MemoryVaultSource {
 /// A newtype rather than a blanket impl because the fixture is shared with the
 /// filesystem backend in the same test: both have to be reachable as trait
 /// objects, and only one of them is a fake.
-pub struct SharedSource(pub Rc<MemoryVaultSource>);
+pub struct SharedSource(pub Arc<MemoryVaultSource>);
 
 #[async_trait(?Send)]
 impl VaultSource for SharedSource {
