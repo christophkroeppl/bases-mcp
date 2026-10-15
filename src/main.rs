@@ -27,11 +27,18 @@ use rmcp::ServiceExt;
 use bases_mcp::config::{open_source, parse_config, process_env, ConfigResult, NAME};
 use bases_mcp::service::Resolver;
 use bases_mcp::tools::ToolSurface;
-use bases_mcp::transport::{select_transport, Transport, HTTP_PATH};
+use bases_mcp::transport::{select_transport, usage, wants_help, Transport, HTTP_PATH};
 
 /// Start the server on the named transport, or exit non-zero explaining why not.
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Help is answered before the transport is chosen, and on stdout: no
+    // transport has taken stdout yet, so this cannot corrupt a protocol stream.
+    if wants_help(std::env::args().skip(1)) {
+        println!("{}", usage());
+        return ExitCode::SUCCESS;
+    }
+
     let transport = match select_transport(std::env::args().skip(1)) {
         Ok(transport) => transport,
         Err(message) => {

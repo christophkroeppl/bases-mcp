@@ -65,18 +65,26 @@ impl Transport {
 /// `--transport stdio|http` if given, otherwise `MCP_TRANSPORT`, otherwise
 /// stdio. The argument wins: a caller who passed a flag meant it.
 ///
-/// An argument that is not `--transport` is a refusal. This server has no other
-/// flags, and accepting one would be a promise to honour it.
+/// `-h` and `--help` are not transports; they are answered by [`usage`] and
+/// asked about before this runs. Everything else is a refusal: this server has
+/// no other flags, and accepting one would be a promise to honour it.
 pub fn select_transport<I: Iterator<Item = String>>(args: I) -> Result<Transport, String> {
     let mut flag = None;
     let mut iter = args;
     while let Some(arg) = iter.next() {
         if arg == "--transport" {
             // A flag with no value is a refusal, not an empty transport name.
-            flag = Some(
-                iter.next()
-                    .ok_or_else(|| "--transport needs a value: `stdio` or `http`.".to_string())?,
-            );
+            // A following flag is not a value either: `--transport --help` is
+            // the caller asking for help, not naming a transport `--help`.
+            let value = iter
+                .next()
+                .ok_or_else(|| "--transport needs a value: `stdio` or `http`.".to_string())?;
+            if value.starts_with('-') {
+                return Err(format!(
+                    "--transport needs a value: `stdio` or `http`, not \"{value}\"."
+                ));
+            }
+            flag = Some(value);
         } else if let Some(value) = arg.strip_prefix("--transport=") {
             flag = Some(value.to_string());
         } else {
@@ -90,6 +98,45 @@ pub fn select_transport<I: Iterator<Item = String>>(args: I) -> Result<Transport
         None => std::env::var("MCP_TRANSPORT").unwrap_or_else(|_| "stdio".to_string()),
     };
     Transport::parse(&value)
+}
+
+/// The usage message, for a caller that wants to print it itself.
+///
+/// Stated here rather than in `main.rs` because it is the same text
+/// [`select_transport`] refuses with, and two copies of the flag surface would
+/// be two things to update.
+pub fn usage() -> &'static str {
+    concat!(
+        "bases-mcp — an MCP server that resolves Obsidian Bases to markdown\n",
+        "\n",
+        "One binary, one vault, two transports:\n",
+        "\n",
+        "  --transport stdio   one client over stdin/stdout (the default)\n",
+        "  --transport http    any number of clients over Streamable HTTP (SSE)\n",
+        "\n",
+        "  MCP_TRANSPORT=stdio|http   same choice, without a flag\n",
+        "\n",
+        "The vault is chosen by the environment, never by a flag:\n",
+        "\n",
+        "  BASES_MCP_VAULT              path to a vault directory on the local filesystem\n",
+        "  BASES_MCP_WEBDAV_URL         WebDAV base URL, no credentials in it\n",
+        "  BASES_MCP_WEBDAV_USER        WebDAV username\n",
+        "  BASES_MCP_WEBDAV_PASSWORD    WebDAV password\n",
+        "\n",
+        "  Exactly one backend is used. BASES_MCP_VAULT wins if both are set.\n",
+        "\n",
+        "HTTP transport only:\n",
+        "\n",
+        "  MCP_HTTP_HOST    bind address (default 127.0.0.1)\n",
+        "  MCP_HTTP_PORT    bind port (default 8765)\n",
+        "\n",
+        "  The endpoint is http://HOST:PORT/mcp\n",
+    )
+}
+
+/// Whether the arguments ask for help rather than a transport.
+pub fn wants_help<I: Iterator<Item = String>>(args: I) -> bool {
+    args.into_iter().any(|arg| arg == "-h" || arg == "--help")
 }
 
 #[cfg(test)]
