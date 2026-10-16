@@ -52,7 +52,7 @@ required-features = ["parity"]
 # than `RefCell`, so the handler is `Send + Sync` and the multi-threaded
 # runtime can run it — see `src/vault.rs`.
 rmcp = { version = "3", features = ["server", "transport-io", "schemars", "transport-streamable-http-server"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs", "net", "signal"] }
 # Mounts rmcp's Streamable HTTP service at a path. `http1` and `tokio` are all
 # the server needs; body handling is rmcp's own.
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }

@@ -141,11 +141,28 @@ async fn serve_http() -> Result<(), String> {
     for (address, _) in &listeners {
         eprintln!("{NAME}: listening on http://{address}{HTTP_PATH} (streamable HTTP)");
     }
+    // A shutdown is SIGTERM or SIGINT, and it is awaited. systemd sends SIGTERM
+    // and waits; a server that ignored it would be SIGKILLed after the timeout,
+    // dropping in-flight requests. `axum::serve` runs until the process dies
+    // unless a shutdown is handed to it, so the signal is what makes this
+    // function return at all.
+    let on_shutdown = || async {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("SIGTERM is always installable");
+        let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("SIGINT is always installable");
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+    };
+
     let mut servers = Vec::new();
     for (address, listener) in listeners {
         let app = app.clone();
         servers.push(tokio::spawn(async move {
             axum::serve(listener, app)
+                .with_graceful_shutdown(on_shutdown())
                 .await
                 .map_err(|error| format!("{address}: {error}"))
         }));

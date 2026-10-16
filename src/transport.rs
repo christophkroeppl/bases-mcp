@@ -58,7 +58,7 @@ impl HttpEndpoint {
     /// [`HttpEndpoint::resolve`], which is where a name either resolves to
     /// address(es) or is refused with the value named.
     pub fn from_env() -> Result<Self, String> {
-        let host = read_host();
+        let host = read_host()?;
         let port = read_port()?;
         let addresses = Self::resolve(host, port)?;
         Ok(Self {
@@ -135,18 +135,34 @@ enum Host {
 
 /// `MCP_HTTP_HOST`, defaulting to loopback.
 ///
-/// This cannot fail on its own: a name that does not parse as an IP is a name
-/// the operator's network may still resolve, so it is carried as-is and the
-/// refusal happens when the whole address is assembled, where the value can be
-/// named.
-fn read_host() -> Host {
-    match filled("MCP_HTTP_HOST") {
-        None => Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-        Some(value) => match value.parse::<IpAddr>() {
-            Ok(ip) => Host::Ip(ip),
-            Err(_) => Host::Name(value),
-        },
+/// A value that parses as an IP is the address; anything else is a name the
+/// operator's network may still resolve, so it is carried as-is and refused at
+/// `HttpEndpoint::resolve`, where the value can be named.
+///
+/// One shape is refused here instead: a `host:port` pair. The variable name
+/// reads like a full address and operators set `127.0.0.1:8765` into it, which
+/// is a `SocketAddr` and not a host — carrying it as a name would make the
+/// resolver look up the literal string `127.0.0.1:8765` and refuse with a
+/// message about a name that does not resolve, which names the wrong mistake.
+/// The port belongs to `MCP_HTTP_PORT`, and saying so is the whole point.
+fn read_host() -> Result<Host, String> {
+    parse_host(filled("MCP_HTTP_HOST"))
+}
+
+fn parse_host(value: Option<String>) -> Result<Host, String> {
+    let Some(value) = value else {
+        return Ok(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+    };
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return Ok(Host::Ip(ip));
     }
+    if value.parse::<SocketAddr>().is_ok() {
+        return Err(format!(
+            "MCP_HTTP_HOST is {value:?}, which is a host and a port together. \
+             MCP_HTTP_HOST names the address alone — use MCP_HTTP_PORT for the port"
+        ));
+    }
+    Ok(Host::Name(value))
 }
 
 /// `MCP_HTTP_PORT`, defaulting to 8765.
@@ -218,11 +234,16 @@ fn allowed_hosts_for(addresses: &[SocketAddr]) -> Vec<String> {
         return Vec::new();
     }
     for address in addresses {
-        for name in [
-            address.ip().to_string(),
-            Ipv4Addr::LOCALHOST.to_string(),
-            Ipv6Addr::LOCALHOST.to_string(),
-        ] {
+        let ip = address.ip();
+        // The loopback of the bound family only: a client on the other stack
+        // could not have reached this listener, so granting its loopback as a
+        // Host header grants nothing — and granting nothing keeps the list a
+        // statement about what was bound.
+        let loopback = match ip {
+            IpAddr::V4(_) => Ipv4Addr::LOCALHOST.to_string(),
+            IpAddr::V6(_) => Ipv6Addr::LOCALHOST.to_string(),
+        };
+        for name in [ip.to_string(), loopback] {
             if !allowed.contains(&name) {
                 allowed.push(name);
             }
@@ -362,7 +383,9 @@ mod tests {
         );
         let mut names = endpoint.allowed_hosts().to_vec();
         names.sort();
-        assert_eq!(names, ["127.0.0.1", "::1", "localhost"]);
+        // Loopback is IPv4 here, so the IPv4 loopback is served and the IPv6 one
+        // is not: the other stack could not have reached this listener.
+        assert_eq!(names, ["127.0.0.1", "localhost"]);
     }
 
     #[test]
@@ -456,6 +479,49 @@ mod tests {
             unique.len(),
             "no address is returned twice: {addresses:?}"
         );
+    }
+
+    #[test]
+    fn a_host_and_port_together_is_refused_rather_than_resolved_as_a_name() {
+        // The variable reads like a full address, so `127.0.0.1:8765` is the
+        // mistake operators make. Carried as a name it would be looked up as a
+        // hostname and refused with a message about a name that does not
+        // resolve — which names the wrong mistake.
+        let refusal = parse_host(Some("127.0.0.1:8765".to_string()))
+            .expect_err("a host and a port is not a host");
+        assert!(
+            refusal.contains("MCP_HTTP_PORT"),
+            "the refusal names where the port belongs: {refusal}"
+        );
+        assert!(
+            refusal.contains("127.0.0.1:8765"),
+            "the refusal names the value: {refusal}"
+        );
+    }
+
+    #[test]
+    fn an_ipv6_host_with_port_is_refused_too() {
+        let refusal = parse_host(Some("[::1]:8765".to_string()))
+            .expect_err("an ipv6 host and a port is not a host");
+        assert!(refusal.contains("MCP_HTTP_PORT"), "{refusal}");
+    }
+
+    #[test]
+    fn a_bare_name_is_a_name_and_a_bare_ip_is_an_ip() {
+        assert!(matches!(parse_host(Some("localhost".to_string())), Ok(Host::Name(_))));
+        assert!(matches!(parse_host(Some("127.0.0.1".to_string())), Ok(Host::Ip(_))));
+        assert!(matches!(parse_host(None), Ok(Host::Ip(_))));
+    }
+
+    #[test]
+    fn the_loopback_of_the_bound_family_is_allowed_and_the_other_is_not() {
+        let v4 = allowed_hosts_for(&[SocketAddr::from(([192, 168, 1, 50], 8791))]);
+        assert!(v4.contains(&"127.0.0.1".to_string()), "{v4:?}");
+        assert!(!v4.contains(&"::1".to_string()), "{v4:?}");
+
+        let v6 = allowed_hosts_for(&[SocketAddr::from(([0xfd00, 0, 0, 0, 0, 0, 0, 1], 8791))]);
+        assert!(v6.contains(&"::1".to_string()), "{v6:?}");
+        assert!(!v6.contains(&"127.0.0.1".to_string()), "{v6:?}");
     }
 
     #[test]

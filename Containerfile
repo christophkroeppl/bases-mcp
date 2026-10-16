@@ -22,6 +22,12 @@ RUN apt-get update \
 
 COPY --from=build /build/target/release/bases-mcp /usr/local/bin/bases-mcp
 
+# The listener is unauthenticated, so the binary runs as a user with nothing to
+# reach: no home, no shell, and no write access outside a vault it is given.
+# A container that is escaped then escapes as nobody rather than as root.
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin bases-mcp
+USER bases-mcp
+
 # The transport is chosen by the command, not the image: the same binary serves
 # stdio when an agent spawns it. The deployment's compose passes
 # `--transport http`; this default keeps a bare `podman run` useful.
