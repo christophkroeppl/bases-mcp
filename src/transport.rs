@@ -38,7 +38,7 @@ pub enum Transport {
 /// serves nothing. See [`allowed_hosts`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpEndpoint {
-    address: SocketAddr,
+    addresses: Vec<SocketAddr>,
     allowed_hosts: Vec<String>,
 }
 
@@ -55,41 +55,56 @@ impl HttpEndpoint {
     /// `MCP_HTTP_HOST` is read but cannot fail on its own: a value that is not a
     /// literal IP is a name, and a name the operator's network resolves is a
     /// legitimate bind address. So the value is carried to
-    /// [`HttpEndpoint::resolve`], which is where a name either resolves to an
-    /// address or is refused with the value named.
+    /// [`HttpEndpoint::resolve`], which is where a name either resolves to
+    /// address(es) or is refused with the value named.
     pub fn from_env() -> Result<Self, String> {
         let host = read_host();
         let port = read_port()?;
-        let address = Self::resolve(host, port)?;
+        let addresses = Self::resolve(host, port)?;
         Ok(Self {
-            allowed_hosts: allowed_hosts_for(address),
-            address,
+            allowed_hosts: allowed_hosts_for(&addresses),
+            addresses,
         })
     }
 
-    /// Turn a host and port into the address to bind.
+    /// Turn a host and port into every address to bind.
     ///
-    /// A literal IP is the address. A name goes through `ToSocketAddrs`, which
+    /// A literal IP is one address. A name goes through `ToSocketAddrs`, which
     /// resolves it with the operating system's resolver — `localhost`, a
-    /// container name, a LAN name — and takes the first address it returns. A
-    /// name that resolves to nothing is a refusal naming the value, because a
-    /// bind address that cannot be resolved cannot be bound and the listener
-    /// would otherwise fail with the OS's own message.
+    /// container name, a LAN name — and **every** address it returns is bound,
+    /// not just the first: a dual-stack name that resolves to both `::1` and
+    /// `127.0.0.1` must answer on both, and a name with several A records must
+    /// answer on each, or a client that resolved the other one gets a connection
+    /// refused. A name that resolves to nothing is a refusal naming the value,
+    /// because a bind address that cannot be resolved cannot be bound and the
+    /// listener would otherwise fail with the OS's own message.
     ///
     /// Split out so a test can exercise the refusal without a listener.
-    fn resolve(host: Host, port: u16) -> Result<SocketAddr, String> {
+    fn resolve(host: Host, port: u16) -> Result<Vec<SocketAddr>, String> {
         match host {
-            Host::Ip(ip) => Ok(SocketAddr::new(ip, port)),
-            Host::Name(name) => (name.as_str(), port)
-                .to_socket_addrs()
-                .map_err(|_| bad_host(&name, port))?
-                .next()
-                .ok_or_else(|| bad_host(&name, port)),
+            Host::Ip(ip) => Ok(vec![SocketAddr::new(ip, port)]),
+            Host::Name(name) => {
+                let mut found: Vec<SocketAddr> = (name.as_str(), port)
+                    .to_socket_addrs()
+                    .map_err(|_| bad_host(&name, port))?
+                    .collect();
+                if found.is_empty() {
+                    return Err(bad_host(&name, port));
+                }
+                found.dedup();
+                Ok(found)
+            }
         }
     }
 
+    /// The first address, for the startup line and for callers that want one.
     pub fn address(&self) -> SocketAddr {
-        self.address
+        self.addresses[0]
+    }
+
+    /// Every address this endpoint binds, in resolver order.
+    pub fn addresses(&self) -> &[SocketAddr] {
+        &self.addresses
     }
 
     /// The `Host` authorities rmcp will serve. Empty means "any", and is
@@ -192,23 +207,25 @@ fn bad_port(value: &str) -> String {
 ///    operator's explicit choice, it is printed at startup, and it is recorded
 ///    as a Divergence in `docs/divergences.md`. No other case opens the server
 ///    to a name it was not told to serve.
-fn allowed_hosts_for(address: SocketAddr) -> Vec<String> {
+fn allowed_hosts_for(addresses: &[SocketAddr]) -> Vec<String> {
     // `localhost` is always served: a client that reaches this host by name is
     // a client on this host, whatever the listener was bound to.
     let mut allowed = vec!["localhost".to_string()];
-    let ip = address.ip();
-    if ip.is_unspecified() {
-        // Every interface was bound, so the address a request arrived on is not
-        // knowable here and rmcp's empty list is the only correct answer.
+    // Every interface was bound if any address is unspecified, so the address a
+    // request arrived on is not knowable here and rmcp's empty list is the only
+    // correct answer.
+    if addresses.iter().any(|address| address.ip().is_unspecified()) {
         return Vec::new();
     }
-    for name in [
-        ip.to_string(),
-        Ipv4Addr::LOCALHOST.to_string(),
-        Ipv6Addr::LOCALHOST.to_string(),
-    ] {
-        if !allowed.contains(&name) {
-            allowed.push(name);
+    for address in addresses {
+        for name in [
+            address.ip().to_string(),
+            Ipv4Addr::LOCALHOST.to_string(),
+            Ipv6Addr::LOCALHOST.to_string(),
+        ] {
+            if !allowed.contains(&name) {
+                allowed.push(name);
+            }
         }
     }
     allowed
@@ -355,9 +372,10 @@ mod tests {
         // pure half of the same rule, so it is what is asserted here; the
         // environment half is covered end to end by tests/http_transport.rs,
         // which spawns the binary with a real MCP_HTTP_HOST.
+        let bound = SocketAddr::from(([192, 168, 1, 50], 8791));
         let endpoint = HttpEndpoint {
-            address: SocketAddr::from(([192, 168, 1, 50], 8791)),
-            allowed_hosts: allowed_hosts_for(SocketAddr::from(([192, 168, 1, 50], 8791))),
+            addresses: vec![bound],
+            allowed_hosts: allowed_hosts_for(&[bound]),
         };
         assert!(
             endpoint
@@ -382,9 +400,10 @@ mod tests {
 
     #[test]
     fn binding_every_interface_allows_every_host_and_says_so() {
+        let bound = SocketAddr::from(([0, 0, 0, 0], 8765));
         let endpoint = HttpEndpoint {
-            address: SocketAddr::from(([0, 0, 0, 0], 8765)),
-            allowed_hosts: allowed_hosts_for(SocketAddr::from(([0, 0, 0, 0], 8765))),
+            addresses: vec![bound],
+            allowed_hosts: allowed_hosts_for(&[bound]),
         };
         assert!(
             endpoint.allowed_hosts().is_empty(),
@@ -397,11 +416,11 @@ mod tests {
     fn a_resolvable_name_binds_and_a_name_that_does_not_resolve_is_refused() {
         // `localhost` is the name the review named: it must resolve, not be
         // refused. The refusal case is a name nothing resolves.
-        let endpoint = HttpEndpoint::resolve(Host::Name("localhost".to_string()), 8765)
+        let addresses = HttpEndpoint::resolve(Host::Name("localhost".to_string()), 8765)
             .expect("localhost resolves");
         assert!(
-            endpoint.ip().is_loopback(),
-            "localhost resolves to a loopback address: {endpoint}"
+            addresses.iter().any(|address| address.ip().is_loopback()),
+            "localhost resolves to a loopback address: {addresses:?}"
         );
 
         let refusal = HttpEndpoint::resolve(Host::Name("no-such-host.invalid".to_string()), 8765)
@@ -413,6 +432,29 @@ mod tests {
         assert!(
             refusal.contains("no-such-host.invalid"),
             "the refusal names the value: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_name_with_several_addresses_resolves_to_all_of_them() {
+        // The reason `resolve` returns a slice rather than one address: a
+        // dual-stack name must bind both stacks, or a client that resolved the
+        // other one is refused.
+        let addresses = HttpEndpoint::resolve(Host::Name("localhost".to_string()), 8765)
+            .expect("localhost resolves");
+        assert!(
+            !addresses.is_empty(),
+            "localhost resolves to at least one address: {addresses:?}"
+        );
+        assert!(
+            addresses.iter().all(|address| address.ip().is_loopback()),
+            "every address of `localhost` is loopback: {addresses:?}"
+        );
+        let unique: std::collections::HashSet<_> = addresses.iter().collect();
+        assert_eq!(
+            addresses.len(),
+            unique.len(),
+            "no address is returned twice: {addresses:?}"
         );
     }
 

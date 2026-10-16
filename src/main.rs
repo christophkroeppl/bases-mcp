@@ -19,6 +19,7 @@
 //! `tests/http_transport.rs` asserts both over the wire: the HTTP transport
 //! ends to end, and the stdio transport's handshake.
 
+use std::net::SocketAddr;
 use std::process::ExitCode;
 
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -91,7 +92,9 @@ async fn serve_http() -> Result<(), String> {
     // `allowed_hosts` is derived from the same value the listener binds so the
     // two cannot disagree — see `HttpEndpoint`.
     let endpoint = HttpEndpoint::from_env()?;
-    let address = endpoint.address();
+    // Owned, so the borrow of `endpoint` ends here and the spawned servers below
+    // can be `'static`.
+    let addresses: Vec<SocketAddr> = endpoint.addresses().to_vec();
 
     // One vault, one Resolver, shared by every session. `Arc` rather than a
     // per-session clone because the index is the same bytes for every client,
@@ -99,34 +102,58 @@ async fn serve_http() -> Result<(), String> {
     // factory per session, so each session gets its own `ToolSurface` wrapping
     // the shared state.
     let factory = std::sync::Arc::new(resolver);
-    let service = StreamableHttpService::new(
-        move || Ok(ToolSurface::new(std::sync::Arc::clone(&factory))),
-        std::sync::Arc::new(LocalSessionManager::default()),
-        endpoint.rmcp_config(),
-    );
 
     // The service is a tower `Service`, and axum drives it directly. It handles
     // every method itself — POST for a request, GET for the SSE stream, DELETE
     // to close a session — so the whole router is that one service at `HTTP_PATH`.
-    let app = axum::Router::new().nest_service(HTTP_PATH, service);
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
-        .map_err(|error| format!("cannot bind {address}: {error}"))?;
+    // Built once and cloned per listener: `Router` is cheap to clone and the
+    // sessions are independent, so one router can serve several sockets.
+    let app = {
+        let service = StreamableHttpService::new(
+            move || Ok(ToolSurface::new(std::sync::Arc::clone(&factory))),
+            std::sync::Arc::new(LocalSessionManager::default()),
+            endpoint.rmcp_config(),
+        );
+        axum::Router::new().nest_service(HTTP_PATH, service)
+    };
+
+    // A name may resolve to several addresses and every one is bound: a client
+    // that resolved a different address of the same name must not be refused.
+    let mut listeners = Vec::new();
+    for address in addresses {
+        let listener = tokio::net::TcpListener::bind(address)
+            .await
+            .map_err(|error| format!("cannot bind {address}: {error}"))?;
+        listeners.push((address, listener));
+    }
 
     // `0.0.0.0` means rmcp was told to accept any `Host`, which is the
     // operator's choice and is not a default they can undo. Saying so on stderr
     // is the only place a listener that serves every interface announces it.
     if endpoint.allowed_hosts().is_empty() {
         eprintln!(
-            "{NAME}: {address} is every interface, so every Host header is accepted. \
+            "{}: every interface is bound, so every Host header is accepted. \
              This listener is network-accessible and has no authentication; it is \
-             safe only on a network you trust. See docs/divergences.md."
+             safe only on a network you trust. See docs/divergences.md.",
+            NAME
         );
     }
-    eprintln!("{NAME}: listening on http://{address}{HTTP_PATH} (streamable HTTP)");
-    axum::serve(listener, app)
-        .await
-        .map_err(|error| error.to_string())
+    for (address, _) in &listeners {
+        eprintln!("{NAME}: listening on http://{address}{HTTP_PATH} (streamable HTTP)");
+    }
+    let mut servers = Vec::new();
+    for (address, listener) in listeners {
+        let app = app.clone();
+        servers.push(tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .map_err(|error| format!("{address}: {error}"))
+        }));
+    }
+    for server in servers {
+        server.await.map_err(|error| error.to_string())??;
+    }
+    Ok(())
 }
 
 /// Parse the environment and index the vault it names.
