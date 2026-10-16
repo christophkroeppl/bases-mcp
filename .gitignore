@@ -9,6 +9,12 @@ test/vault/.obsidian/
 .env.*
 !.env.example
 
+# The guarden credential schema is the tracked half of the varlock contract: a
+# project declares its credential SHAPE here and never a value. It is the one
+# `.env.*` path that is not machine-specific, so the rule above must not swallow
+# it.
+!.guarden/.env.schema
+
 # Rust
 /target/
 

@@ -1,0 +1,22 @@
+# Guarden deployment compose — the unit source for `.guarden/service.yml`.
+#
+# The local transport is stdio (an agent spawns the binary); this file is the
+# deployment-scoped one. Every difference below is forced by guarden:
+#
+#   * no `build:` — a deployed compose carries a pinned image reference. The
+#     host builds it from `Containerfile`, and `weedr service build` tags it
+#     with the reference declared here, so the two cannot disagree.
+#   * no `ports:` — guarden allocates the loopback publication from the
+#     manifest's `routes:`, and a port's host-IP cannot be templated.
+#   * no `networks:` — guarden gives each container its own pasta namespace.
+#   * no `profiles:` — REFUSED by the renderer.
+#   * no space-bearing healthchecks — REFUSED by podlet.
+#   * no host-path binds — REFUSED outside the service's own volumes.
+#
+# The transport is selected by the command rather than an environment variable,
+# so a stale environment cannot start this container on the wrong transport.
+
+services:
+  bases-mcp:
+    image: localhost/bases-mcp:latest
+    command: ["--transport", "http"]
