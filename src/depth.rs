@@ -56,7 +56,7 @@
 //! what the process survives. [`crate::evaluator`] is guarded anyway for a
 //! different reason, and states it where it happens.
 
-use std::cell::Cell;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{BasesError, Result};
 
@@ -84,12 +84,19 @@ pub const FILTER: &str = "Filter group";
 /// forget to thread.
 #[derive(Debug, Default)]
 pub struct Depth {
-    /// A `Cell` rather than a plain `usize` because a guard holding `&mut Depth`
-    /// for its whole scope would overlap the `&mut Depth` every recursive call
-    /// needs, and the borrow checker is right to refuse that. Interior
-    /// mutability is the smallest thing that lets the guard and the recursion
-    /// share one counter, and `Depth` stays a local the caller owns.
-    level: Cell<usize>,
+    /// An `AtomicUsize` rather than a plain `usize` because a guard holding
+    /// `&mut Depth` for its whole scope would overlap the `&mut Depth` every
+    /// recursive call needs, and the borrow checker is right to refuse that.
+    /// Interior mutability is the smallest thing that lets the guard and the
+    /// recursion share one counter.
+    ///
+    /// Atomic, not `Cell`, because a `Depth` can now be reached from a handler
+    /// on another thread: the HTTP transport runs the evaluator on tokio's
+    /// worker threads, so anything it captures has to be `Send + Sync`. The
+    /// budget is per-walk and never shared between threads, so `Relaxed` is
+    /// enough — the ordering only has to keep the increments visible to the
+    /// thread that made them.
+    level: AtomicUsize,
 }
 
 /// One spent level, released on drop.
@@ -108,18 +115,18 @@ impl Depth {
 
     /// Spend one level, or refuse the walk.
     pub fn enter(&self, construct: &str) -> Result<Level<'_>> {
-        let level = self.level.get();
+        let level = self.level.load(Ordering::Relaxed);
         if level >= MAX_DEPTH {
             return Err(too_deep(construct));
         }
-        self.level.set(level + 1);
+        self.level.store(level + 1, Ordering::Relaxed);
         Ok(Level { depth: self })
     }
 }
 
 impl Drop for Level<'_> {
     fn drop(&mut self) {
-        self.depth.level.set(self.depth.level.get() - 1);
+        self.depth.level.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

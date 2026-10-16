@@ -17,8 +17,8 @@
 //! about the REQUESTS it makes, and a transport seam is the only place those
 //! claims are observable.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::RwLock;
 
 use async_trait::async_trait;
 use bases_mcp::error::{BasesError, Result};
@@ -59,26 +59,26 @@ pub struct Status {
 }
 
 pub struct FakeDav {
-    pub requests: RefCell<Vec<Recorded>>,
-    files: RefCell<BTreeMap<String, String>>,
-    dirs: RefCell<BTreeSet<String>>,
+    pub requests: RwLock<Vec<Recorded>>,
+    files: RwLock<BTreeMap<String, String>>,
+    dirs: RwLock<BTreeSet<String>>,
     /// Per-resource refusals, keyed by vault path, for the failure tests.
-    refuse: RefCell<BTreeMap<String, Status>>,
-    mtime: RefCell<String>,
+    refuse: RwLock<BTreeMap<String, Status>>,
+    mtime: RwLock<String>,
     /// When set, every request is refused with this status whatever it is.
-    timeout: RefCell<bool>,
+    timeout: RwLock<bool>,
 }
 
 impl FakeDav {
     /// A server seeded with `files`, with their parent collections created.
     pub fn new(seed: impl IntoIterator<Item = VaultFile>) -> Self {
         let server = Self {
-            requests: RefCell::new(Vec::new()),
-            files: RefCell::new(BTreeMap::new()),
-            dirs: RefCell::new(BTreeSet::from(["".to_string()])),
-            refuse: RefCell::new(BTreeMap::new()),
-            mtime: RefCell::new("Tue, 01 Oct 2024 10:11:12 GMT".to_string()),
-            timeout: RefCell::new(false),
+            requests: RwLock::new(Vec::new()),
+            files: RwLock::new(BTreeMap::new()),
+            dirs: RwLock::new(BTreeSet::from(["".to_string()])),
+            refuse: RwLock::new(BTreeMap::new()),
+            mtime: RwLock::new("Tue, 01 Oct 2024 10:11:12 GMT".to_string()),
+            timeout: RwLock::new(false),
         };
         for file in seed {
             server.store(&file.path, file.content);
@@ -93,43 +93,49 @@ impl FakeDav {
     /// `'static`, so it cannot borrow a local), and a builder that returned a
     /// borrow would be lending a reference to something the caller cannot keep.
     pub fn refusing(&self, path: &str, status: Status) {
-        self.refuse.borrow_mut().insert(path.to_string(), status);
+        self.refuse
+            .write()
+            .unwrap()
+            .insert(path.to_string(), status);
     }
 
     /// The mtime every `getlastmodified` reports, so no assertion is against a
     /// clock.
     pub fn with_mtime(&self, value: &str) {
-        *self.mtime.borrow_mut() = value.to_string();
+        *self.mtime.write().unwrap() = value.to_string();
     }
 
     /// A server that never answers, so the request budget is what ends the call.
     pub fn wedged(&self) {
-        *self.timeout.borrow_mut() = true;
+        *self.timeout.write().unwrap() = true;
     }
 
     /// The bytes at a vault path, as the server holds them.
     pub fn stored(&self, path: &str) -> Option<String> {
-        self.files.borrow().get(path).cloned()
+        self.files.read().unwrap().get(path).cloned()
     }
 
     pub fn has_dir(&self, path: &str) -> bool {
-        self.dirs.borrow().contains(path)
+        self.dirs.read().unwrap().contains(path)
     }
 
     pub fn requests(&self) -> Vec<Recorded> {
-        self.requests.borrow().clone()
+        self.requests.read().unwrap().clone()
     }
 
     fn store(&self, path: &str, content: String) {
         let segments: Vec<&str> = path.split('/').collect();
-        let mut dirs = self.dirs.borrow_mut();
+        let mut dirs = self.dirs.write().unwrap();
         // Every ancestor becomes a collection; the path itself does not, because
         // a file is not a collection and the fake answers `Depth: 1` for each.
         for depth in 1..segments.len() {
             dirs.insert(segments[..depth].join("/"));
         }
         drop(dirs);
-        self.files.borrow_mut().insert(path.to_string(), content);
+        self.files
+            .write()
+            .unwrap()
+            .insert(path.to_string(), content);
     }
 
     /// The href for a vault path, encoded the way a server encodes one.
@@ -177,12 +183,12 @@ impl FakeDav {
             format!("{path}/")
         };
         let mut all: BTreeSet<String> = BTreeSet::new();
-        for file in self.files.borrow().keys() {
+        for file in self.files.read().unwrap().keys() {
             if file.starts_with(&prefix) {
                 all.insert(format!("{prefix}{}", first_segment(file, &prefix)));
             }
         }
-        for dir in self.dirs.borrow().iter() {
+        for dir in self.dirs.read().unwrap().iter() {
             if dir != path && dir.starts_with(&prefix) {
                 all.insert(format!("{prefix}{}", first_segment(dir, &prefix)));
             }
@@ -193,11 +199,12 @@ impl FakeDav {
     }
 
     fn propfind(&self, path: &str, depth: Option<&str>) -> DavResponse {
-        let known = self.dirs.borrow().contains(path) || self.files.borrow().contains_key(path);
+        let known = self.dirs.read().unwrap().contains(path)
+            || self.files.read().unwrap().contains_key(path);
         if !known {
             return refusal(404, "Not Found");
         }
-        if self.dirs.borrow().contains(path) && depth == Some("1") {
+        if self.dirs.read().unwrap().contains(path) && depth == Some("1") {
             let members = self.members_of(path);
             return multistatus(&members.iter().map(|m| self.resource(m)).collect::<Vec<_>>());
         }
@@ -205,11 +212,17 @@ impl FakeDav {
     }
 
     fn resource(&self, path: &str) -> String {
-        let collection = self.dirs.borrow().contains(path);
+        let collection = self.dirs.read().unwrap().contains(path);
         let properties = if collection {
             "<D:resourcetype><D:collection/></D:resourcetype>".to_string()
         } else {
-            let size = self.files.borrow().get(path).map(String::len).unwrap_or(0);
+            let size = self
+                .files
+                .read()
+                .unwrap()
+                .get(path)
+                .map(String::len)
+                .unwrap_or(0);
             format!("<D:resourcetype/><D:getcontentlength>{size}</D:getcontentlength>")
         };
         format!(
@@ -217,27 +230,28 @@ impl FakeDav {
              </D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>\
              </D:response>",
             escape_xml(&self.href(path)),
-            self.mtime.borrow()
+            self.mtime.read().unwrap()
         )
     }
 
     fn mkcol(&self, path: &str) -> DavResponse {
-        if self.dirs.borrow().contains(path) || self.files.borrow().contains_key(path) {
+        if self.dirs.read().unwrap().contains(path) || self.files.read().unwrap().contains_key(path)
+        {
             return refusal(405, "Method Not Allowed");
         }
-        if !self.dirs.borrow().contains(parent_of(path).as_str()) {
+        if !self.dirs.read().unwrap().contains(parent_of(path).as_str()) {
             return refusal(409, "Conflict");
         }
-        self.dirs.borrow_mut().insert(path.to_string());
+        self.dirs.write().unwrap().insert(path.to_string());
         refusal(201, "Created")
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl WebdavTransport for FakeDav {
     async fn send(&self, request: DavRequest) -> Result<DavResponse> {
         let url = reqwest::Url::parse(&request.url).map_err(|e| BasesError::new(e.to_string()))?;
-        self.requests.borrow_mut().push(Recorded {
+        self.requests.write().unwrap().push(Recorded {
             method: request.method.as_str().to_string(),
             url: url.to_string(),
             depth: request.header("Depth").map(str::to_string),
@@ -245,7 +259,7 @@ impl WebdavTransport for FakeDav {
             body: request.body.clone(),
         });
 
-        if *self.timeout.borrow() {
+        if *self.timeout.read().unwrap() {
             // The transport budget elapsed. A real client would see a timeout
             // here, and the backend has to turn that into a refusal naming the
             // operation rather than hang.
@@ -255,7 +269,7 @@ impl WebdavTransport for FakeDav {
         let Some(path) = self.path_of(&url) else {
             return Ok(refusal(404, "Not Found"));
         };
-        if let Some(blocked) = self.refuse.borrow().get(&path) {
+        if let Some(blocked) = self.refuse.read().unwrap().get(&path) {
             return Ok(refusal(blocked.status, blocked.status_text));
         }
 
@@ -264,7 +278,7 @@ impl WebdavTransport for FakeDav {
         // backend that dropped the slash is refused the way a real server refuses
         // it, rather than quietly served -- this is the one part of the fake a
         // backend can be wrong about without the wire noticing.
-        let is_collection = self.dirs.borrow().contains(&path);
+        let is_collection = self.dirs.read().unwrap().contains(&path);
         let trailing = url.path().ends_with('/');
         // `Depth: 0` is exempt: a properties request for a collection is
         // answered by plenty of servers whichever way the URL is written, and
@@ -279,12 +293,17 @@ impl WebdavTransport for FakeDav {
 
         Ok(match request.method.as_str() {
             "PROPFIND" => self.propfind(&path, request.header("Depth")),
-            "GET" => match self.files.borrow().get(&path) {
+            "GET" => match self.files.read().unwrap().get(&path) {
                 Some(text) => DavResponse::new(200, "OK", text.clone().into_bytes()),
                 None => refusal(404, "Not Found"),
             },
             "PUT" => {
-                if !self.dirs.borrow().contains(parent_of(&path).as_str()) {
+                if !self
+                    .dirs
+                    .read()
+                    .unwrap()
+                    .contains(parent_of(&path).as_str())
+                {
                     refusal(409, "Conflict")
                 } else {
                     self.store(&path, request.body.unwrap_or_default());
@@ -293,7 +312,7 @@ impl WebdavTransport for FakeDav {
             }
             "MKCOL" => self.mkcol(&path),
             "DELETE" => {
-                if self.files.borrow_mut().remove(&path).is_none() {
+                if self.files.write().unwrap().remove(&path).is_none() {
                     refusal(404, "Not Found")
                 } else {
                     refusal(204, "No Content")

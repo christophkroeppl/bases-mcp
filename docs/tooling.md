@@ -16,6 +16,77 @@ just --list          everything else.
 | Lint | clippy | `just lint` |
 | Types | rust-analyzer / `cargo check` | `rust-analyzer diagnostics .` |
 
+## Running the server
+
+One binary, two transports. The vault is always chosen by the environment,
+never by a flag.
+
+```
+bases-mcp --transport stdio   one client over stdin/stdout (the default)
+bases-mcp --transport http    any number of clients over Streamable HTTP (SSE)
+MCP_TRANSPORT=stdio|http      the same choice, without a flag
+```
+
+`--transport` takes nothing else, and neither does `MCP_TRANSPORT`: a value
+this server does not know is a refusal naming the value, not a silent default.
+`bases-mcp --help` prints the same surface.
+
+### The vault
+
+Exactly one backend, and it must be named:
+
+```
+BASES_MCP_VAULT              path to a vault directory on the local filesystem
+BASES_MCP_WEBDAV_URL         WebDAV base URL, no credentials in it
+BASES_MCP_WEBDAV_USER        WebDAV username
+BASES_MCP_WEBDAV_PASSWORD    WebDAV password
+```
+
+`BASES_MCP_VAULT` wins if both are set, and says so on stderr. A selector that
+is set but blank is an error rather than an absence. All five live in
+`.env.example`, which is the documented home for environment variables.
+
+### The HTTP endpoint
+
+The listener is configured by two variables, and both refuse a value they
+cannot use:
+
+```
+MCP_HTTP_HOST    bind address (default 127.0.0.1)
+MCP_HTTP_PORT    bind port (default 8765)
+```
+
+The endpoint is `http://HOST:PORT/mcp`, and it is Streamable HTTP with SSE
+responses: `POST` carries a request, `GET` opens the SSE stream, `DELETE` closes
+a session. Each `initialize` returns an `Mcp-Session-Id` the client echoes on
+every later request.
+
+`allowed_hosts` is derived from the bind address, because rmcp rejects a `Host`
+header it does not recognise with a bare `403 Forbidden` and has no way to know
+which address a connection arrived on:
+
+| Bind | Served `Host` |
+|---|---|
+| `127.0.0.1` (default) | `localhost`, `127.0.0.1`, `::1` |
+| a specific address | that address, plus `localhost` |
+| `0.0.0.0` / `::` | **any** — every interface, so no address is knowable |
+
+Binding `0.0.0.0` therefore opens the server to every `Host` header, which is
+the operator's explicit choice, is printed on stderr at startup, and is recorded
+as a Divergence in `docs/divergences.md`. It is not a default anyone has to undo,
+and it is not safe on a network this server is not trusted on: the listener has
+no authentication. That gap is recorded, not hidden.
+
+### The transport is tested over the wire
+
+`tests/http_transport.rs` and `tests/stdio_transport.rs` spawn the real binary
+and drive it as an MCP client. The HTTP suite asserts the handshake, the six
+tools and their schemas, a tool call that reaches the engine, a concurrent run
+across six sessions, and that a `Host` naming the bound address is served while
+a neighbour is refused. The stdio suite drives `initialize`, `tools/list` and
+`tools/call` through stdin/stdout, and asserts `MCP_TRANSPORT` selects the
+transport it names.
+
 ## Obsidian CLI gates
 
 `just check` does not need Obsidian. `just parity` and `just check-all` do.

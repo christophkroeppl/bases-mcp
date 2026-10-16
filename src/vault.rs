@@ -26,7 +26,7 @@
 //!    The original's own comments merge the two into one sentence, which its code
 //!    does not do; both are pinned separately in `tests/vault_equivalence.rs`.
 //!
-//! The index lives behind `RefCell` and the vault is handed out as an `Rc<Vault>`,
+//! The index lives behind `RefCell` and the vault is handed out as an `Arc<Vault>`,
 //! because every `file.*` accessor is a closure that has to reach back into the
 //! index from inside the evaluator. A `&mut self` API and an `Rc` are not
 //! compatible, and `Rc` is the direction the rest of the value layer already went
@@ -49,10 +49,11 @@ pub use webdav::{
     WebdavMethod, WebdavTransport, WebdavVaultOptions, WebdavVaultSource,
 };
 
-use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use chrono::{DateTime, FixedOffset};
 use regex::Regex;
@@ -70,7 +71,7 @@ pub struct NoteRecord {
     ///
     /// `Rc` because every `file.properties` access hands the evaluator a whole
     /// map and the index holds the same one for every row of a query.
-    pub frontmatter: Rc<BTreeMap<String, BasesValue>>,
+    pub frontmatter: Arc<BTreeMap<String, BasesValue>>,
     pub size: u64,
     pub mtime: DateTime<FixedOffset>,
 }
@@ -81,40 +82,40 @@ pub struct Vault {
     /// through it while an overlay vault is built over the same listing. The
     /// verify step behind `add_note_to_base` needs exactly that, and moving the
     /// box out is not an option — the index is still reading from it.
-    source: Rc<dyn VaultSource>,
+    source: Arc<dyn VaultSource>,
     /// `Rc` per record so `note()` can hand one out without holding the map
     /// borrowed. The map is a `BTreeMap` rather than an insertion-ordered one
     /// because `list()` is sorted on every backend, so key order IS registration
     /// order -- and registration order is what breaks link ties.
-    notes: RefCell<BTreeMap<String, Rc<NoteRecord>>>,
-    bases: RefCell<Vec<String>>,
-    by_path: RefCell<PathIndex>,
-    ready: Cell<bool>,
+    notes: RwLock<BTreeMap<String, Arc<NoteRecord>>>,
+    bases: RwLock<Vec<String>>,
+    by_path: RwLock<PathIndex>,
+    ready: AtomicBool,
 }
 
 impl std::fmt::Debug for Vault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Vault")
             .field("source", &self.source.kind())
-            .field("notes", &self.notes.borrow().len())
-            .field("bases", &self.bases.borrow().len())
+            .field("notes", &self.notes.read().unwrap().len())
+            .field("bases", &self.bases.read().unwrap().len())
             .finish()
     }
 }
 
 impl Vault {
     pub fn new(source: Box<dyn VaultSource>) -> Self {
-        Self::with_source(Rc::from(source))
+        Self::with_source(Arc::from(source))
     }
 
     /// Index a vault whose backend is already shared.
-    pub fn with_source(source: Rc<dyn VaultSource>) -> Self {
+    pub fn with_source(source: Arc<dyn VaultSource>) -> Self {
         Self {
             source,
-            notes: RefCell::new(BTreeMap::new()),
-            bases: RefCell::new(Vec::new()),
-            by_path: RefCell::new(PathIndex::new()),
-            ready: Cell::new(false),
+            notes: RwLock::new(BTreeMap::new()),
+            bases: RwLock::new(Vec::new()),
+            by_path: RwLock::new(PathIndex::new()),
+            ready: AtomicBool::new(false),
         }
     }
 
@@ -132,14 +133,14 @@ impl Vault {
     /// For an overlay index built over the same listing — see
     /// [`crate::drafts`], which splices one unsaved note into the real backend
     /// so verification exercises the real link resolution rather than a stand-in.
-    pub fn shared_source(&self) -> Rc<dyn VaultSource> {
-        Rc::clone(&self.source)
+    pub fn shared_source(&self) -> Arc<dyn VaultSource> {
+        Arc::clone(&self.source)
     }
 
     /// Build the index. Safe to call repeatedly; use [`Vault::reload`] to force a
     /// rebuild after writes.
     pub async fn load(&self) -> Result<()> {
-        if self.ready.get() {
+        if self.ready.load(Ordering::Acquire) {
             return Ok(());
         }
         self.rebuild().await
@@ -160,7 +161,7 @@ impl Vault {
     async fn rebuild(&self) -> Result<()> {
         let paths = self.source.list().await?;
 
-        let mut notes: BTreeMap<String, Rc<NoteRecord>> = BTreeMap::new();
+        let mut notes: BTreeMap<String, Arc<NoteRecord>> = BTreeMap::new();
         let mut bases: Vec<String> = Vec::new();
         for path in paths {
             if is_base_path(&path) {
@@ -176,10 +177,10 @@ impl Vault {
             let frontmatter = coerce_frontmatter(&parsed.frontmatter, self);
             notes.insert(
                 path.clone(),
-                Rc::new(NoteRecord {
+                Arc::new(NoteRecord {
                     path,
                     parsed,
-                    frontmatter: Rc::new(frontmatter),
+                    frontmatter: Arc::new(frontmatter),
                     size: stat.size,
                     mtime: stat.mtime,
                 }),
@@ -199,24 +200,24 @@ impl Vault {
         }
         bases.sort();
 
-        *self.notes.borrow_mut() = notes;
-        *self.bases.borrow_mut() = bases;
-        *self.by_path.borrow_mut() = by_path;
-        self.ready.set(true);
+        *self.notes.write().unwrap() = notes;
+        *self.bases.write().unwrap() = bases;
+        *self.by_path.write().unwrap() = by_path;
+        self.ready.store(true, Ordering::Release);
         Ok(())
     }
 
     /// Every indexed note, in registration order.
     pub fn note_paths(&self) -> Vec<String> {
-        self.notes.borrow().keys().cloned().collect()
+        self.notes.read().unwrap().keys().cloned().collect()
     }
 
     pub fn base_paths(&self) -> Vec<String> {
-        self.bases.borrow().clone()
+        self.bases.read().unwrap().clone()
     }
 
-    pub fn note(&self, path: &str) -> Option<Rc<NoteRecord>> {
-        self.notes.borrow().get(path).cloned()
+    pub fn note(&self, path: &str) -> Option<Arc<NoteRecord>> {
+        self.notes.read().unwrap().get(path).cloned()
     }
 
     /// A note's text with CRLF normalised to LF — see [`VaultSource::read_note`].
@@ -226,65 +227,65 @@ impl Vault {
 
     /// Resolve a link target to a vault path, or `None` when unresolved.
     pub fn resolve(&self, target: &str) -> Option<String> {
-        match_path(target, &self.by_path.borrow())
+        match_path(target, &self.by_path.read().unwrap())
     }
 
     /// A `FileValue` with accessors bound to this vault.
     ///
-    /// Takes `&Rc<Self>` because every accessor is a closure that has to reach
+    /// Takes `&Arc<Self>` because every accessor is a closure that has to reach
     /// the index, and a closure cannot borrow from a plain `&self` that does not
     /// outlive it. That is why the vault is shared rather than owned.
-    pub fn file_value(self: &Rc<Self>, path: &str) -> FileValue {
+    pub fn file_value(self: &Arc<Self>, path: &str) -> FileValue {
         // Every accessor is spelled out rather than built by a helper, because each
         // one has a different return type and a helper would have to be generic over
         // a type it cannot name.
         let tags = {
-            let vault = Rc::clone(self);
+            let vault = Arc::clone(self);
             let path = path.to_string();
-            Rc::new(move || vault.tags_for(&path)) as _
+            Arc::new(move || vault.tags_for(&path)) as _
         };
         let links = {
-            let vault = Rc::clone(self);
+            let vault = Arc::clone(self);
             let path = path.to_string();
-            Rc::new(move || vault.links_for(&path)) as _
+            Arc::new(move || vault.links_for(&path)) as _
         };
         let embeds = {
-            let vault = Rc::clone(self);
+            let vault = Arc::clone(self);
             let path = path.to_string();
-            Rc::new(move || vault.embeds_for(&path)) as _
+            Arc::new(move || vault.embeds_for(&path)) as _
         };
         let backlinks = {
-            let vault = Rc::clone(self);
+            let vault = Arc::clone(self);
             let path = path.to_string();
-            Rc::new(move || vault.backlinks_for(&path)) as _
+            Arc::new(move || vault.backlinks_for(&path)) as _
         };
         let properties = {
-            let vault = Rc::clone(self);
+            let vault = Arc::clone(self);
             let path = path.to_string();
-            Rc::new(move || vault.properties_for(&path)) as _
+            Arc::new(move || vault.properties_for(&path)) as _
         };
         // `file.ctime` and `file.mtime` read the SAME value, deliberately: a note's
         // creation time is recorded by neither backend, and a `FileStat` carries one
         // instant. Wired to one accessor rather than two so the coupling is visible
         // here rather than implied by two identical bodies.
         let mtime = {
-            let vault = Rc::clone(self);
+            let vault = Arc::clone(self);
             let path = path.to_string();
-            Rc::new(move || vault.instant_for(&path)) as _
+            Arc::new(move || vault.instant_for(&path)) as _
         };
-        let ctime = Rc::clone(&mtime);
+        let ctime = Arc::clone(&mtime);
         let size = {
-            let vault = Rc::clone(self);
+            let vault = Arc::clone(self);
             let path = path.to_string();
-            Rc::new(move || vault.size_for(&path)) as _
+            Arc::new(move || vault.size_for(&path)) as _
         };
         let tasks = {
-            let vault = Rc::clone(self);
+            let vault = Arc::clone(self);
             let path = path.to_string();
-            Rc::new(move || vault.tasks_for(&path)) as _
+            Arc::new(move || vault.tasks_for(&path)) as _
         };
-        let vault = Rc::clone(self);
-        let resolve = Rc::new(move |target: &str| {
+        let vault = Arc::clone(self);
+        let resolve = Arc::new(move |target: &str| {
             vault
                 .resolve(target)
                 .map(|resolved| vault.file_value(&resolved))
@@ -305,13 +306,13 @@ impl Vault {
             // which is the question `file.backlinks` already answers. The resolver
             // reaches for backlinks, so this stays false rather than paying for a
             // second pass over the index.
-            links_to: Rc::new(|_| false),
+            links_to: Arc::new(|_| false),
         };
         FileValue::new(path.to_string(), accessors)
     }
 
     /// A `FileValue` for `path`, or `None` when the note does not exist.
-    pub fn file_for(self: &Rc<Self>, path: &str) -> Option<FileValue> {
+    pub fn file_for(self: &Arc<Self>, path: &str) -> Option<FileValue> {
         self.note(path).map(|_| self.file_value(path))
     }
 
@@ -588,5 +589,5 @@ pub fn task_value(task: &TaskItem) -> BasesValue {
     );
     out.insert("text".to_string(), BasesValue::String(task.text.clone()));
     out.insert("completed".to_string(), BasesValue::Bool(task.checked));
-    BasesValue::Namespace(Rc::new(out))
+    BasesValue::Namespace(Arc::new(out))
 }

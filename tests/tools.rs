@@ -25,7 +25,7 @@
 mod common;
 
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use bases_mcp::config::{parse_config, ConfigResult, Env, VaultConfig};
 use bases_mcp::service::Resolver;
@@ -40,14 +40,14 @@ fn sandbox() -> (TempDir, ToolSurface) {
     seed_dir(dir.path(), &load_corpus_from(&vault_dir()));
     let resolver =
         futures_block_on(Resolver::open_dir(dir.path())).expect("the sandbox vault opens");
-    (dir, ToolSurface::new(Rc::new(resolver)))
+    (dir, ToolSurface::new(Arc::new(resolver)))
 }
 
 /// A tool surface over the real testing vault. Only the read tools are called.
 fn oracle() -> ToolSurface {
     let resolver =
         futures_block_on(Resolver::open_dir(vault_dir())).expect("the testing vault opens");
-    ToolSurface::new(Rc::new(resolver))
+    ToolSurface::new(Arc::new(resolver))
 }
 
 /// Call one tool. `Ok` here means the call was routed; the RESULT carries

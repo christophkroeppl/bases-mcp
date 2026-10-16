@@ -10,7 +10,7 @@
 //! satisfy more than one structural test.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveTime, TimeZone,
@@ -804,12 +804,12 @@ fn g_file(args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
         } => {
             let path = resolved.as_deref().unwrap_or(target);
             Ok(match (ctx.file.accessors.resolve)(path) {
-                Some(f) => BasesValue::File(Rc::new(f)),
+                Some(f) => BasesValue::File(Arc::new(f)),
                 None => BasesValue::Null,
             })
         }
         BasesValue::String(s) => Ok(match (ctx.file.accessors.resolve)(s) {
-            Some(f) => BasesValue::File(Rc::new(f)),
+            Some(f) => BasesValue::File(Arc::new(f)),
             None => BasesValue::Null,
         }),
         _ => Ok(BasesValue::Null),
@@ -1108,7 +1108,7 @@ fn m_str_as_file(
 ) -> Result<BasesValue> {
     let s = as_str(target, "asFile")?;
     Ok(match (ctx.file.accessors.resolve)(&s) {
-        Some(f) => BasesValue::File(Rc::new(f)),
+        Some(f) => BasesValue::File(Arc::new(f)),
         None => BasesValue::Null,
     })
 }
@@ -1465,7 +1465,7 @@ fn m_link_as_file(
     };
     let path = resolved.as_deref().unwrap_or(target);
     Ok(match (ctx.file.accessors.resolve)(path) {
-        Some(f) => BasesValue::File(Rc::new(f)),
+        Some(f) => BasesValue::File(Arc::new(f)),
         None => BasesValue::Null,
     })
 }
@@ -1973,7 +1973,7 @@ fn build() -> Registries {
 
 /// A namespace of frontmatter, presented to the evaluator as an object.
 pub fn namespace(map: BTreeMap<String, BasesValue>) -> BasesValue {
-    BasesValue::Namespace(Rc::new(map))
+    BasesValue::Namespace(Arc::new(map))
 }
 
 /// Re-exported so `service.rs` need not reach into `evaluator` for a type it

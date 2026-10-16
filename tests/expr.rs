@@ -6,7 +6,7 @@
 //! quirks that were probed against a live Obsidian rather than inferred.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use bases_mcp::evaluator::{evaluate_expression, EvalContext, ThisContext};
 use bases_mcp::value::{BasesValue, Duration, FileAccessors, FileValue};
@@ -14,13 +14,13 @@ use bases_mcp::value::{BasesValue, Duration, FileAccessors, FileValue};
 /// A one-note vault, enough for link resolution and the file methods.
 fn make_ctx(options: Option<AccessorsOptions>) -> EvalContext {
     let opts = options.unwrap_or_default();
-    let tags: Rc<Vec<BasesValue>> = Rc::new(
+    let tags: Arc<Vec<BasesValue>> = Arc::new(
         opts.tags
             .iter()
             .map(|t| BasesValue::String(t.clone()))
             .collect(),
     );
-    let links: Rc<Vec<BasesValue>> = Rc::new(
+    let links: Arc<Vec<BasesValue>> = Arc::new(
         opts.links
             .iter()
             .map(|t| BasesValue::Link {
@@ -30,19 +30,21 @@ fn make_ctx(options: Option<AccessorsOptions>) -> EvalContext {
             })
             .collect(),
     );
-    let props: Rc<BTreeMap<String, BasesValue>> = Rc::new(opts.note.clone());
+    let props: Arc<BTreeMap<String, BasesValue>> = Arc::new(opts.note.clone());
     let accessors = FileAccessors {
-        tags: Rc::new(move || (*tags).clone()),
-        links: Rc::new(move || (*links).clone()),
-        embeds: Rc::new(Vec::new),
-        backlinks: Rc::new(Vec::new),
-        properties: Rc::new(move || (*props).clone()),
-        ctime: Rc::new(|| bases_mcp::value::BasesDate::from_millis(1_577_836_800_000)),
-        mtime: Rc::new(|| bases_mcp::value::BasesDate::from_millis(1_767_225_600_000)),
-        size: Rc::new(|| 42),
-        tasks: Rc::new(Vec::new),
-        resolve: Rc::new(|target: &str| Some(FileValue::new(target.to_string(), accessors_shim()))),
-        links_to: Rc::new(|_: &str| false),
+        tags: Arc::new(move || (*tags).clone()),
+        links: Arc::new(move || (*links).clone()),
+        embeds: Arc::new(Vec::new),
+        backlinks: Arc::new(Vec::new),
+        properties: Arc::new(move || (*props).clone()),
+        ctime: Arc::new(|| bases_mcp::value::BasesDate::from_millis(1_577_836_800_000)),
+        mtime: Arc::new(|| bases_mcp::value::BasesDate::from_millis(1_767_225_600_000)),
+        size: Arc::new(|| 42),
+        tasks: Arc::new(Vec::new),
+        resolve: Arc::new(|target: &str| {
+            Some(FileValue::new(target.to_string(), accessors_shim()))
+        }),
+        links_to: Arc::new(|_: &str| false),
     };
     let file = FileValue::new(
         opts.path.clone().unwrap_or_else(|| "Notes/Alpha.md".into()),
@@ -66,17 +68,17 @@ fn make_ctx(options: Option<AccessorsOptions>) -> EvalContext {
 /// bare shim with no closures that call back is enough.
 fn accessors_shim() -> FileAccessors {
     FileAccessors {
-        tags: Rc::new(Vec::new),
-        links: Rc::new(Vec::new),
-        embeds: Rc::new(Vec::new),
-        backlinks: Rc::new(Vec::new),
-        properties: Rc::new(BTreeMap::new),
-        ctime: Rc::new(|| bases_mcp::value::BasesDate::from_millis(0)),
-        mtime: Rc::new(|| bases_mcp::value::BasesDate::from_millis(0)),
-        size: Rc::new(|| 0),
-        tasks: Rc::new(Vec::new),
-        resolve: Rc::new(|_: &str| None),
-        links_to: Rc::new(|_: &str| false),
+        tags: Arc::new(Vec::new),
+        links: Arc::new(Vec::new),
+        embeds: Arc::new(Vec::new),
+        backlinks: Arc::new(Vec::new),
+        properties: Arc::new(BTreeMap::new),
+        ctime: Arc::new(|| bases_mcp::value::BasesDate::from_millis(0)),
+        mtime: Arc::new(|| bases_mcp::value::BasesDate::from_millis(0)),
+        size: Arc::new(|| 0),
+        tasks: Arc::new(Vec::new),
+        resolve: Arc::new(|_: &str| None),
+        links_to: Arc::new(|_: &str| false),
     }
 }
 

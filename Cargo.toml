@@ -38,17 +38,27 @@ name = "parity"
 required-features = ["parity"]
 
 [dependencies]
+
 # The official Rust MCP SDK, so the wire format cannot drift from the clients
 # this has to talk to. `schemars` is not optional here: tool input schemas are
 # derived from the parameter types, and a tool with no schema is a tool an
 # agent cannot call correctly.
 #
-# `local` is not optional either, and the reason is the vault: it is indexed
-# behind `RefCell` and every `file.*` accessor is an `Rc` closure reaching back
-# into that index, so the Resolver is `!Send` by construction. `local` is rmcp's
-# mode for a single-threaded server, and it is what lets a handler hold one.
-rmcp = { version = "3", features = ["server", "transport-io", "schemars", "local"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs"] }
+# `transport-streamable-http-server` is the second transport this binary
+# speaks, selected by `--transport http` (see `src/main.rs`). The Streamable
+# HTTP service is a tower `Service`, so it is mounted on a minimal axum router
+# rather than wrapped in a second process: one binary, one vault, two
+# transports. `local` is NOT enabled: the vault index is behind `RwLock` rather
+# than `RefCell`, so the handler is `Send + Sync` and the multi-threaded
+# runtime can run it — see `src/vault.rs`.
+rmcp = { version = "3", features = ["server", "transport-io", "schemars", "transport-streamable-http-server"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs", "net", "signal"] }
+# Mounts rmcp's Streamable HTTP service at a path. `http1` and `tokio` are all
+# the server needs; body handling is rmcp's own.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+# `StreamableHttpService` is a tower service; axum drives it through the
+# tower-service trait directly.
+tower = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
@@ -91,6 +101,9 @@ quick-xml = { version = "0.39", default-features = false, features = ["encoding"
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# The HTTP suite drives several sessions at once; `FuturesUnordered` is the
+# join that keeps them from being a fixed sequence.
+futures = "0.3"
 
 [profile.release]
 # The evaluator recurses over a Pratt AST and is the hot path of every query.

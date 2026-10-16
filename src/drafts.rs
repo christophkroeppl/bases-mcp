@@ -27,9 +27,9 @@
 //! `DraftHost` trait — Rust's module system already states the direction, and a
 //! one-implementor trait would only restate it.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::RwLock;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
@@ -175,7 +175,7 @@ pub struct DraftSeed {
 /// answers one call at a time.
 #[derive(Debug)]
 pub struct DraftStore {
-    drafts: RefCell<HashMap<String, StoredDraft>>,
+    drafts: RwLock<HashMap<String, StoredDraft>>,
     ttl_ms: i64,
 }
 
@@ -190,7 +190,7 @@ impl DraftStore {
     /// which is how the expiry path is exercised without waiting.
     pub fn new(ttl_ms: i64) -> Self {
         Self {
-            drafts: RefCell::new(HashMap::new()),
+            drafts: RwLock::new(HashMap::new()),
             ttl_ms,
         }
     }
@@ -208,14 +208,15 @@ impl DraftStore {
             expires_at: now_ms() + self.ttl_ms,
         };
         self.drafts
-            .borrow_mut()
+            .write()
+            .unwrap()
             .insert(record.id.clone(), record.clone());
         record
     }
 
     /// Look up a live draft. Expiry is a miss, not a special case to handle.
     pub fn get(&self, id: &str) -> Result<StoredDraft> {
-        let draft = self.drafts.borrow().get(id).cloned();
+        let draft = self.drafts.read().unwrap().get(id).cloned();
         let Some(draft) = draft else {
             return Err(expired_draft(id, self.ttl_ms));
         };
@@ -228,16 +229,16 @@ impl DraftStore {
 
     /// Drop a draft. One draft commits one note, so a commit consumes it.
     pub fn release(&self, id: &str) {
-        self.drafts.borrow_mut().remove(id);
+        self.drafts.write().unwrap().remove(id);
     }
 
     /// Drop everything. Exists so a test starts from a known-empty store.
     pub fn clear(&self) {
-        self.drafts.borrow_mut().clear();
+        self.drafts.write().unwrap().clear();
     }
 
     pub fn len(&self) -> usize {
-        self.drafts.borrow().len()
+        self.drafts.read().unwrap().len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -247,7 +248,8 @@ impl DraftStore {
     fn prune(&self) {
         let now = now_ms();
         self.drafts
-            .borrow_mut()
+            .write()
+            .unwrap()
             .retain(|_, draft| draft.expires_at > now);
     }
 }
@@ -707,7 +709,7 @@ async fn verification_failures(
 /// may read another) and written into the bag as each is computed, because that
 /// is the graph the query pipeline builds.
 fn draft_eval_context(
-    vault: &Rc<Vault>,
+    vault: &Arc<Vault>,
     path: &str,
     base: &BaseFile,
     context: Option<&str>,
@@ -1402,8 +1404,8 @@ fn basename(path: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 /// The real vault with one unsaved note spliced in, and read-only.
-async fn vault_with_draft(inner: Rc<dyn VaultSource>, path: &str, content: &str) -> Rc<Vault> {
-    let vault = Rc::new(Vault::new(Box::new(DraftVaultSource {
+async fn vault_with_draft(inner: Arc<dyn VaultSource>, path: &str, content: &str) -> Arc<Vault> {
+    let vault = Arc::new(Vault::new(Box::new(DraftVaultSource {
         inner,
         path: path.to_string(),
         content: content.to_string(),
@@ -1419,7 +1421,7 @@ async fn vault_with_draft(inner: Rc<dyn VaultSource>, path: &str, content: &str)
 
 /// The overlay the verify step reads through.
 struct DraftVaultSource {
-    inner: Rc<dyn VaultSource>,
+    inner: Arc<dyn VaultSource>,
     path: String,
     content: String,
 }
@@ -1433,7 +1435,7 @@ impl std::fmt::Debug for DraftVaultSource {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl VaultSource for DraftVaultSource {
     fn kind(&self) -> SourceKind {
         self.inner.kind()

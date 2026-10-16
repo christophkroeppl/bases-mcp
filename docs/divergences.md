@@ -244,6 +244,62 @@ and the registry is where that belongs rather than a comment in either tree.
 
 ---
 
+## D9 — The HTTP transport is network-accessible, unauthenticated, and trusts the network
+
+| | |
+|---|---|
+| **Construct** | The Streamable HTTP transport: `--transport http` / `MCP_TRANSPORT=http`, endpoint `http://HOST:PORT/mcp` |
+| **Ours** | The listener is bound to whatever `MCP_HTTP_HOST` names — `127.0.0.1` by default, any interface at `0.0.0.0` — and answers any client that can reach the socket. There is **no authentication**, **no authorization**, and **no rate limiting**. `Origin` validation is disabled (`allowed_origins` is empty, which is rmcp's default), so a browser page can issue a cross-origin request and it is served. |
+| **Obsidian** | Does not apply. Obsidian has no HTTP transport and no listener; it is a desktop application. There is no upstream behaviour to diverge from — this entry records a property of a surface that did not exist before this branch, so that the trust model behind it is written down rather than assumed. |
+| **Evidence** | Measured on this branch at `4f2c651` — the commit that derives `allowed_hosts` from the bind address — against the built binary: the listener starts on the bound address; a request from a second process on the same host completes a full `initialize` → `tools/list` → `tools/call` handshake with no credential of any kind; an `Origin` header is accepted rather than checked; and `MCP_HTTP_HOST=0.0.0.0` makes every `Host` header acceptable (see below), so the listener serves any address the host has. |
+| **verify-in-obsidian** | no — the surface is ours, not Obsidian's |
+
+The **trust model is that the network is safe.** The server is expected to run
+in a private network with no public exposure. That assumption is not enforced by
+the code and nothing in this repository verifies it: it is an operator decision,
+not a property of the build. A deployment that binds `0.0.0.0` on an untrusted
+link has an unauthenticated, network-reachable server that can read and write
+the vault it is scoped to, and no record of who called what.
+
+This is a **recorded, accepted gap**, not a claim that the work below is done.
+`docs/BACKLOG-network-security.md` (on `feat/security-backlog`) carries the
+hardening list: authentication, authorization, rate limiting, TLS, input
+validation at the resolver boundary, and audit logging. It should be re-opened
+before this server is ever exposed beyond the network it is currently trusted
+on.
+
+### What is enforced anyway
+
+Three things are not left to the operator, and are pinned by tests in
+`tests/http_transport.rs`:
+
+- **A `Host` that names the bound address is served; a neighbour is refused.**
+  rmcp validates `Host` against `allowed_hosts` and answers a request it does
+  not recognise with `403 Forbidden: Host header is not allowed`. Before this
+  branch `allowed_hosts` was rmcp's hardcoded loopback list
+  (`localhost`, `127.0.0.1`, `::1`), so `MCP_HTTP_HOST=0.0.0.0` bound every
+  interface while every non-loopback `Host` was refused: a listener that was
+  reachable on the network and served nothing, with no diagnostic. The list is
+  now derived from the address the operator bound — a specific address is served
+  on that address and on `localhost`; `0.0.0.0` / `::` allow **every** host,
+  because the address a request arrived on is not knowable at bind time.
+  `0.0.0.0` therefore widens what is accepted by design, says so on stderr at
+  startup, and is the operator's explicit choice.
+- **A bad bind address or port is a refusal, not a fallback.** `MCP_HTTP_HOST`
+  and `MCP_HTTP_PORT` name the variable and the value they rejected, and a
+  set-but-blank port is an error rather than an absence. Before this branch a
+  typo'd host silently fell back to `127.0.0.1` and a blank port to `8765`.
+- **The stdio path is not a separate server.** `tests/stdio_transport.rs` spawns
+  the real binary and drives `initialize` → `tools/list` → `tools/call` over
+  stdin/stdout, so a change that broke the default transport while every HTTP
+  test stayed green would fail there rather than ship.
+
+The remaining gap is the network, not the transport: the endpoints above are
+about *which* client reaches the server, and nothing here decides *whether* the
+server should be reachable at all.
+
+---
+
 ## Behaviour probes that are NOT divergences
 
 Recorded because they were non-obvious and cost real probing time. We match

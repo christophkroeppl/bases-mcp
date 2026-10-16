@@ -10,9 +10,9 @@
 //! hood — the right amount of ceremony for a stdio server whose vault lives on
 //! a local disk and whose latency budget is milliseconds.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
@@ -52,13 +52,13 @@ pub fn content_hash(text: &str) -> String {
 
 pub struct FsVaultSource {
     root: PathBuf,
-    files: RefCell<Option<Vec<String>>>,
+    files: RwLock<Option<Vec<String>>>,
     /// Note text, NORMALISED — the same string [`VaultSource::read_note`] returns.
     /// The cache is not a copy of the bytes on disk and never was meant to be; it
     /// is what the next read would produce, so a cache hit and a fresh read cannot
     /// disagree about a note's line endings.
-    text_cache: RefCell<HashMap<String, String>>,
-    hash_cache: RefCell<HashMap<String, String>>,
+    text_cache: RwLock<HashMap<String, String>>,
+    hash_cache: RwLock<HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for FsVaultSource {
@@ -89,9 +89,9 @@ impl FsVaultSource {
         }
         Ok(Self {
             root,
-            files: RefCell::new(None),
-            text_cache: RefCell::new(HashMap::new()),
-            hash_cache: RefCell::new(HashMap::new()),
+            files: RwLock::new(None),
+            text_cache: RwLock::new(HashMap::new()),
+            hash_cache: RwLock::new(HashMap::new()),
         })
     }
 
@@ -104,9 +104,9 @@ impl FsVaultSource {
     /// Synchronous because there is nothing to await: the TypeScript is `async`
     /// only because every method in that interface was.
     pub fn refresh(&self) {
-        *self.files.borrow_mut() = None;
-        self.text_cache.borrow_mut().clear();
-        self.hash_cache.borrow_mut().clear();
+        *self.files.write().unwrap() = None;
+        self.text_cache.write().unwrap().clear();
+        self.hash_cache.write().unwrap().clear();
     }
 
     /// Depth-first over the tree, collecting indexable paths.
@@ -253,25 +253,25 @@ fn io(context: &str, path: &Path, error: std::io::Error) -> BasesError {
     BasesError::new(format!("{context} {}: {error}", path.display()))
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl VaultSource for FsVaultSource {
     fn kind(&self) -> SourceKind {
         SourceKind::Fs
     }
 
     async fn list(&self) -> Result<Vec<String>> {
-        if let Some(files) = self.files.borrow().clone() {
+        if let Some(files) = self.files.read().unwrap().clone() {
             return Ok(files);
         }
         let mut out: Vec<String> = Vec::new();
         self.walk("", &mut out).await;
         out.sort();
-        *self.files.borrow_mut() = Some(out.clone());
+        *self.files.write().unwrap() = Some(out.clone());
         Ok(out)
     }
 
     async fn read_note(&self, rel: &str) -> Result<String> {
-        if let Some(text) = self.text_cache.borrow().get(rel) {
+        if let Some(text) = self.text_cache.read().unwrap().get(rel) {
             return Ok(text.clone());
         }
         let abs = self.abs(rel)?;
@@ -285,7 +285,8 @@ impl VaultSource for FsVaultSource {
             .map_err(|e| io("read", &abs, e))?;
         let text = normalise_line_endings(&String::from_utf8_lossy(&bytes));
         self.text_cache
-            .borrow_mut()
+            .write()
+            .unwrap()
             .insert(rel.to_string(), text.clone());
         Ok(text)
     }
@@ -302,9 +303,10 @@ impl VaultSource for FsVaultSource {
         // Keep the cache consistent with disk, so a later `read_note` cannot
         // hand back the pre-write copy we just superseded.
         self.text_cache
-            .borrow_mut()
+            .write()
+            .unwrap()
             .insert(rel.to_string(), text.clone());
-        self.hash_cache.borrow_mut().remove(rel);
+        self.hash_cache.write().unwrap().remove(rel);
         Ok(text)
     }
 
@@ -347,10 +349,11 @@ impl VaultSource for FsVaultSource {
         // normalised form; caching the raw bytes here would hand the next
         // `read_note` line endings no read of this file could ever produce.
         self.text_cache
-            .borrow_mut()
+            .write()
+            .unwrap()
             .insert(rel.to_string(), normalise_line_endings(data));
-        self.hash_cache.borrow_mut().remove(rel);
-        *self.files.borrow_mut() = None;
+        self.hash_cache.write().unwrap().remove(rel);
+        *self.files.write().unwrap() = None;
         Ok(())
     }
 
@@ -370,12 +373,13 @@ impl VaultSource for FsVaultSource {
     }
 
     async fn hash(&self, rel: &str) -> Result<String> {
-        if let Some(hash) = self.hash_cache.borrow().get(rel) {
+        if let Some(hash) = self.hash_cache.read().unwrap().get(rel) {
             return Ok(hash.clone());
         }
         let hash = content_hash(&self.read_note(rel).await?);
         self.hash_cache
-            .borrow_mut()
+            .write()
+            .unwrap()
             .insert(rel.to_string(), hash.clone());
         Ok(hash)
     }
@@ -402,9 +406,9 @@ impl VaultSource for FsVaultSource {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(io("delete", &abs, error)),
         }
-        self.text_cache.borrow_mut().remove(rel);
-        self.hash_cache.borrow_mut().remove(rel);
-        *self.files.borrow_mut() = None;
+        self.text_cache.write().unwrap().remove(rel);
+        self.hash_cache.write().unwrap().remove(rel);
+        *self.files.write().unwrap() = None;
         Ok(())
     }
 }

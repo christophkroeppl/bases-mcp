@@ -42,5 +42,6 @@ pub mod render;
 pub mod service;
 pub mod stdlib;
 pub mod tools;
+pub mod transport;
 pub mod value;
 pub mod vault;

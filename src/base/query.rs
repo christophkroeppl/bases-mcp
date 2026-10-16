@@ -11,7 +11,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::ast::Node;
 use crate::depth::{Depth, FILTER};
@@ -72,7 +72,7 @@ pub struct QueryOptions {
 /// and no host was supplied: the Obsidian CLI returns `[]` in that case, and
 /// silently mirroring that is exactly what makes the behaviour undebuggable.
 pub fn query_base(
-    vault: &Rc<Vault>,
+    vault: &Arc<Vault>,
     base_path: &str,
     base: &BaseFile,
     options: &QueryOptions,
@@ -179,7 +179,7 @@ pub fn query_base(
 /// a note, and each way of failing to is named for what it actually is: a
 /// `.base` and a folder both EXIST in the vault, so reporting either as missing
 /// sends the agent hunting for a typo in a file it can already see.
-pub fn resolve_host_note(vault: &Rc<Vault>, context: Option<&str>) -> Result<Option<ThisContext>> {
+pub fn resolve_host_note(vault: &Arc<Vault>, context: Option<&str>) -> Result<Option<ThisContext>> {
     let Some(context) = context else {
         return Ok(None);
     };
@@ -491,7 +491,7 @@ pub fn resolve_property(id: &str, ctx: &EvalContext) -> Result<BasesValue> {
 
 /// The evaluation context for one note.
 fn context_for(
-    vault: &Rc<Vault>,
+    vault: &Arc<Vault>,
     path: &str,
     formula: BTreeMap<String, BasesValue>,
     this_value: Option<&ThisContext>,

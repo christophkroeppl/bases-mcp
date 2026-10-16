@@ -254,7 +254,7 @@ fn frontmatter_becomes_properties_the_evaluator_can_read() {
     assert_eq!(note.frontmatter.get("done"), Some(&BasesValue::Bool(false)));
     assert_eq!(
         note.frontmatter.get("project"),
-        Some(&BasesValue::Namespace(std::rc::Rc::new(
+        Some(&BasesValue::Namespace(std::sync::Arc::new(
             [("owner".to_string(), BasesValue::String("me".into()))]
                 .into_iter()
                 .collect()
@@ -263,7 +263,7 @@ fn frontmatter_becomes_properties_the_evaluator_can_read() {
     // The frontmatter segment shares one map with the note rather than copying it.
     let segment = note.segments.first().expect("a frontmatter segment");
     let shared = &segment.frontmatter().expect("frontmatter").data;
-    assert!(std::rc::Rc::ptr_eq(shared, &note.frontmatter));
+    assert!(std::sync::Arc::ptr_eq(shared, &note.frontmatter));
     assert_eq!(
         serialise(&note.segments),
         "---\ntags: [a, b]\nproject:\n  owner: me\ndone: false\n---\n\nbody\n"

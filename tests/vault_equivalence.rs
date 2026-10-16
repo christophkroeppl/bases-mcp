@@ -44,7 +44,7 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use bases_mcp::error::BasesError;
 use bases_mcp::value::BasesValue;
@@ -576,7 +576,7 @@ fn write_text_creates_its_parents_and_the_two_vaults_agree_afterwards() {
     // fs created a real collection; the fake recorded that it was asked to. A map
     // of files has no directories, so without this the parent-creating half of
     // `createNote` would go untested on the fake forever.
-    assert!(memory.dirs.borrow().contains("Sandbox/Deep/Nested"));
+    assert!(memory.dirs.read().unwrap().contains("Sandbox/Deep/Nested"));
     let created =
         std::fs::read_dir(dir.path().join("Sandbox/Deep/Nested")).expect("the collection exists");
     assert_eq!(created.flatten().count(), 1);
@@ -993,8 +993,8 @@ fn a_source_whose_list_fails_reports_the_failure_rather_than_an_empty_vault() {
 /// is executable rather than asserted in a comment.
 #[test]
 fn the_memory_source_presents_the_same_async_api_behind_a_trait_object() {
-    let shared = Rc::new(memory_source(&load_corpus()));
-    let mut source: Box<dyn VaultSource> = Box::new(SharedSource(Rc::clone(&shared)));
+    let shared = Arc::new(memory_source(&load_corpus()));
+    let mut source: Box<dyn VaultSource> = Box::new(SharedSource(Arc::clone(&shared)));
 
     assert_eq!(source.kind(), SourceKind::Webdav);
     assert_eq!(list_of(source.as_ref()), list_of(shared.as_ref()));
@@ -1012,7 +1012,7 @@ fn the_memory_source_presents_the_same_async_api_behind_a_trait_object() {
 
     write_of(source.as_mut(), "Note.md", "# n\n");
     mkdir_of(source.as_mut(), "Sandbox");
-    assert!(shared.dirs.borrow().contains("Sandbox"));
+    assert!(shared.dirs.read().unwrap().contains("Sandbox"));
     delete_of(source.as_mut(), "Note.md");
     assert!(!list_of(shared.as_ref()).contains(&"Note.md".to_string()));
 }
@@ -1034,8 +1034,8 @@ fn strip_extension(path: &str) -> String {
 // and each of these is a behaviour the rest of the project is entitled to rely on.
 
 /// A loaded index over the oracle vault.
-fn loaded() -> Rc<Vault> {
-    let vault = Rc::new(Vault::new(Box::new(
+fn loaded() -> Arc<Vault> {
+    let vault = Arc::new(Vault::new(Box::new(
         FsVaultSource::new(vault_dir()).expect("the oracle is a directory"),
     )));
     run(vault.load()).expect("the oracle vault loads");

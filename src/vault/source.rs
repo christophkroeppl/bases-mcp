@@ -101,8 +101,8 @@ pub fn normalise_line_endings(text: &str) -> String {
 }
 
 /// A place vault content comes from and goes to.
-#[async_trait(?Send)]
-pub trait VaultSource {
+#[async_trait]
+pub trait VaultSource: Send + Sync {
     /// A stable identifier for logging and error messages.
     fn kind(&self) -> SourceKind;
 

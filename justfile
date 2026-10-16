@@ -53,6 +53,19 @@ check-all:
 build:
     cargo build --release
 
+# -- transport probes --------------------------------------------------------
+
+# Both transports, driven by hand: same vault, same binary, same four
+# messages. Cross-checks the tool surface over stdio against HTTP. Needs a
+# debug build; resolves its own paths, so it runs from any worktree.
+probe-transport:
+    @./scripts/probe-transport.sh
+
+# Both transports, driven by hand: the same seven tool calls, including the
+# query pipeline and the error envelope, compared as parsed JSON.
+probe-tool-bodies:
+    @./scripts/probe-tool-bodies.sh
+
 # -- Obsidian CLI ------------------------------------------------------------
 
 # Is the CLI present, and which version?

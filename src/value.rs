@@ -166,17 +166,17 @@ pub enum BasesValue {
     },
     /// A file, and the lazy accessors that need the vault. Only usable inside
     /// method calls.
-    File(std::rc::Rc<FileValue>),
+    File(std::sync::Arc<FileValue>),
     /// A property namespace: `note`, `formula`, or `file.properties`.
     ///
     /// A `BTreeMap` rather than a struct because these come from YAML and from
     /// user keys, so the set of names is only known at runtime. Member access on
     /// it yields the stored value; `.keys()` and `.values()` work on it.
-    Namespace(std::rc::Rc<std::collections::BTreeMap<String, BasesValue>>),
+    Namespace(std::sync::Arc<std::collections::BTreeMap<String, BasesValue>>),
 }
 
 /// Turn a link-ish string into a `FileValue`, or `None` when unresolvable.
-pub type Resolver = std::rc::Rc<dyn Fn(&str) -> Option<FileValue>>;
+pub type Resolver = std::sync::Arc<dyn Fn(&str) -> Option<FileValue> + Send + Sync>;
 
 /// A file plus the accessors the vault supplies.
 ///
@@ -193,14 +193,14 @@ pub struct FileValue {
     /// emits `"folder": "/"` while a nested one emits `"folder": "Projects"`.
     pub folder: String,
     pub ext: String,
-    pub accessors: std::rc::Rc<FileAccessors>,
+    pub accessors: std::sync::Arc<FileAccessors>,
     /// The host note's frontmatter, when this value stands in for `this`.
     ///
     /// `this` has to answer both as a File and as a bag of frontmatter keys,
     /// because real vaults write `this.path` and `this.projects` with the same
     /// receiver. Rust has no proxy, so the extra keys ride along here and
     /// `read_member` consults them first.
-    pub overrides: Option<std::rc::Rc<std::collections::BTreeMap<String, BasesValue>>>,
+    pub overrides: Option<std::sync::Arc<std::collections::BTreeMap<String, BasesValue>>>,
 }
 
 impl PartialEq for FileValue {
@@ -219,19 +219,20 @@ impl PartialEq for FileValue {
 /// unprintable.
 #[derive(Clone)]
 pub struct FileAccessors {
-    pub tags: std::rc::Rc<dyn Fn() -> Vec<BasesValue>>,
-    pub links: std::rc::Rc<dyn Fn() -> Vec<BasesValue>>,
-    pub embeds: std::rc::Rc<dyn Fn() -> Vec<BasesValue>>,
-    pub backlinks: std::rc::Rc<dyn Fn() -> Vec<BasesValue>>,
-    pub properties: std::rc::Rc<dyn Fn() -> std::collections::BTreeMap<String, BasesValue>>,
-    pub ctime: std::rc::Rc<dyn Fn() -> BasesDate>,
-    pub mtime: std::rc::Rc<dyn Fn() -> BasesDate>,
-    pub size: std::rc::Rc<dyn Fn() -> u64>,
+    pub tags: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
+    pub links: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
+    pub embeds: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
+    pub backlinks: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
+    pub properties:
+        std::sync::Arc<dyn Fn() -> std::collections::BTreeMap<String, BasesValue> + Send + Sync>,
+    pub ctime: std::sync::Arc<dyn Fn() -> BasesDate + Send + Sync>,
+    pub mtime: std::sync::Arc<dyn Fn() -> BasesDate + Send + Sync>,
+    pub size: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
     /// `file.tasks` is an extension: absent in Obsidian 1.13.7, which returns
     /// `null`. See `docs/divergences.md` D3.
-    pub tasks: std::rc::Rc<dyn Fn() -> Vec<BasesValue>>,
+    pub tasks: std::sync::Arc<dyn Fn() -> Vec<BasesValue> + Send + Sync>,
     pub resolve: Resolver,
-    pub links_to: std::rc::Rc<dyn Fn(&str) -> bool>,
+    pub links_to: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 impl std::fmt::Debug for FileAccessors {
@@ -254,7 +255,7 @@ impl FileValue {
             basename: stem,
             path,
             ext,
-            accessors: std::rc::Rc::new(accessors),
+            accessors: std::sync::Arc::new(accessors),
             overrides: None,
         }
     }
@@ -348,7 +349,7 @@ impl BasesValue {
 
     /// An empty namespace, used where a namespace is required but absent.
     pub fn empty_namespace() -> Self {
-        BasesValue::Namespace(std::rc::Rc::new(std::collections::BTreeMap::new()))
+        BasesValue::Namespace(std::sync::Arc::new(std::collections::BTreeMap::new()))
     }
 
     /// A link's resolved target, for link equality.
