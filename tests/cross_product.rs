@@ -805,6 +805,53 @@ fn stdio_serves_a_filesystem_vault_and_writes_to_it() {
         "the created note is not what was written: {created}"
     );
 
+    // WRITE, half three: a note in a SUBDIRECTORY. This is the path that
+    // exercises `ensure_dir` -- the filesystem has to create the directory,
+    // and the WebDAV backend has to MKCOL it. A flat write never touches
+    // that code, so a suite that only writes at the root leaves the whole
+    // "does a new folder appear" question untested.
+    //
+    // It is the CREATE path that creates a directory, not `write_note`:
+    // `write_note` is an edit and refuses a path that is not there, which is
+    // exactly what a note in a new folder is.
+    let nested_proposal = client.tool(
+        "add_note_to_base",
+        json!({
+            "base": BASE,
+            "path": "Nested Folder/Nested Note.md",
+            "view": "All",
+        }),
+    );
+    assert!(
+        written_ok(&nested_proposal),
+        "add_note_to_base into a subdirectory over stdio failed to propose: {nested_proposal}"
+    );
+    let nested_draft = nested_proposal["result"]["structuredContent"]["draft_id"]
+        .as_str()
+        .expect("the proposal carries a draft id")
+        .to_string();
+    let nested_commit = client.tool(
+        "add_note_to_base",
+        json!({
+            "draft_id": nested_draft,
+            "content": "---\nstatus: open\n---\n\n# Nested Note\n\nWritten into a subdirectory.\n",
+        }),
+    );
+    assert!(
+        written_ok(&nested_commit),
+        "add_note_to_base into a subdirectory over stdio failed to commit: {nested_commit}"
+    );
+    let nested_on_disk = std::fs::read_to_string(dir.join("Nested Folder/Nested Note.md"))
+        .expect("the nested note is on disk after the write");
+    assert!(
+        nested_on_disk.contains("Written into a subdirectory."),
+        "the nested note is not what was written: {nested_on_disk}"
+    );
+    assert!(
+        dir.join("Nested Folder").is_dir(),
+        "the directory the note went into must exist"
+    );
+
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -886,6 +933,47 @@ fn stdio_serves_a_webdav_vault_and_writes_to_it() {
     assert!(
         created.contains("Created through the stdio transport."),
         "the created note is not what was written: {created}"
+    );
+
+    // WRITE, half three: a note in a SUBDIRECTORY, which is the path that
+    // exercises `ensure_dir` -> MKCOL. The server must end up holding BOTH
+    // the collection and the note inside it.
+    //
+    // It is the CREATE path that creates the collection, not `write_note`:
+    // `write_note` is an edit and refuses a path that is not there.
+    let nested_proposal = client.tool(
+        "add_note_to_base",
+        json!({
+            "base": BASE,
+            "path": "Nested Folder/Nested Note.md",
+            "view": "All",
+        }),
+    );
+    assert!(
+        written_ok(&nested_proposal),
+        "add_note_to_base into a subdirectory over stdio against WebDAV failed to propose: {nested_proposal}"
+    );
+    let nested_draft = nested_proposal["result"]["structuredContent"]["draft_id"]
+        .as_str()
+        .expect("the proposal carries a draft id")
+        .to_string();
+    let nested_commit = client.tool(
+        "add_note_to_base",
+        json!({
+            "draft_id": nested_draft,
+            "content": "---\nstatus: open\n---\n\n# Nested Note\n\nWritten into a subdirectory.\n",
+        }),
+    );
+    assert!(
+        written_ok(&nested_commit),
+        "add_note_to_base into a subdirectory over stdio against WebDAV failed to commit: {nested_commit}"
+    );
+    let nested_stored = server
+        .stored("Nested Folder/Nested Note.md")
+        .expect("the nested note reached the WebDAV server");
+    assert!(
+        nested_stored.contains("Written into a subdirectory."),
+        "the nested stored note is not what was written: {nested_stored}"
     );
 }
 
