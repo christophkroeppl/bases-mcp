@@ -31,6 +31,23 @@ MCP_TRANSPORT=stdio|http      the same choice, without a flag
 this server does not know is a refusal naming the value, not a silent default.
 `bases-mcp --help` prints the same surface.
 
+### The two axes, and all four of their combinations
+
+The transport decides **how bytes travel**. The backend decides **where the
+vault lives**. They are independent, and every combination works:
+
+| | filesystem vault | WebDAV vault |
+|---|---|---|
+| **stdio** | agent spawns the binary, talks over the pipes | the same, against a remote vault |
+| **HTTP** | many clients over Streamable HTTP | many clients, against a remote vault |
+
+`tests/cross_product.rs` drives all four cells end to end — it spawns the real
+binary, speaks MCP to it the way a client does (`initialize`, `tools/list`,
+`tools/call`), and checks each write **at the far end**: the file on disk, or
+the bytes the WebDAV server actually stored. A write that reports success
+without landing anywhere fails that suite, which is the failure a read-only
+matrix cannot see.
+
 ### The vault
 
 Exactly one backend, and it must be named:
@@ -86,6 +103,101 @@ across six sessions, and that a `Host` naming the bound address is served while
 a neighbour is refused. The stdio suite drives `initialize`, `tools/list` and
 `tools/call` through stdin/stdout, and asserts `MCP_TRANSPORT` selects the
 transport it names.
+
+## The container
+
+One image serves both transports. The transport is chosen by the **command**,
+not by the image, so the same image works for a deployment that needs a
+listener and for an agent that spawns the binary.
+
+```
+podman build -f Containerfile -t localhost/bases-mcp:latest .
+```
+
+### The image is pinned to the toolchain the LOCKFILE needs
+
+The crate declares `rust-version = "1.75"`, but that is not the constraint the
+build has. The **locked dependency graph** is: `rmcp 3.5.0` and the `icu`
+crates require rustc 1.88, and `cargo build --locked` refuses the whole graph
+on an older compiler. The build image is pinned to `rust:1.88-bookworm` for
+that reason — an older image fails with "rmcp@3.5.0 requires rustc 1.88",
+which names a dependency rather than the image.
+
+The image also carries a placeholder at `tests/parity.rs`. `Cargo.toml`
+declares that test target by path, and a declared target whose file is missing
+is a **manifest error**: cargo fails to parse the manifest, before compiling
+anything. The suite itself is excluded from the build context (it needs a live
+Obsidian CLI), so the placeholder satisfies the manifest and nothing else.
+
+### Running it against a local vault
+
+```bash
+podman run --rm \
+  -v /path/to/vault:/vault:rw \
+  -e BASES_MCP_VAULT=/vault \
+  -e MCP_HTTP_HOST=0.0.0.0 \
+  -p 127.0.0.1:8765:8765 \
+  localhost/bases-mcp:latest --transport http
+```
+
+`MCP_HTTP_HOST=0.0.0.0` is required inside a container: the default
+`127.0.0.1` would bind the loopback *of the container*, and nothing outside
+it could reach the server. The published port is bound to `127.0.0.1` on the
+host, so the listener is reachable from the machine and not from the network.
+
+The image runs as a non-root user with no home and no shell, and the vault is
+the only thing it can write to.
+
+#### The vault must be writable by uid 1000
+
+The image's user is **uid 1000** (`bases-mcp`), pinned in the `Containerfile`
+rather than left to `useradd --system`, which picks 999 on Debian. A pinned
+uid is what makes the vault writable: the container has to be able to write the
+notes it is asked to modify, and the only way an operator can arrange that is
+to know which uid to arrange it for.
+
+So the vault directory must be readable **and writable** by uid 1000:
+
+```bash
+sudo chown -R 1000:1000 /path/to/vault
+# or, to keep your own ownership and just grant the group:
+sudo chown -R :1000 /path/to/vault && sudo chmod -R g+rwX /path/to/vault
+```
+
+**The failure without this is quiet, and it is worth knowing what it looks
+like.** A vault directory the container cannot read is indexed as an EMPTY
+vault, so every Base comes back with zero rows and every note reads as "not
+found" — which looks exactly like an empty vault rather than like a
+permissions problem. And a vault it can read but not write answers reads
+normally and fails every write with `Permission denied (os error 13)`. Neither
+says "the uid is wrong".
+
+### Running it against a WebDAV vault
+
+```bash
+podman run --rm \
+  -e BASES_MCP_WEBDAV_URL=https://dav.example/vault \
+  -e BASES_MCP_WEBDAV_USER=... \
+  -e BASES_MCP_WEBDAV_PASSWORD=... \
+  -e MCP_HTTP_HOST=0.0.0.0 \
+  -p 127.0.0.1:8765:8765 \
+  localhost/bases-mcp:latest --transport http
+```
+
+No volume is needed — the vault is remote. The credentials are read from the
+environment and are never logged or echoed in an error.
+
+### Serving over stdio instead
+
+```bash
+podman run --rm -i \
+  -v /path/to/vault:/vault:rw \
+  -e BASES_MCP_VAULT=/vault \
+  localhost/bases-mcp:latest --transport stdio
+```
+
+`-i` keeps stdin open; without it the container's stdin is closed and the
+protocol stream ends immediately.
 
 ## Obsidian CLI gates
 

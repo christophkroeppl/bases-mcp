@@ -20,3 +20,15 @@ services:
   bases-mcp:
     image: localhost/bases-mcp:latest
     command: ["--transport", "http"]
+    # `MCP_HTTP_HOST` must be `0.0.0.0` inside a container. The default is
+    # `127.0.0.1`, which binds the loopback OF THE CONTAINER: the listener
+    # would be reachable from inside and from nowhere else, and the route in
+    # `.guarden/service.yml` would have nothing to dial.
+    #
+    # This is the same widening the divergence registry records for a
+    # non-containerized `0.0.0.0` bind, and it is the operator's explicit
+    # choice: guarden publishes a loopback port at the edge, so the listener
+    # is not on the network even though it is on every interface of the
+    # container.
+    environment:
+      MCP_HTTP_HOST: "0.0.0.0"
