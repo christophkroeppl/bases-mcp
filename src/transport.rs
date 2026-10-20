@@ -230,7 +230,10 @@ fn allowed_hosts_for(addresses: &[SocketAddr]) -> Vec<String> {
     // Every interface was bound if any address is unspecified, so the address a
     // request arrived on is not knowable here and rmcp's empty list is the only
     // correct answer.
-    if addresses.iter().any(|address| address.ip().is_unspecified()) {
+    if addresses
+        .iter()
+        .any(|address| address.ip().is_unspecified())
+    {
         return Vec::new();
     }
     for address in addresses {
@@ -508,8 +511,14 @@ mod tests {
 
     #[test]
     fn a_bare_name_is_a_name_and_a_bare_ip_is_an_ip() {
-        assert!(matches!(parse_host(Some("localhost".to_string())), Ok(Host::Name(_))));
-        assert!(matches!(parse_host(Some("127.0.0.1".to_string())), Ok(Host::Ip(_))));
+        assert!(matches!(
+            parse_host(Some("localhost".to_string())),
+            Ok(Host::Name(_))
+        ));
+        assert!(matches!(
+            parse_host(Some("127.0.0.1".to_string())),
+            Ok(Host::Ip(_))
+        ));
         assert!(matches!(parse_host(None), Ok(Host::Ip(_))));
     }
 

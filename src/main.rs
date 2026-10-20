@@ -149,8 +149,9 @@ async fn serve_http() -> Result<(), String> {
     let on_shutdown = || async {
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("SIGTERM is always installable");
-        let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            .expect("SIGINT is always installable");
+        let mut interrupt =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .expect("SIGINT is always installable");
         tokio::select! {
             _ = term.recv() => {}
             _ = interrupt.recv() => {}
