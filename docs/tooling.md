@@ -114,6 +114,17 @@ listener and for an agent that spawns the binary.
 podman build -f Containerfile -t localhost/bases-mcp:latest .
 ```
 
+If that fails with `OCI runtime error: crun: unknown version specified`, the
+host's default OCI runtime is too old for its kernel and a newer one is
+installed elsewhere:
+
+```
+podman --runtime /path/to/crun build -f Containerfile -t localhost/bases-mcp:latest .
+```
+
+That is a property of the HOST, not of this image: the failure names the
+runtime, and it happens before the `Containerfile` is read at all.
+
 ### The image is pinned to the toolchain the LOCKFILE needs
 
 The crate declares `rust-version = "1.75"`, but that is not the constraint the
@@ -148,29 +159,68 @@ host, so the listener is reachable from the machine and not from the network.
 The image runs as a non-root user with no home and no shell, and the vault is
 the only thing it can write to.
 
-#### The vault must be writable by uid 1000
+#### The vault must be writable, and `--userns=keep-id` is how
 
-The image's user is **uid 1000** (`bases-mcp`), pinned in the `Containerfile`
-rather than left to `useradd --system`, which picks 999 on Debian. A pinned
-uid is what makes the vault writable: the container has to be able to write the
-notes it is asked to modify, and the only way an operator can arrange that is
-to know which uid to arrange it for.
+**`--userns=keep-id` is not optional.** It is the difference between a
+container that can modify the vault and one that only reads it.
 
-So the vault directory must be readable **and writable** by uid 1000:
+Under rootless podman (the default), the invoking user's **host** uid is
+mapped to **container root**. So a host file owned by uid 1000 appears inside
+the container as owned by uid 0, and the server — which runs as uid 1000 — is
+not its owner and cannot write it. The file's mode bits are unchanged; only the
+identity behind them moved. `--userns=keep-id` maps the host uid to the *same*
+uid inside, so the server owns the notes it is asked to modify.
 
 ```bash
-sudo chown -R 1000:1000 /path/to/vault
-# or, to keep your own ownership and just grant the group:
-sudo chown -R :1000 /path/to/vault && sudo chmod -R g+rwX /path/to/vault
+podman run --rm --userns=keep-id \
+  -v /path/to/vault:/vault:rw \
+  -e BASES_MCP_VAULT=/vault \
+  -e MCP_HTTP_HOST=0.0.0.0 \
+  -p 127.0.0.1:8765:8765 \
+  localhost/bases-mcp:latest --transport http
 ```
 
-**The failure without this is quiet, and it is worth knowing what it looks
+The image's user is **uid 1000** (`bases-mcp`), pinned in the `Containerfile`
+rather than left to `useradd --system`, which picks 999 on Debian. With
+`--userns=keep-id` that is the host user's own uid, so the vault stays owned
+by the person who owns it — no `chown`, no group, no ACL.
+
+**The failure without it is quiet, and it is worth knowing what it looks
 like.** A vault directory the container cannot read is indexed as an EMPTY
 vault, so every Base comes back with zero rows and every note reads as "not
 found" — which looks exactly like an empty vault rather than like a
 permissions problem. And a vault it can read but not write answers reads
 normally and fails every write with `Permission denied (os error 13)`. Neither
 says "the uid is wrong".
+
+#### A file the container CREATES is owned by a subuid
+
+`--userns=keep-id` maps the invoking user to the same uid, but a file the
+container **creates** is owned by a uid from the *subuid range* — `100999` on
+this host — not by your own uid. The file is yours to read and to delete, and
+the server can keep editing it because it runs under the same mapping that
+created it. But a *different* process, running as your ordinary uid, cannot
+write it, and a `chown` is needed to hand it back:
+
+```bash
+sudo chown -R $(id -u):$(id -g) /path/to/vault
+```
+
+This is a property of rootless containers generally, not of this image.
+
+#### On a guarden host, the namespace is already handled
+
+`compose.yaml` does **not** carry a user-namespace setting, and that is
+deliberate: guarden refuses `userns_mode` in a Compose file because the
+namespace is the host's business, not the repository's. Guarden probes the
+**image's** user and renders `Userns=keep-id:uid=…,gid=…` into the unit
+itself (ADR-0019) — mapping the image user onto the service identity, and
+never chowning files.
+
+Which is the other reason the image's uid is **pinned**: guarden can only pin
+a uid it can read out of the image, and a repository that leaves the uid to
+`useradd --system` gives the host a different number to pin on every base
+image it rebuilds.
 
 ### Running it against a WebDAV vault
 
@@ -190,7 +240,7 @@ environment and are never logged or echoed in an error.
 ### Serving over stdio instead
 
 ```bash
-podman run --rm -i \
+podman run --rm -i --userns=keep-id \
   -v /path/to/vault:/vault:rw \
   -e BASES_MCP_VAULT=/vault \
   localhost/bases-mcp:latest --transport stdio

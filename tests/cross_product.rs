@@ -82,6 +82,8 @@ fn ephemeral_port() -> u16 {
 /// answers whoever asks, whenever they ask, whatever the test is doing.
 #[derive(Clone)]
 struct DavServer {
+    /// The port the server listens on.
+    port: u16,
     /// Vault-relative path -> the bytes stored for it.
     files: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
     /// Vault-relative path -> its children, for PROPFIND.
@@ -101,6 +103,7 @@ impl DavServer {
             .expect("the socket has an address")
             .port();
         let server = Self {
+            port,
             files: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
             dirs: Arc::new(Mutex::new(std::collections::BTreeSet::from([
                 "".to_string()
@@ -142,6 +145,34 @@ impl DavServer {
     /// What the server currently holds at `path`.
     fn stored(&self, path: &str) -> Option<String> {
         self.files.lock().unwrap().get(path).cloned()
+    }
+
+    /// Read a resource back over HTTP, the way a client would.
+    ///
+    /// This is the FAR-END check, and it has to be a READ rather than a peek at
+    /// the server's map. A peek proves the server received a body; a read
+    /// proves the server will SERVE that body back, which is what the real
+    /// client verifies when it re-GETs a note it has just written. The two
+    /// differ for the server that accepts a PUT and stores something else —
+    /// a transcoding filter, a bug — and the difference is the whole point.
+    ///
+    /// Plain `std::net::TcpStream`, because the point is the HTTP round trip,
+    /// not a client library.
+    fn read_back(&self, path: &str) -> Option<String> {
+        use std::io::{Read, Write};
+        let target = format!("/dav/vault/{}", encoded_href(path));
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port)).ok()?;
+        let request =
+            format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).ok()?;
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).ok()?;
+        let text = String::from_utf8_lossy(&raw).to_string();
+        let (head, body) = text.split_once("\r\n\r\n")?;
+        if !head.starts_with("HTTP/1.1 200") {
+            return None;
+        }
+        Some(body.to_string())
     }
 
     /// Handle one connection: read a request, answer it.
@@ -195,6 +226,9 @@ impl DavServer {
                 None => ok_response(404, "Not Found", "not found"),
             },
             "PUT" => {
+                // Store the bytes. The GET that follows serves from this
+                // store, so a client that verifies its write by reading it back
+                // is reading what actually landed rather than an echo.
                 self.files.lock().unwrap().insert(path.clone(), body);
                 ok_response(201, "Created", "")
             }
@@ -288,9 +322,16 @@ impl DavServer {
 /// resource a collection; the backend reads the CHILD, not the element's mere
 /// presence, because an empty `<d:resourcetype/>` and an absent property are
 /// the same shape to it.
+///
+/// The href is PERCENT-ENCODED, the way a real server emits it. A server that
+/// emitted a decoded href would be agreeing with the client by construction on
+/// an encoding the client has to undo, and a note whose name contains a space
+/// or a `#` would never round-trip — so the round trip has to be exercised
+/// through a real encoding.
 fn collection_response(path: &str) -> String {
+    let href = encoded_href(path);
     format!(
-        "<d:response><d:href>/dav/vault/{path}/</d:href>\
+        "<d:response><d:href>/dav/vault/{href}/</d:href>\
          <d:propstat><d:prop>\
          <d:resourcetype><d:collection/></d:resourcetype>\
          <d:getlastmodified>Tue, 01 Oct 2024 10:11:12 GMT</d:getlastmodified>\
@@ -300,14 +341,46 @@ fn collection_response(path: &str) -> String {
 
 /// The response body for a file member.
 fn file_response(path: &str, size: usize) -> String {
+    let href = encoded_href(path);
     format!(
-        "<d:response><d:href>/dav/vault/{path}</d:href>\
+        "<d:response><d:href>/dav/vault/{href}</d:href>\
          <d:propstat><d:prop>\
          <d:resourcetype/>\
          <d:getcontentlength>{size}</d:getcontentlength>\
          <d:getlastmodified>Tue, 01 Oct 2024 10:11:12 GMT</d:getlastmodified>\
          </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
     )
+}
+
+/// A vault-relative path as an href: each segment percent-encoded.
+///
+/// This is the mirror of the client's `encode_segment`, and it is the point of
+/// the fixture: the client encodes a request path and DECODES an href, and a
+/// fake that decoded the request the same way the client decodes the response
+/// would cancel out a mismatch. A name with a space, a `#` or a `%` only
+/// survives if the two sides really are inverse.
+fn encoded_href(path: &str) -> String {
+    path.split('/')
+        .map(encode_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Percent-encode one path segment.
+///
+/// Encodes everything that is not unreserved, which is what a server does with
+/// a name it has to put in a URL.
+fn encode_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 /// An HTTP response with a body.
@@ -703,10 +776,22 @@ fn base_yaml() -> String {
         .to_string()
 }
 
+/// A note whose NAME needs percent-encoding, so the WebDAV round trip is
+/// actually exercised.
+///
+/// The client's `encode_segment` and its href `decode_segment` are inverses,
+/// and the only way to know they are is to send a name that has to survive
+/// both. A space encodes to `%20`; a `#` encodes to `%23`; a `%` encodes to
+/// `%25` — and a decode that ran over the path's separators instead of per
+/// segment would mangle the last one. `Q1 #2.md` and `50%.md` are both
+/// ordinary note names and both impossible to get right by accident.
+const TRICKY_NAME: &str = "Q1 #2 50%.md";
+
 /// The files a fixture vault holds, for either backend.
 fn fixture_files() -> Vec<(&'static str, String)> {
     vec![
         ("Cross Product Note.md", NOTE_BODY.to_string()),
+        (TRICKY_NAME, NOTE_BODY.to_string()),
         ("Cross.base", base_yaml()),
     ]
 }
@@ -896,8 +981,8 @@ fn stdio_serves_a_webdav_vault_and_writes_to_it() {
         server.trace().join("\n")
     );
     let stored = server
-        .stored("Cross Product Note.md")
-        .expect("the note reached the WebDAV server");
+        .read_back("Cross Product Note.md")
+        .expect("the note is readable back from the WebDAV server");
     assert!(
         stored.contains("Edited through the stdio transport."),
         "the stored note is not what was written: {stored}"
@@ -928,8 +1013,8 @@ fn stdio_serves_a_webdav_vault_and_writes_to_it() {
         "add_note_to_base over stdio against WebDAV failed to commit: {committed}"
     );
     let created = server
-        .stored("Created Over Stdio Webdav.md")
-        .expect("the created note reached the WebDAV server");
+        .read_back("Created Over Stdio Webdav.md")
+        .expect("the created note is readable back from the WebDAV server");
     assert!(
         created.contains("Created through the stdio transport."),
         "the created note is not what was written: {created}"
@@ -969,8 +1054,8 @@ fn stdio_serves_a_webdav_vault_and_writes_to_it() {
         "add_note_to_base into a subdirectory over stdio against WebDAV failed to commit: {nested_commit}"
     );
     let nested_stored = server
-        .stored("Nested Folder/Nested Note.md")
-        .expect("the nested note reached the WebDAV server");
+        .read_back("Nested Folder/Nested Note.md")
+        .expect("the nested note is readable back from the WebDAV server");
     assert!(
         nested_stored.contains("Written into a subdirectory."),
         "the nested stored note is not what was written: {nested_stored}"
@@ -1103,8 +1188,8 @@ async fn http_serves_a_webdav_vault_and_writes_to_it() {
         "write_note over HTTP against WebDAV failed: {edited}"
     );
     let stored = server
-        .stored("Cross Product Note.md")
-        .expect("the note reached the WebDAV server");
+        .read_back("Cross Product Note.md")
+        .expect("the note is readable back from the WebDAV server");
     assert!(
         stored.contains("Edited through the HTTP transport."),
         "the stored note is not what was written: {stored}"
@@ -1145,6 +1230,131 @@ async fn http_serves_a_webdav_vault_and_writes_to_it() {
         created.contains("Created through the HTTP transport."),
         "the created note is not what was written: {created}"
     );
+}
+
+/// A note whose name needs percent-encoding survives the round trip.
+///
+/// Both backends: the filesystem stores the name as given, and the WebDAV
+/// backend encodes it into a URL, stores it, and decodes it back out of the
+/// href the server sends. A client that encoded wrongly, or a server that
+/// emitted a decoded href, would fail here — and would pass every other test
+/// in this file, because every other note name encodes to itself.
+#[test]
+fn a_note_whose_name_needs_encoding_round_trips_through_both_backends() {
+    // The filesystem backend.
+    let dir = fixture_dir(&fixture_files());
+    let mut stdio = StdioClient::start(&[("BASES_MCP_VAULT", dir.to_str().unwrap())]);
+    let tools = stdio.handshake();
+    assert!(tools["result"]["tools"].is_array(), "tools/list failed");
+
+    let listed = stdio.tool("list_bases", json!({}));
+    assert!(
+        listed.get("result").is_some(),
+        "list_bases over stdio failed: {listed}"
+    );
+
+    // The note is readable BY ITS TRICKY NAME.
+    let read = stdio.tool("get_note", json!({"path": TRICKY_NAME}));
+    assert!(
+        read.get("result").is_some(),
+        "get_note of {TRICKY_NAME} over stdio failed: {read}"
+    );
+    assert!(
+        !read["result"]["isError"].as_bool().unwrap_or(false),
+        "get_note of {TRICKY_NAME} reported an error: {read}"
+    );
+    assert!(
+        read["result"]["structuredContent"]["path"]
+            .as_str()
+            .unwrap_or_default()
+            == TRICKY_NAME,
+        "the note came back under the wrong name: {read}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+
+    // The WebDAV backend: the same name, encoded into a URL and decoded back.
+    let server = DavServer::start(&fixture_files());
+    let mut webdav = StdioClient::start(&[
+        ("BASES_MCP_WEBDAV_URL", &server.base_url),
+        ("BASES_MCP_WEBDAV_USER", "u"),
+        ("BASES_MCP_WEBDAV_PASSWORD", "p"),
+    ]);
+    webdav.handshake();
+    let read = webdav.tool("get_note", json!({"path": TRICKY_NAME}));
+    assert!(
+        read.get("result").is_some(),
+        "get_note of {TRICKY_NAME} over stdio against WebDAV failed: {read}"
+    );
+    assert!(
+        !read["result"]["isError"].as_bool().unwrap_or(false),
+        "get_note of {TRICKY_NAME} against WebDAV reported an error: {read}"
+    );
+    assert!(
+        read["result"]["structuredContent"]["path"]
+            .as_str()
+            .unwrap_or_default()
+            == TRICKY_NAME,
+        "the note came back under the wrong name: {read}"
+    );
+}
+
+/// `write_note` refuses a path that is not there, in every cell.
+///
+/// The refusal is load-bearing: it is what stops a typo from creating a stray
+/// file, and it is what makes `write_note` an EDIT rather than a create. A
+/// suite that only writes at paths it created first would never notice if that
+/// stopped being true.
+#[test]
+fn write_note_refuses_a_path_that_is_not_there() {
+    let dir = fixture_dir(&fixture_files());
+    let mut stdio = StdioClient::start(&[("BASES_MCP_VAULT", dir.to_str().unwrap())]);
+    stdio.handshake();
+
+    let refused = stdio.tool(
+        "write_note",
+        json!({
+            "path": "Never Existed.md",
+            "content": "# Never Existed\n\nShould not be written.\n",
+        }),
+    );
+    assert!(
+        refused.get("result").is_some(),
+        "write_note of a missing note failed at the protocol level: {refused}"
+    );
+    assert!(
+        refused["result"]["isError"].as_bool().unwrap_or(false),
+        "write_note of a missing note should be an error, not a success: {refused}"
+    );
+    assert!(
+        !dir.join("Never Existed.md").exists(),
+        "the refused write must not have created the note"
+    );
+
+    // And the same over the WebDAV backend.
+    let server = DavServer::start(&fixture_files());
+    let mut webdav = StdioClient::start(&[
+        ("BASES_MCP_WEBDAV_URL", &server.base_url),
+        ("BASES_MCP_WEBDAV_USER", "u"),
+        ("BASES_MCP_WEBDAV_PASSWORD", "p"),
+    ]);
+    webdav.handshake();
+    let refused = webdav.tool(
+        "write_note",
+        json!({
+            "path": "Never Existed.md",
+            "content": "# Never Existed\n\nShould not be written.\n",
+        }),
+    );
+    assert!(
+        refused["result"]["isError"].as_bool().unwrap_or(false),
+        "write_note of a missing note against WebDAV should be an error: {refused}"
+    );
+    assert!(
+        server.read_back("Never Existed.md").is_none(),
+        "the refused write must not have reached the WebDAV server"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// The two transports serve the SAME vault and produce the same answer.

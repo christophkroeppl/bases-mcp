@@ -51,10 +51,18 @@ COPY --from=build /build/target/release/bases-mcp /usr/local/bin/bases-mcp
 #
 # The uid is PINNED to 1000 rather than left to `useradd --system`, which picks
 # 999 on Debian and can pick something else on another base. A pinned uid is
-# what makes the vault writable: the container's user has to be able to write
-# the notes it is asked to modify, and a host operator can only arrange that
-# (a `chown`, a group, an ACL) if they know WHICH uid to arrange it for. The
-# volume a deployment mounts must be writable by uid 1000.
+# what makes the vault writable -- but only under the right USER NAMESPACE,
+# and that is the part worth reading.
+#
+# Under rootless podman (the default), the invoking user's host uid is mapped
+# to CONTAINER ROOT. A host file owned by uid 1000 therefore appears inside the
+# container as owned by uid 0, and this process -- uid 1000 -- is not the
+# owner and cannot write it. The file's mode bits are unchanged; only the
+# identity behind them moved.
+#
+# The fix is `--userns=keep-id`, which maps the host uid to the SAME uid
+# inside the container: the host's uid 1000 is uid 1000 in here, so the
+# process owns the files it has to modify. See docs/tooling.md.
 RUN useradd --system --uid 1000 --no-create-home --shell /usr/sbin/nologin bases-mcp
 USER bases-mcp
 
