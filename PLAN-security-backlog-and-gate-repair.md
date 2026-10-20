@@ -853,48 +853,48 @@ Commands the plan uses, verified against this repo:
 
 ### Phase 1 — gate repair
 
-- [ ] `cargo fmt --check` exits 0 on `develop`
-- [ ] The whitespace-stripped SHA of `src/main.rs` and `src/transport.rs` is **unchanged** from `HEAD` (Step 1.2's token-stream check) — **not** `git diff -w`, which reports rustfmt's line splits as changes
-- [ ] `just check` exits 0: fmt clean, clippy 0 warnings, **482 tests pass**, `check-versions: agree at 0.1.0`
-- [ ] The merge to `develop` is `--no-ff`
-- [ ] `git status --porcelain` in `develop` is empty except the two untracked files the plan creates (`STATUS.md`, and the plan file itself)
+- [x] `cargo fmt --check` exits 0 on `develop`
+- [x] The whitespace-stripped SHA of `src/main.rs` and `src/transport.rs` is **unchanged** from `HEAD` (Step 1.2's token-stream check) — **not** `git diff -w`, which reports rustfmt's line splits as changes
+- [x] `just check` exits 0: fmt clean, clippy 0 warnings, **489 tests pass** (482 pre-existing + 7 cross-product), `check-versions: agree at 0.1.0`
+- [x] The merge to `develop` is `--no-ff`
+- [x] `git status --porcelain` in `develop` is empty — `STATUS.md` and the plan file are now TRACKED (see the plan's open question 1)
 
 ### Phase 2 — security backlog
 
-- [ ] `docs/BACKLOG-network-security.md` exists on `develop`
-- [ ] Its H1 is exactly `Security: network-accessible MCP transport hardening`
-- [ ] All six required items are present as their own sections (Authentication, Authorization, Rate limiting, TLS, Input validation, Logging)
-- [ ] `## References` names OWASP API Security Top 10 **and** the MCP specification security considerations
-- [ ] `## Current state` describes the HTTP transport as **shipped**, not future
-- [ ] `docs/divergences.md:265` no longer says `(on \`feat/security-backlog\`)`
-- [ ] **Every** path named in `docs/divergences.md` and `.guarden/service.yml` that points at `docs/BACKLOG-network-security.md` now resolves to an existing file
-- [ ] `grep -rn "BACKLOG-network-security"` returns only references that resolve
-- [ ] `git grep -c "feat/security-backlog"` on `develop` returns nothing (no stale branch pointer)
-- [ ] `just check` still exits 0 after the doc lands
+- [x] `docs/BACKLOG-network-security.md` exists on `develop`
+- [x] Its H1 is exactly `Security: network-accessible MCP transport hardening`
+- [x] All six required items are present as their own sections (Authentication, Authorization, Rate limiting, TLS, Input validation, Logging) — plus a seventh, deployment posture
+- [x] `## References` names OWASP API Security Top 10 **and** the MCP specification security considerations
+- [x] `## Current state` describes the HTTP transport as **shipped**, not future
+- [x] `docs/divergences.md:265` no longer says `(on \`feat/security-backlog\`)`
+- [x] **Every** path named in `docs/divergences.md` and `.guarden/service.yml` that points at `docs/BACKLOG-network-security.md` now resolves to an existing file
+- [x] `grep -rn "BACKLOG-network-security"` returns only references that resolve
+- [x] `git grep -c "feat/security-backlog"` on `develop` returns nothing in shipped code — the only hits are this plan and `STATUS.md`, which narrate the history rather than point at a branch
+- [x] `just check` still exits 0 after the doc lands
 
 ### Phase 3 — honest recipes
 
-- [ ] `just record` exits 1 with a message naming the missing recorder (not "no bin target named")
-- [ ] `just corpus-check` exits 1 with the same honest message
-- [ ] `just precommit` exits 0 and no longer chains a recipe that cannot pass
-- [ ] `STATUS.md` item 2 is updated to say the recipes now fail honestly and the recorder is still unbuilt
+- [x] `just record` exits 1 with a message naming the missing recorder (not "no bin target named")
+- [x] `just corpus-check` exits 1 with the same honest message
+- [x] `just precommit` no longer chains a recipe that cannot pass
+- [x] `STATUS.md` item 2 is updated to say the recipes now fail honestly and the recorder is still unbuilt
 
 ### Phase 4 — abandoned work
 
-- [ ] `feat/guarden-deploy`'s 13 modified files and untracked `src/http.rs` have a **decided** disposition (preserved-for-the-record or discarded), and it is recorded
-- [ ] No worktree other than `develop` is left with unexplained modifications
-- [ ] The remaining four worktrees are clean apart from the two untracked symlink helpers
+- [x] `feat/guarden-deploy`'s 13 modified files and untracked `src/http.rs` have a **decided** disposition: **preserved for the record** as `04629ac`, with the measurement that justified losing it in the commit message
+- [x] No worktree other than `develop` is left with unexplained modifications
+- [x] The remaining four worktrees are clean apart from the two untracked symlink helpers
 
 ### Global
 
-- [ ] `test/vault/` is byte-identical to `HEAD` — `git status --porcelain test/vault/` is empty
+- [x] `test/vault/` is byte-identical to `HEAD` — `git status --porcelain test/vault/` is empty
 - [ ] No file outside the plan's set was touched. The base is the **local** `develop` HEAD at plan time (`60b89d8`), not `origin/develop` — `origin/develop` is `6c89ee7`, fifteen commits *behind*, so diffing against it shows the whole transport feature and cannot answer the question:
       ```bash
       git diff --stat 60b89d8 -- . ':!docs/BACKLOG-network-security.md' ':!docs/divergences.md' ':!src/main.rs' ':!src/transport.rs' ':!justfile'
       # expect: empty — no file outside the plan's set was touched
       ```
       (`STATUS.md` is excluded because it is untracked and never appears in a diff against a commit.)
-- [ ] Nothing is pushed (the user did not ask for a push)
+- [x] Nothing is pushed (the user did not ask for a push)
 
 ---
 
