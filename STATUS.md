@@ -1,6 +1,6 @@
 # STATUS
 
-Handoff for the next agent. Rewritten 2026-10-20 on branch `develop` at `cdcba59`.
+Handoff for the next agent. Rewritten 2026-10-20 on branch `develop` at `cf69857`.
 
 ## Read these first
 
@@ -9,28 +9,29 @@ Handoff for the next agent. Rewritten 2026-10-20 on branch `develop` at `cdcba59
 | `CONTEXT.md` | The domain vocabulary. Use its words. `Base`, `View`, `Host note`, `Base region`, `Projection`, `Property ID`, `Link value`, `Divergence`, `Divergence registry`, `Fixture vault`, `Testing vault`. Do not write "embed" for a **Base region**. |
 | `docs/divergences.md` | The Divergence registry, and the single place a Divergence may be recorded. D1-D9 plus a Bugs section. Consult before calling anything a bug. |
 | `docs/tooling.md` | Every gate, the four transport/backend combinations, and how to run the container. |
-| `PLAN-security-backlog-and-gate-repair.md` | What is still outstanding, and why. Phases 2, 3 and 4 are open. |
+| `PLAN-security-backlog-and-gate-repair.md` | What is still outstanding, and why. Phase 4 is open. |
 
 ## Repo state
 
 ```
-develop             cdcba59  [origin/develop]   Rust, shipping
+develop             cf69857  [origin/develop]   Rust, shipping
 ts-implementation   9a86bd5  [origin/ts-impl]   TypeScript + 4 ported data-loss fixes
 main                0fbef40  [origin/main]      frozen
 ```
 
-`develop` is 18 commits ahead of `origin/develop`. Nothing has been pushed.
+`develop` is 19 commits ahead of `origin/develop`. Nothing has been pushed.
 
 ## Verified green
 
 | Gate | Result |
 |---|---|
-| `just check` | **487 tests pass**, fmt clean, clippy 0 warnings, versions agree |
-| `cargo test --test cross_product` | 5 passed — all four transport x backend combinations, with writes |
+| `just check` | **489 tests pass**, fmt clean, clippy 0 warnings, versions agree |
+| `cargo test --test cross_product` | 7 passed — all four transport x backend combinations, with writes; a note whose name needs percent-encoding; `write_note` refusing a missing path |
 | `podman build -f Containerfile` | image builds; `localhost/bases-mcp:latest` |
-| the built image | HTTP handshake + `tools/list` answer; a `write_note` and an `add_note_to_base` land on the HOST filesystem; the stdio transport answers over the container's stdin |
+| the built image | with the DOCUMENTED command (`--userns=keep-id`): HTTP handshake + `tools/list` answer; a `write_note` and an `add_note_to_base` land on the HOST filesystem; the stdio transport answers over the container's stdin |
 | `test/vault` | 9 files, pure LF, untouched |
 | working tree | clean except two untracked files (this file and the plan) |
+| `just record` / `just corpus-check` | exit 1 with a message naming the missing recorder — a deliberate honest failure, not cargo's `no bin target named` |
 
 ## What changed most recently
 
@@ -43,9 +44,14 @@ combinations were tested: `(stdio, fs)` and `(http, fs)`. The two a deployment
 actually uses, `(stdio, webdav)` and `(http, webdav)`, were untested.
 `tests/cross_product.rs` drives all four end to end: it spawns the real
 binary, speaks MCP to it the way a client does, and checks every write **at
-the far end** — the file read back off disk, or the bytes read back from the
-WebDAV server's own store. A write that reports success without landing
-anywhere fails the suite.
+the far end** — the file read back off disk, or the note READ BACK over HTTP
+from the WebDAV server, not peeked at in its map. A write that reports success
+without landing anywhere fails the suite.
+
+The WebDAV fixture is a real HTTP server speaking the real protocol, and two
+of its properties are **mutation-checked** rather than assumed: with the hrefs
+emitted decoded again the encoding test FAILS, and with the server storing
+different bytes than it received both WebDAV cells FAIL.
 
 Three defects in the `Containerfile` made the image unbuildable, and all three
 were silent until a build ran:
@@ -57,9 +63,19 @@ were silent until a build ran:
    declared target whose file is missing is a **manifest error** — cargo could
    not parse the manifest, so it never compiled anything.
 3. The image's user was left to `useradd --system`, which picks 999 on Debian.
-   The uid is now pinned to **1000**, because a host operator can only arrange
-   for the container to write the vault if they know which uid to arrange it
-   for. See `docs/tooling.md` for the `chown` this needs.
+   The uid is now pinned to **1000** — and pinning it is not decoration:
+   guarden reads the image's user out of the image and renders
+   `Userns=keep-id:uid=…,gid=…` from it (ADR-0019), so it can only pin a uid
+   it can read.
+
+And a fourth defect that only a review found, because the symptom looked
+right: **the container could read the vault but not write it.** Under rootless
+podman the host uid is mapped to CONTAINER ROOT, so a host file owned by uid
+1000 appears inside as owned by uid 0, and the server runs as uid 1000 — not
+the owner. The fix is `--userns=keep-id`, which maps the host uid to the same
+uid inside. The first remedy (a `chown` to uid 1000) was wrong in a way that
+made it look right: it makes the files appear as uid 0, which uid 1000 still
+does not own. See `docs/tooling.md`.
 
 **The `fmt` gate was red on committed code** (`7478d89`). It was clean at
 `dd80ca0` and dirty at `60b89d8`: the transport branch was committed
@@ -82,14 +98,36 @@ changes.
    ticket names and both references point at — carrying the guarden branch's
    content with its stale "HTTP does not exist yet" claim corrected.
 
+### The security backlog document has LANDED
+
+`docs/BACKLOG-network-security.md` (plan Phase 2) is now on `develop`, at the
+path the ticket names *and* the path both dangling references pointed at. It
+carries the seven-item hardening list with the OWASP API Security Top 10
+(2023) mapping, and every claim in it was checked against the tree before it
+was written — the tool count, the `MAX_DEPTH = 96` guard, the parser's
+measured 471-level edge, the path assertions, the config redaction.
+
+The one claim that had to change is the one the stale branch got wrong: the
+transport **ships**. The old draft said "an HTTP transport does not exist on
+this branch yet", which was true when the branch forked and false today. The
+document now describes the transport as it is, and adds the deployment posture
+that the container work established — the loopback default, the deliberate
+`0.0.0.0` override, the non-root uid, and the fact that `--userns=keep-id` is
+a *containment* control and says nothing about who may call the tools.
+
+`docs/divergences.md` no longer points at a branch that does not exist.
+
 ### Bugs known, not fixed
 
-2. **`just record` and `just corpus-check` are broken.** Both call
-   `cargo run --release --bin parity-record`, and no such bin target exists.
-   `justfile:82,90` and the `precommit` recipe all reference it. `STATUS.md`
-   item 2 of the previous revision offered the alternative: build it, or make
-   the recipes fail honestly. Plan Phase 3 does the latter, and removes
-   `corpus-check` from `precommit` — a gate that cannot pass is not a gate.
+2. **`just record` and `just corpus-check` now fail HONESTLY** (was: they
+   failed with cargo's `no bin target named 'parity-record'`). Both recipes
+   print what is missing and exit 1. `precommit` no longer chains
+   `corpus-check` — a gate that cannot pass is not a gate, and leaving it in
+   made every pre-commit run red for a reason that had nothing to do with the
+   change being committed. The recorder itself is still **not built**: the
+   threshold for building it (a live Obsidian CLI in CI, a snapshot corpus
+   under `test/parity/data/`, and a comparison target that reads that corpus)
+   is not met — none of the three hold today.
 3. **`get_note` never returns `base_hash`, but `write_note` documents it as
    coming from `get_note`** (`src/tools.rs:233` omits `note.base_hash`). The
    conditional-write flow is impossible for an agent as documented. Small fix.

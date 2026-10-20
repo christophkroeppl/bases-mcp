@@ -78,16 +78,30 @@ cli-vaults:
     @obsidian vaults
 
 # Record the CLI's answers for every Base and view. Needs Obsidian.
+#
+# The recorder does not exist. `parity-record` is not a bin target in
+# Cargo.toml, so this recipe cannot work. Building it is tracked as
+# STATUS.md item 2; until it exists, the recipe says so instead of failing
+# with "no bin target named `parity-record`".
 record *ARGS:
-    cargo run --release --bin parity-record -- {{ARGS}}
+    @echo "parity-record is not built yet (STATUS.md item 2)." >&2
+    @echo "This recipe needs a snapshot recorder that does not exist." >&2
+    @exit 1
 
 # Compare against the recorded snapshot, using the real CLI.
 parity-recorded:
     cargo test --features parity --test parity
 
 # Does the testing vault still match the recorded snapshot?
+#
+# There is no snapshot corpus to check against: `test/parity/data/` does not
+# exist, and `tests/parity.rs` calls the live CLI rather than reading a
+# corpus. The recorder is tracked as STATUS.md item 2; until it exists, the
+# recipe says so instead of failing with "no bin target named `parity-record`".
 corpus-check:
-    cargo run --release --bin parity-record -- --check
+    @echo "parity-record is not built yet (STATUS.md item 2)." >&2
+    @echo "There is no snapshot corpus to check against test/parity/data/." >&2
+    @exit 1
 
 # -- housekeeping ------------------------------------------------------------
 
@@ -100,7 +114,7 @@ precommit:
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
     OBSIDIAN_BIN=/nonexistent/obsidian cargo test --all-targets
-    @just corpus-check
+    @just check-versions
 
 # What a new machine needs, once. Prints the path to register.
 dev-setup:
