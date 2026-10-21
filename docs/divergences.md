@@ -943,6 +943,34 @@ deliberately **not** part of `Eq`/`Ord`/`Hash`: those are written by hand over
 the instant, so the query pipeline's sort still compares instants and a
 date-only value and a midnight datetime still sort together.
 
+### `list.contains` rejected a Date needle
+
+`m_list_contains` dispatched on the needle's type and rejected everything that
+was not a String, Number, Boolean, Link, File, List or null, so
+`[date("2026-01-05T17:30")].contains(date("2026-01-05T17:30"))` was a hard
+`Type error in "contains", parameter "value". Expected String not, given Date.`
+The TypeScript tree answered the same call through a Date arm of its own.
+
+The shipped Obsidian 1.14.4 bundle says neither is right, and reading it
+launches nothing. `list.contains` registers
+`params: [self: List, value: "text" union over Any]`, so its type check admits
+every value, and its body is `operate(e,t){return e.includes(t)}`.
+`ListValue.includes` is `for(...) if(aK.looseEquals(e,this.get(n))) return !0`;
+the static `aK.looseEquals` falls through to the instances' own `looseEquals`
+methods, and `DateValue.looseEquals` compares `date.getTime()` when BOTH sides
+carry a time and `this.dateOnly().date.getTime()` otherwise. That is exactly
+`dates_equal`: two moments by instant, a day on either side by calendar day.
+
+Fixed by letting every non-null needle take the loose-equality path, which is
+what `containsAll` and `containsAny` already did. Pinned by
+`contains_reads_a_date_needle_the_way_equality_does`; reinstating the type error
+turns its first assertion red.
+
+The TypeScript tree still compares a Date needle by exact milliseconds, so it
+answers `false` for a date-only needle against a moment on that day. That arm is
+a divergence in the TypeScript tree, not a measurement of Obsidian; the Rust
+tree follows the bundle.
+
 ### `project` appended a stray newline (fixed in both)
 
 The Projection builder added a newline after every rendered region without
