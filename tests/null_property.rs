@@ -27,7 +27,6 @@ use bases_mcp::base::QueryOptions;
 use bases_mcp::service::Resolver;
 
 // Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
 mod common;
 use common::futures_block_on;
 

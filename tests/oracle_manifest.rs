@@ -20,7 +20,6 @@
 //! temporary directory, so a test that dies mid-write leaves a file the OS
 //! reclaims.
 
-#[allow(dead_code)]
 mod common;
 
 use std::path::{Path, PathBuf};
