@@ -902,33 +902,13 @@ fn m_is_empty(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> 
 // String methods
 // ---------------------------------------------------------------------------
 
-/// Whether a string contains a needle, case-insensitively.
-///
-/// This is Obsidian's `haystack.toLowerCase().includes(needle.toLowerCase())`
-/// — the case folding is on BOTH sides, and it is the only string method in
-/// the family that folds case at all. `startsWith` and `endsWith` are
-/// case-SENSITIVE in Obsidian, so folding their case would introduce a
-/// divergence rather than remove one. See [`m_str_starts_with`] and
-/// `docs/divergences.md` for the measured table.
+// Obsidian's measured case-rule table is under "Behaviour probes" in
+// docs/divergences.md: contains folds, startsWith and endsWith do not.
 fn str_contains_ci(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
-/// Whether a string contains a needle, the way `contains` reads it.
-///
-/// Same as [`str_contains_ci`], and additionally **an empty needle is
-/// false** — `"Hello World".contains("")` is false, even though every other
-/// string contains the empty string.
-///
-/// The empty-needle rule is the surprising one, and it is deliberate: it is
-/// Obsidian's `"" !== needle && haystack.toLowerCase().includes(needle.toLowerCase())`
-/// — the guard is on the NEEDLE, not on the haystack. Without it `contains("")`
-/// would be true, which would make every non-empty string match an empty
-/// search — the opposite of what a search means.
-///
-/// The guard is on `contains` ALONE. `containsAll("")` and `containsAny("")`
-/// are true, because Obsidian's variadic forms have no such guard: they fold
-/// the case and call `includes` on each needle, and `includes("")` is true.
+// The empty-needle guard is on `contains` alone; containsAll("") is true.
 fn str_contains(haystack: &str, needle: &str) -> bool {
     !needle.is_empty() && str_contains_ci(haystack, needle)
 }
@@ -972,15 +952,6 @@ fn m_str_contains_any(
     )))
 }
 
-/// `startsWith` is CASE-SENSITIVE, unlike `contains`.
-///
-/// Measured against the Obsidian CLI on 1.14.4: `"Hello World".startsWith("hello")`
-/// is false, and so is `endsWith("world")`. Obsidian's own implementation is a
-/// plain `data.startsWith(needle)` with no case folding, while `contains` folds
-/// both sides. The asymmetry is Obsidian's, and matching it is the point.
-///
-/// See [`str_contains`], which is the case-insensitive one, and
-/// `docs/divergences.md` for the measured table.
 fn m_str_starts_with(
     target: &BasesValue,
     args: &[BasesValue],
