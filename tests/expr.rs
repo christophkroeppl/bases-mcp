@@ -513,6 +513,89 @@ fn string_methods_match_the_documented_set() {
     assert!(b("\"abc\".containsAny(\"z\", \"b\")"));
 }
 
+/// `contains` is CASE-INSENSITIVE, while `==`, `startsWith` and `endsWith`
+/// are case-SENSITIVE.
+///
+/// Measured against the Obsidian CLI on 1.14.4, and the asymmetry is
+/// Obsidian's: `contains` folds the case of BOTH sides, while the other two
+/// are plain `startsWith`/`endsWith` with no folding.
+///
+/// The temptation is to "make all four agree" by folding `startsWith` and
+/// `endsWith` too — and that would introduce a divergence rather than remove
+/// one. `==` and `startsWith`/`endsWith` already agree with Obsidian, and
+/// `contains` is the one that did not.
+#[test]
+fn contains_folds_case_and_the_other_string_methods_do_not() {
+    // `contains` folds both sides.
+    assert!(b("\"Hello World\".contains(\"hello\")"));
+    assert!(b("\"Hello World\".contains(\"HELLO\")"));
+    assert!(b("\"Hello World\".contains(\"Hello World\")"));
+    assert!(!b("\"Hello World\".contains(\"goodbye\")"));
+
+    // `startsWith` and `endsWith` do NOT fold.
+    assert!(!b("\"Hello World\".startsWith(\"hello\")"));
+    assert!(!b("\"Hello World\".startsWith(\"HELLO\")"));
+    assert!(b("\"Hello World\".startsWith(\"Hello\")"));
+    assert!(!b("\"Hello World\".endsWith(\"world\")"));
+    assert!(!b("\"Hello World\".endsWith(\"WORLD\")"));
+    assert!(b("\"Hello World\".endsWith(\"World\")"));
+
+    // `==` does not fold either.
+    assert!(!b("\"Hello World\" == \"hello world\""));
+    assert!(b("\"Hello World\" == \"Hello World\""));
+}
+
+/// The variadic forms fold the case too, and have NO empty-needle guard.
+///
+/// The single-needle `contains("")` is false; `containsAll("")` and
+/// `containsAny("")` are true. That is not a subtlety of ours — Obsidian's
+/// `contains` carries a `"" !== needle` guard and the variadic forms do not.
+#[test]
+fn contains_all_and_any_fold_case_and_keep_the_empty_needle() {
+    assert!(b("\"Hello World\".containsAll(\"hello\", \"world\")"));
+    assert!(b("\"Hello World\".containsAll(\"HELLO\", \"WORLD\")"));
+    assert!(!b("\"Hello World\".containsAll(\"hello\", \"goodbye\")"));
+    assert!(b("\"Hello World\".containsAny(\"zzz\", \"hello\")"));
+    assert!(b("\"Hello World\".containsAny(\"zzz\", \"HELLO\")"));
+    assert!(!b("\"Hello World\".containsAny(\"zzz\", \"goodbye\")"));
+
+    // The empty needle: guarded on `contains` alone.
+    assert!(!b("\"Hello World\".contains(\"\")"));
+    assert!(b("\"Hello World\".containsAll(\"\")"));
+    assert!(b("\"Hello World\".containsAny(\"\")"));
+}
+
+/// A property whose value is a LINK inherits the string `contains` rules.
+///
+/// A Link in Obsidian is a subclass of String whose data is the RAW TARGET,
+/// so `linkish.contains("hello")` folds the case and `linkish.contains("")` is
+/// false — the string rules — while `linkish.contains("[")` is false, because
+/// the brackets belong to the rendering rather than to the data.
+///
+/// `startsWith` is NOT a Link method in Obsidian (a Link is a String
+/// subclass, so it inherits the String methods, and the Bases expression
+/// language dispatches on the DECLARED type) — our implementation refuses it
+/// too, and the CLI says the same: "Cannot find function startsWith on type
+/// List" for a list, and a Link answers on its own terms.
+#[test]
+fn a_link_receiver_inherits_the_string_contains_rules() {
+    let ctx = make_ctx(Some(AccessorsOptions::props(&[(
+        "linkish",
+        BasesValue::Link {
+            target: "Hello World".into(),
+            display: None,
+            resolved: Some("Hello World".into()),
+        },
+    )])));
+
+    assert!(b_in("linkish.contains(\"hello\")", &ctx));
+    assert!(b_in("linkish.contains(\"HELLO\")", &ctx));
+    assert!(b_in("linkish.contains(\"Hello World\")", &ctx));
+    // The raw target, not the `[[...]]` rendering.
+    assert!(!b_in("linkish.contains(\"[\")", &ctx));
+    assert!(!b_in("linkish.contains(\"\")", &ctx));
+}
+
 #[test]
 fn object_keys_and_values_work_on_a_namespace() {
     let ctx = make_ctx(Some(AccessorsOptions::default().prop("status", "active")));

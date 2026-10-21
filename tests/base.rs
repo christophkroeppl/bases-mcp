@@ -755,6 +755,68 @@ fn a_formula_sees_the_formula_it_references() {
 }
 
 // ---------------------------------------------------------------------------
+// The case rules of the string methods
+// ---------------------------------------------------------------------------
+
+/// The case rules of `contains`, `startsWith`, `endsWith` and `==`, as the CLI
+/// answers them.
+///
+/// Measured against the Obsidian CLI on 1.14.4, over the `string-case`
+/// fixture. The asymmetry is Obsidian's own: `contains` folds the case of both
+/// sides, and the other three do not. The whole table is asserted in one test
+/// because a subset would miss the point — the point is that ONE of the four
+/// folds and the other three do not.
+///
+/// A base-level guard rather than an expression-level one, because the four
+/// have to agree WITH EACH OTHER as well as with Obsidian, and only a base
+/// evaluates them side by side.
+#[test]
+fn contains_folds_case_and_the_other_three_do_not() {
+    let vault = fixture_vault("string-case");
+    let base = base_of(&vault, "Case.base");
+    let result = query_base(&vault, "Case.base", &base, &QueryOptions::default()).expect("queries");
+    let row = &result.rows[0];
+    let value = |id: &str| row.values[id].to_display_string();
+
+    // `==` is case-sensitive.
+    assert_eq!(value("formula.eq_exact"), "true");
+    assert_eq!(value("formula.eq_lower"), "false");
+
+    // `contains` folds the case, and an empty needle is false.
+    assert_eq!(value("formula.contains_lower"), "true");
+    assert_eq!(value("formula.contains_upper"), "true");
+    assert_eq!(value("formula.contains_exact"), "true");
+    assert_eq!(value("formula.contains_empty"), "false");
+
+    // The variadic forms fold the case too, and have NO empty-needle guard:
+    // Obsidian's `contains` carries the guard and the variadic forms do not.
+    assert_eq!(value("formula.contains_all_lower"), "true");
+    assert_eq!(value("formula.contains_all_upper"), "true");
+    assert_eq!(value("formula.contains_all_empty"), "true");
+    assert_eq!(value("formula.contains_any_lower"), "true");
+    assert_eq!(value("formula.contains_any_upper"), "true");
+    assert_eq!(value("formula.contains_any_empty"), "true");
+
+    // `startsWith` and `endsWith` do NOT fold.
+    assert_eq!(value("formula.starts_lower"), "false");
+    assert_eq!(value("formula.starts_upper"), "false");
+    assert_eq!(value("formula.starts_exact"), "true");
+    assert_eq!(value("formula.ends_lower"), "false");
+    assert_eq!(value("formula.ends_upper"), "false");
+    assert_eq!(value("formula.ends_exact"), "true");
+
+    // An empty prefix or suffix is still a match — the empty-needle rule
+    // belongs to `contains` alone.
+    assert_eq!(value("formula.starts_empty"), "true");
+    assert_eq!(value("formula.ends_empty"), "true");
+
+    // `file.name` is a String, so it takes the string `contains` — case folded.
+    assert_eq!(value("formula.file_name_contains_lower"), "true");
+    // ...and `startsWith` on it, which does not fold.
+    assert_eq!(value("formula.file_name_starts_lower"), "false");
+}
+
+// ---------------------------------------------------------------------------
 // AllNotes.base: the parity oracle
 // ---------------------------------------------------------------------------
 

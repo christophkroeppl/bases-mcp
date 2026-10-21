@@ -883,6 +883,37 @@ fn m_is_empty(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> 
 // String methods
 // ---------------------------------------------------------------------------
 
+/// Whether a string contains a needle, case-insensitively.
+///
+/// This is Obsidian's `haystack.toLowerCase().includes(needle.toLowerCase())`
+/// — the case folding is on BOTH sides, and it is the only string method in
+/// the family that folds case at all. `startsWith` and `endsWith` are
+/// case-SENSITIVE in Obsidian, so folding their case would introduce a
+/// divergence rather than remove one. See [`m_str_starts_with`] and
+/// `docs/divergences.md` for the measured table.
+fn str_contains_ci(haystack: &str, needle: &str) -> bool {
+    haystack.to_lowercase().contains(&needle.to_lowercase())
+}
+
+/// Whether a string contains a needle, the way `contains` reads it.
+///
+/// Same as [`str_contains_ci`], and additionally **an empty needle is
+/// false** — `"Hello World".contains("")` is false, even though every other
+/// string contains the empty string.
+///
+/// The empty-needle rule is the surprising one, and it is deliberate: it is
+/// Obsidian's `"" !== needle && haystack.toLowerCase().includes(needle.toLowerCase())`
+/// — the guard is on the NEEDLE, not on the haystack. Without it `contains("")`
+/// would be true, which would make every non-empty string match an empty
+/// search — the opposite of what a search means.
+///
+/// The guard is on `contains` ALONE. `containsAll("")` and `containsAny("")`
+/// are true, because Obsidian's variadic forms have no such guard: they fold
+/// the case and call `includes` on each needle, and `includes("")` is true.
+fn str_contains(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty() && str_contains_ci(haystack, needle)
+}
+
 fn m_str_contains(
     target: &BasesValue,
     args: &[BasesValue],
@@ -897,7 +928,7 @@ fn m_str_contains(
         ))
         .with_construct("contains"));
     };
-    Ok(BasesValue::Bool(haystack.contains(n.as_str())))
+    Ok(BasesValue::Bool(str_contains(&haystack, n.as_str())))
 }
 
 fn m_str_contains_all(
@@ -907,7 +938,7 @@ fn m_str_contains_all(
 ) -> Result<BasesValue> {
     let s = as_str(target, "containsAll")?;
     Ok(BasesValue::Bool(args.iter().all(
-        |a| matches!(a, BasesValue::String(n) if s.contains(n.as_str())),
+        |a| matches!(a, BasesValue::String(n) if str_contains_ci(&s, n.as_str())),
     )))
 }
 
@@ -918,10 +949,19 @@ fn m_str_contains_any(
 ) -> Result<BasesValue> {
     let s = as_str(target, "containsAny")?;
     Ok(BasesValue::Bool(args.iter().any(
-        |a| matches!(a, BasesValue::String(n) if s.contains(n.as_str())),
+        |a| matches!(a, BasesValue::String(n) if str_contains_ci(&s, n.as_str())),
     )))
 }
 
+/// `startsWith` is CASE-SENSITIVE, unlike `contains`.
+///
+/// Measured against the Obsidian CLI on 1.14.4: `"Hello World".startsWith("hello")`
+/// is false, and so is `endsWith("world")`. Obsidian's own implementation is a
+/// plain `data.startsWith(needle)` with no case folding, while `contains` folds
+/// both sides. The asymmetry is Obsidian's, and matching it is the point.
+///
+/// See [`str_contains`], which is the case-insensitive one, and
+/// `docs/divergences.md` for the measured table.
 fn m_str_starts_with(
     target: &BasesValue,
     args: &[BasesValue],
@@ -939,6 +979,10 @@ fn m_str_starts_with(
     Ok(BasesValue::Bool(s.starts_with(p.as_str())))
 }
 
+/// `endsWith` is CASE-SENSITIVE, unlike `contains`.
+///
+/// See [`m_str_starts_with`]; the two agree with each other and disagree with
+/// `contains` in the same way.
 fn m_str_ends_with(
     target: &BasesValue,
     args: &[BasesValue],
@@ -1502,12 +1546,29 @@ fn m_link_links_to(
 
 /// `subcategory.contains(link("Note#Heading", "Alias"))` is a documented
 /// pattern, so a Link receiver compares against the link text.
+///
+/// A Link in Obsidian is a SUBCLASS of String whose data is the RAW TARGET,
+/// not the `[[...]]` rendering. So `linkish.contains("hello")` folds the case
+/// and `linkish.contains("")` is false — the string rules — but
+/// `linkish.contains("[")` is **false**, because the brackets are part of the
+/// rendering, not of the data. Measured against the CLI on 1.14.4: for
+/// `linkish: "[[Hello World]]"`, `contains("hello")` and `contains("Hello")`
+/// are true, `contains("[")` is false, and `contains("")` is false.
+///
+/// The rendering is reachable through `toString()`, which is what
+/// `linkish.toString()` answers: `[[Hello World]]`.
 fn m_link_contains(
     target: &BasesValue,
     args: &[BasesValue],
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
-    let s = target.to_display_string();
+    // The link's DATA: the raw target, not the `[[...]]` rendering and not
+    // the resolved path. Obsidian's LinkValue stores the target the author
+    // wrote; `resolve()` is a separate call.
+    let s = match target {
+        BasesValue::Link { target, .. } => target.clone(),
+        other => other.to_display_string(),
+    };
     let needle = arg(args, 0);
     match &needle {
         BasesValue::Link { .. } | BasesValue::File(_) => Ok(BasesValue::Bool(matches_link_text(
@@ -1515,7 +1576,10 @@ fn m_link_contains(
             &linkish_path(&needle).unwrap_or_default(),
         ))),
         BasesValue::Namespace(_) | BasesValue::List(_) => Ok(BasesValue::Bool(false)),
-        other => Ok(BasesValue::Bool(s.contains(&other.to_display_string()))),
+        other => Ok(BasesValue::Bool(str_contains(
+            &s,
+            &other.to_display_string(),
+        ))),
     }
 }
 
