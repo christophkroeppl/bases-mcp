@@ -1,0 +1,140 @@
+# The CLI's traps, in one fixture.
+#
+# Five behaviours of `obsidian base:query` that are easy to get wrong and easy
+# to regress without noticing. Each one is a "silently" trap: nothing in the
+# output says "I dropped a column" or "I truncated you" -- the result simply
+# does not contain what you asked for. `tests/cli_traps.rs` pins all five.
+#
+#   1. `limit:` truncates the rows and says nothing. The pre-limit count
+#      survives in `total`, and nowhere else.
+#   2. The columns are the ones the view ORDERS, and only those. A property the
+#      Base declares, or one the view SORTS on, is not a column.
+#   3. A column's header is its DISPLAY NAME, so two columns can share one
+#      name -- and then one JSON key is silently dropped.
+#   4. Every value the CLI emits is a STRING. Numbers, booleans, lists and
+#      links are all stringified; only an absent value stays null.
+#   5. Nulls sort LAST, in BOTH directions. Not "first ascending": last.
+#
+# ## Where the evidence comes from
+#
+# The live CLI cannot be run here: it talks to the desktop app, which rewrites
+# the `.base` files of whatever vault is open, and the vault the app has open is
+# the parity oracle on `develop`, not this worktree. Running it here would
+# corrupt the oracle for everyone.
+#
+# So the behaviour is read out of the SHIPPED app instead: the Obsidian
+# installation on this host carries its own JavaScript bundle, and the Bases
+# engine is in it. Reading a file is not running the CLI -- nothing is
+# launched, no vault is opened, and nothing is written. That is the same
+# technique the project used to enumerate the Bases function registry, and it
+# gives a stronger answer than a probe would: the code that decides is the code
+# that runs.
+#
+# The three facts below are that code, transcribed:
+#
+#   * The CLI handler builds its JSON rows as
+#     `row[displayName] = cell` for each column in `getOrder()`, and
+#     `getOrder()` returns `this.order || ["file.name"]`. So the columns are
+#     the ordered ones, the keys are display names, and a later column
+#     overwrites an earlier one that shares a name.
+#   * The cell is `value == null || value === NullValue.value ? "" :
+#     value.toString()`, so every value is a STRING and an absent one is the
+#     empty string.
+#   * The sort comparator returns `1` when the left value is the null value and
+#     `-1` when the right one is -- BEFORE the direction is applied. So a null
+#     sorts after every non-null, in both directions.
+#
+# The live CLI comparison is still the deferred UI-validation work (STATUS.md
+# item 14), and it needs a human in the Obsidian UI. What is here is the
+# documented behaviour, pinned.
+filters:
+  and:
+    - file.ext == "md"
+properties:
+  # Both of these are configured with the SAME display name, which is what makes
+  # the third trap observable: the two columns collide on one JSON key.
+  note.status:
+    displayName: Status
+  formula.status_alias:
+    displayName: Status
+formulas:
+  # A formula whose value differs from `note.status`, so a dropped column is
+  # visible in the row rather than hidden behind a null.
+  status_alias: 'kind + "!"'
+views:
+  # 1. A limit truncates, silently.
+  - type: table
+    name: Limited
+    limit: 2
+    order:
+      - file.name
+      - kind
+    sort:
+      - property: file.name
+        direction: ASC
+  # 1, again, with groups: the limit is ONE budget spent across every group,
+  # not one budget per group.
+  - type: table
+    name: LimitedByGroup
+    limit: 2
+    groupBy:
+      property: note.status
+      direction: ASC
+    order:
+      - file.name
+      - kind
+  # 2. The columns are the ordered ones and only those: `note.status` is
+  # DECLARED by this Base and `note.rank` is SORTED on, and neither is a column.
+  - type: table
+    name: Ordered
+    order:
+      - file.name
+      - kind
+    sort:
+      - property: note.rank
+        direction: ASC
+  # 3. Two columns, one header, one JSON key.
+  - type: table
+    name: Colliding
+    order:
+      - file.name
+      - note.status
+      - formula.status_alias
+  # 4. Numbers, booleans, lists and links, all stringified.
+  - type: table
+    name: Strings
+    order:
+      - file.name
+      - note.rank
+      - note.active
+      - note.scores
+      - note.related
+  # 5. Nulls last, ascending ...
+  - type: table
+    name: NullsFirst
+    order:
+      - file.name
+      - note.rank
+    sort:
+      - property: note.rank
+        direction: ASC
+  # ... and descending.
+  - type: table
+    name: NullsLast
+    order:
+      - file.name
+      - note.rank
+    sort:
+      - property: note.rank
+        direction: DESC
+  # 5, once more, on a BOOLEAN column: Obsidian checks the boolean branch
+  # BEFORE the null one, so a missing checkbox sorts with the unchecked ones
+  # rather than at the bottom.
+  - type: table
+    name: Booleans
+    order:
+      - file.name
+      - note.active
+    sort:
+      - property: note.active
+        direction: ASC

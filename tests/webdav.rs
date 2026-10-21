@@ -28,9 +28,9 @@
 //! `src/service.rs`, which a later task owns. They are named in the porting
 //! report rather than approximated with a stand-in resolver.
 
-// Each integration test is its own crate, and no two of them need every helper here.
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use bases_mcp::error::BasesError;

@@ -35,11 +35,11 @@
 //! thing under test.
 //!
 //! Nothing here writes to `test/vault`. It is the parity oracle and stays at
-//! exactly [`CORPUS_SIZE`] files.
+//! exactly [`CORPUS_SIZE`] files — a set the manifest pins, byte for byte.
 
-// Each integration test is its own crate, and not every one needs every helper.
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::collections::BTreeMap;
@@ -54,7 +54,8 @@ use bases_mcp::error::BasesError;
 use bases_mcp::labels::{canonical_id_of, display_name_for, label_for_id, strip_namespace};
 use bases_mcp::value::BasesValue;
 use bases_mcp::vault::{FsVaultSource, Vault};
-use common::{count_files, futures_block_on, vault_dir, CORPUS_SIZE};
+use common::manifest::assert_vault_matches_manifest;
+use common::{futures_block_on, vault_dir};
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -323,10 +324,14 @@ fn a_date_only_value_equals_the_datetime_on_the_same_day() {
 
 #[test]
 fn the_testing_vault_is_untouched() {
-    // The oracle's size underpins every comparison below: a tenth file would
-    // change what Obsidian returns for the same query. This suite reads the
-    // vault and never writes to it, so this must not move.
-    assert_eq!(count_files(&vault_dir()), CORPUS_SIZE);
+    // The oracle underpins every comparison below: a changed file would change
+    // what Obsidian returns for the same query. This suite reads the vault and
+    // never writes to it, so this must not move.
+    //
+    // A MANIFEST, not a count. The count could only see a file being added;
+    // the desktop app rewriting a `.base` file leaves the count at nine and
+    // the oracle changed underneath it.
+    assert_vault_matches_manifest();
 }
 
 // ---------------------------------------------------------------------------
@@ -828,6 +833,330 @@ fn not_excludes_on_any_match_which_is_what_distinguishes_it_from_a_negation() {
 }
 
 // ---------------------------------------------------------------------------
+// A tag is a distinct type
+// ---------------------------------------------------------------------------
+
+/// A tag list is never loose-equal to a bare string.
+///
+/// This is the divergence STATUS.md item 4 named: `tags == "project"` returned
+/// true on our side and false in Obsidian. The cause is that Obsidian types
+/// `tags` as a tag list -- a `TagValue` extends `StringValue`, and
+/// `looseEquals` compares constructors, so a tag is never loose-equal to a
+/// plain string.
+///
+/// Every value below was measured against Obsidian 1.14.4, with an equivalent
+/// base queried in an isolated vault. The fixture is never registered in
+/// Obsidian, so what was measured is the rule and what is asserted here is the
+/// same rule over a vault under test.
+#[test]
+fn a_tag_list_is_never_equal_to_a_bare_string() {
+    let vault = fixture_vault("tags-equality");
+    let result = query(&vault, "Tags.base", None, None);
+
+    // `tags == "project"` is FALSE for every note, whether it carries one tag
+    // or two, and whether the tag was written bare or with its `#`.
+    for path in [
+        "Notes/One.md",
+        "Notes/Two.md",
+        "Notes/Other.md",
+        "Notes/Nested.md",
+    ] {
+        assert_eq!(
+            cell(&result, path, "formula.eq_bare").to_display_string(),
+            "false",
+            "tags == \"project\" must be false for {path}"
+        );
+        assert_eq!(
+            cell(&result, path, "formula.eq_list_bare").to_display_string(),
+            "false",
+            "tags == [\"project\"] must be false for {path}"
+        );
+    }
+
+    // The tag's own text carries the `#`, so `tags[0] == "#project"` is TRUE
+    // and `tags[0] == "project"` is FALSE.
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.tags_first").to_display_string(),
+        "#project"
+    );
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.tags_first_eq_hash").to_display_string(),
+        "true"
+    );
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.tags_first_eq_bare").to_display_string(),
+        "false"
+    );
+
+    // A ONE-tag list equals the tag, because a list compares equal to a scalar
+    // only when it holds exactly one element.
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.eq_hash").to_display_string(),
+        "true"
+    );
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.eq_list").to_display_string(),
+        "true"
+    );
+    // A TWO-tag list does not, and neither does a tag with another name.
+    assert_eq!(
+        cell(&result, "Notes/Two.md", "formula.eq_hash").to_display_string(),
+        "false"
+    );
+    assert_eq!(
+        cell(&result, "Notes/Two.md", "formula.eq_list").to_display_string(),
+        "false"
+    );
+    assert_eq!(
+        cell(&result, "Notes/Other.md", "formula.eq_hash").to_display_string(),
+        "false"
+    );
+
+    // A plain string property is unaffected: `status == "active"` is true.
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.status_eq").to_display_string(),
+        "true"
+    );
+}
+
+/// `contains` on a tag list is a TAG MATCH, not an equality.
+///
+/// Obsidian's `tagMatches` lowercases both sides, normalises the needle to a
+/// `#`-prefixed tag, and matches on a `/` boundary. Measured against Obsidian
+/// 1.14.4.
+#[test]
+fn contains_on_a_tag_list_is_a_tag_match() {
+    let vault = fixture_vault("tags-equality");
+    let result = query(&vault, "Tags.base", None, None);
+
+    // Case-insensitive, and the `#` on the needle is optional.
+    for path in ["Notes/One.md", "Notes/Nested.md"] {
+        assert_eq!(
+            cell(&result, path, "formula.contains_bare").to_display_string(),
+            "true",
+            "tags.contains(\"project\") must be true for {path}"
+        );
+        assert_eq!(
+            cell(&result, path, "formula.contains_hash").to_display_string(),
+            "true"
+        );
+        assert_eq!(
+            cell(&result, path, "formula.contains_upper").to_display_string(),
+            "true"
+        );
+        // The match is a prefix on the TAG, not on the needle, so a shorter
+        // needle matches nothing.
+        assert_eq!(
+            cell(&result, path, "formula.contains_prefix").to_display_string(),
+            "false"
+        );
+        // An empty needle never matches.
+        assert_eq!(
+            cell(&result, path, "formula.contains_empty").to_display_string(),
+            "false"
+        );
+    }
+
+    // A note with a different tag does not match.
+    assert_eq!(
+        cell(&result, "Notes/Other.md", "formula.contains_bare").to_display_string(),
+        "false"
+    );
+    assert_eq!(
+        cell(&result, "Notes/Other.md", "formula.contains_upper").to_display_string(),
+        "false"
+    );
+
+    // `hasTag` is the same match, so it is case-insensitive too.
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.has_tag").to_display_string(),
+        "true"
+    );
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.has_tag_upper").to_display_string(),
+        "true"
+    );
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.has_tag_prefix").to_display_string(),
+        "false"
+    );
+    assert_eq!(
+        cell(&result, "Notes/Other.md", "formula.has_tag").to_display_string(),
+        "false"
+    );
+}
+
+/// An EMPTY tag list is an empty list, not a null.
+///
+/// This is the difference between the `tags` PROPERTY and `file.tags`: the
+/// property is absent on a note without one, so `tags.contains(...)` there is
+/// null -- a null receiver, which is its own divergence (a null receiver
+/// raising an error rather than answering null is fixed on another branch).
+/// A note that declares `tags: []` HAS the property, and it holds nothing.
+///
+/// Measured against Obsidian 1.14.4.
+#[test]
+fn an_empty_tag_list_is_an_empty_list_and_not_a_null() {
+    let vault = fixture_vault("tags-equality");
+    let result = query(&vault, "Tags.base", None, None);
+
+    assert_eq!(
+        cell(&result, "Notes/Empty.md", "formula.tags_len").to_display_string(),
+        "0"
+    );
+    assert_eq!(
+        cell(&result, "Notes/Empty.md", "formula.contains_bare").to_display_string(),
+        "false"
+    );
+    assert_eq!(
+        cell(&result, "Notes/Empty.md", "formula.has_tag").to_display_string(),
+        "false"
+    );
+    // The other notes are unaffected.
+    assert_eq!(
+        cell(&result, "Notes/One.md", "formula.tags_len").to_display_string(),
+        "1"
+    );
+    assert_eq!(
+        cell(&result, "Notes/Two.md", "formula.tags_len").to_display_string(),
+        "2"
+    );
+    assert_eq!(
+        cell(&result, "Notes/Other.md", "formula.tags_len").to_display_string(),
+        "1"
+    );
+}
+
+/// The shape of a tag, and tag-list membership, pinned cell by cell.
+///
+/// This is the fixture's guard. `Tags.base` declares one column per rule, and
+/// every column is asserted somewhere in this file; this test covers the ones
+/// the three above do not -- the columns that are easy to leave unasserted
+/// because a regression in them is quiet: the shape of the value (`tags[0]`,
+/// `join`, `length`), the `containsAll`/`containsAny` pair, and the whole
+/// `file.tags` column family.
+///
+/// Every expected answer is a measurement against Obsidian 1.14.4, taken from
+/// an equivalent base in an isolated vault. The notes here are the measured
+/// ones: `Notes/One.md` is the single-tag shape, `Notes/Two.md` the two-tag
+/// shape, `Notes/Other.md` a second name, `Notes/Nested.md` a nested tag.
+/// `Notes/Empty.md` is asserted by the test above rather than here,
+/// because its cells follow from "an empty list" rather than from a
+/// measurement of one.
+///
+/// A note with NO `tags` property at all is deliberately absent from the
+/// fixture: every `tags.*` column would then sit on a null receiver, which is
+/// the divergence in STATUS.md item 5 and another branch's fix. A fixture that
+/// needed it would encode that branch's bug.
+#[test]
+fn the_tag_fixture_holds_for_every_measured_cell() {
+    let vault = fixture_vault("tags-equality");
+    let result = query(&vault, "Tags.base", None, None);
+
+    // The note, then every cell of it this fixture pins.
+    let truth: &[(&str, &[(&str, &str)])] = &[
+        (
+            "Notes/One.md",
+            &[
+                ("formula.eq_not_bare", "true"),
+                ("formula.contains_ticket", "false"),
+                ("formula.contains_all", "true"),
+                ("formula.contains_any", "true"),
+                ("formula.has_tag_hash", "true"),
+                ("formula.has_tag_nested", "false"),
+                ("formula.tags_is_empty", "false"),
+                ("formula.tags_first", "#project"),
+                ("formula.tags_first_eq_bare", "false"),
+                ("formula.tags_first_eq_hash", "true"),
+                ("formula.tags_join", "#project"),
+                ("formula.file_tags_len", "1"),
+                ("formula.file_tags_contains", "true"),
+                ("formula.file_tags_eq_bare", "false"),
+            ],
+        ),
+        (
+            "Notes/Two.md",
+            &[
+                ("formula.eq_not_bare", "true"),
+                ("formula.contains_ticket", "false"),
+                ("formula.contains_all", "true"),
+                ("formula.contains_any", "true"),
+                ("formula.has_tag_hash", "true"),
+                ("formula.has_tag_nested", "false"),
+                ("formula.tags_is_empty", "false"),
+                ("formula.tags_first", "#project"),
+                ("formula.tags_first_eq_bare", "false"),
+                ("formula.tags_first_eq_hash", "true"),
+                ("formula.tags_join", "#project,#business-idea"),
+                ("formula.file_tags_len", "2"),
+                ("formula.file_tags_contains", "true"),
+                ("formula.file_tags_eq_bare", "false"),
+            ],
+        ),
+        (
+            "Notes/Other.md",
+            &[
+                ("formula.eq_not_bare", "true"),
+                ("formula.contains_ticket", "true"),
+                ("formula.contains_all", "false"),
+                ("formula.contains_any", "true"),
+                ("formula.has_tag_hash", "false"),
+                ("formula.has_tag_nested", "false"),
+                ("formula.tags_is_empty", "false"),
+                ("formula.tags_first", "#ticket"),
+                ("formula.tags_first_eq_bare", "false"),
+                ("formula.tags_first_eq_hash", "false"),
+                ("formula.tags_join", "#ticket"),
+                ("formula.file_tags_len", "1"),
+                ("formula.file_tags_contains", "false"),
+                ("formula.file_tags_eq_bare", "false"),
+            ],
+        ),
+        (
+            "Notes/Nested.md",
+            &[
+                ("formula.eq_not_bare", "true"),
+                ("formula.contains_ticket", "false"),
+                ("formula.contains_all", "true"),
+                ("formula.contains_any", "true"),
+                ("formula.has_tag_hash", "true"),
+                // A nested tag matches its PREFIX on the `/` boundary, and
+                // nothing on the other side of it.
+                ("formula.has_tag_nested", "true"),
+                ("formula.tags_is_empty", "false"),
+                ("formula.tags_first", "#project/alpha"),
+                ("formula.tags_first_eq_bare", "false"),
+                ("formula.tags_first_eq_hash", "false"),
+                ("formula.tags_join", "#project/alpha"),
+                ("formula.file_tags_len", "1"),
+                ("formula.file_tags_contains", "true"),
+                ("formula.file_tags_eq_bare", "false"),
+            ],
+        ),
+    ];
+
+    // Every wrong cell is reported, not just the first: a drift in the tag rule
+    // moves several columns at once, and one line per column says which rule
+    // went with it.
+    let mut wrong: Vec<String> = Vec::new();
+    for (path, columns) in truth {
+        for (column, want) in *columns {
+            let got = cell(&result, path, column).to_display_string();
+            if got != *want {
+                wrong.push(format!(
+                    "{path} {column}: Obsidian says {want:?}, we say {got:?}"
+                ));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "the tag rules drifted from the measurement:\n  {}",
+        wrong.join("\n  ")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Formula ordering and cycles
 // ---------------------------------------------------------------------------
 
@@ -860,6 +1189,68 @@ fn a_formula_sees_the_formula_it_references() {
     assert_eq!(values["formula.base_value"].as_number(), Some(41.0));
     assert_eq!(values["formula.doubled"].as_number(), Some(82.0));
     assert_eq!(values["formula.label"].as_number(), Some(83.0));
+}
+
+// ---------------------------------------------------------------------------
+// The case rules of the string methods
+// ---------------------------------------------------------------------------
+
+/// The case rules of `contains`, `startsWith`, `endsWith` and `==`, as the CLI
+/// answers them.
+///
+/// Measured against the Obsidian CLI on 1.14.4, over the `string-case`
+/// fixture. The asymmetry is Obsidian's own: `contains` folds the case of both
+/// sides, and the other three do not. The whole table is asserted in one test
+/// because a subset would miss the point — the point is that ONE of the four
+/// folds and the other three do not.
+///
+/// A base-level guard rather than an expression-level one, because the four
+/// have to agree WITH EACH OTHER as well as with Obsidian, and only a base
+/// evaluates them side by side.
+#[test]
+fn contains_folds_case_and_the_other_three_do_not() {
+    let vault = fixture_vault("string-case");
+    let base = base_of(&vault, "Case.base");
+    let result = query_base(&vault, "Case.base", &base, &QueryOptions::default()).expect("queries");
+    let row = &result.rows[0];
+    let value = |id: &str| row.values[id].to_display_string();
+
+    // `==` is case-sensitive.
+    assert_eq!(value("formula.eq_exact"), "true");
+    assert_eq!(value("formula.eq_lower"), "false");
+
+    // `contains` folds the case, and an empty needle is false.
+    assert_eq!(value("formula.contains_lower"), "true");
+    assert_eq!(value("formula.contains_upper"), "true");
+    assert_eq!(value("formula.contains_exact"), "true");
+    assert_eq!(value("formula.contains_empty"), "false");
+
+    // The variadic forms fold the case too, and have NO empty-needle guard:
+    // Obsidian's `contains` carries the guard and the variadic forms do not.
+    assert_eq!(value("formula.contains_all_lower"), "true");
+    assert_eq!(value("formula.contains_all_upper"), "true");
+    assert_eq!(value("formula.contains_all_empty"), "true");
+    assert_eq!(value("formula.contains_any_lower"), "true");
+    assert_eq!(value("formula.contains_any_upper"), "true");
+    assert_eq!(value("formula.contains_any_empty"), "true");
+
+    // `startsWith` and `endsWith` do NOT fold.
+    assert_eq!(value("formula.starts_lower"), "false");
+    assert_eq!(value("formula.starts_upper"), "false");
+    assert_eq!(value("formula.starts_exact"), "true");
+    assert_eq!(value("formula.ends_lower"), "false");
+    assert_eq!(value("formula.ends_upper"), "false");
+    assert_eq!(value("formula.ends_exact"), "true");
+
+    // An empty prefix or suffix is still a match — the empty-needle rule
+    // belongs to `contains` alone.
+    assert_eq!(value("formula.starts_empty"), "true");
+    assert_eq!(value("formula.ends_empty"), "true");
+
+    // `file.name` is a String, so it takes the string `contains` — case folded.
+    assert_eq!(value("formula.file_name_contains_lower"), "true");
+    // ...and `startsWith` on it, which does not fold.
+    assert_eq!(value("formula.file_name_starts_lower"), "false");
 }
 
 // ---------------------------------------------------------------------------

@@ -74,16 +74,17 @@ fn renders_as_list(view: &BaseView) -> bool {
 
 /// The columns a view shows, in order.
 ///
-/// A view with no `order` shows `file.name` followed by every property the Base
-/// declares, which is what Obsidian shows for an unordered table.
-fn view_order(base: &BaseFile, view: &BaseView) -> Vec<String> {
+/// A view with no `order` shows `file.name` alone. Obsidian's accessor is
+/// `this.order || ["file.name"]`, and an empty array is falsy in JavaScript, so
+/// `order: []` falls back the same way a missing `order` does.
+///
+/// The fallback is NOT the Base's declared properties. The CLI builds both its
+/// JSON rows and its markdown table from `getOrder()`, so a property the Base
+/// DECLARES is not a column unless the view ORDERS it.
+fn view_order(view: &BaseView) -> Vec<String> {
     match view.order.as_deref() {
         Some(ids) if !ids.is_empty() => ids.to_vec(),
-        _ => {
-            let mut ids = vec!["file.name".to_string()];
-            ids.extend(base.properties.keys().cloned());
-            ids
-        }
+        _ => vec!["file.name".to_string()],
     }
 }
 
@@ -105,7 +106,7 @@ pub fn render_markdown(
 
 /// The columns a view renders, as Property IDs paired with their headers.
 pub fn render_columns(base: &BaseFile, view: &BaseView) -> Vec<RenderColumn> {
-    view_order(base, view)
+    view_order(view)
         .into_iter()
         .map(|id| RenderColumn {
             id: canonical(&id),

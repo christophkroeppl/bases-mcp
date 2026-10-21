@@ -219,6 +219,18 @@ pub enum BasesValue {
     Bool(bool),
     Number(f64),
     String(String),
+    /// A tag: a string that Obsidian treats as a type of its own.
+    ///
+    /// Obsidian has a `TagValue` class that extends `StringValue`, and a
+    /// `TagListValue` that extends `ListValue`. The class is load-bearing:
+    /// `looseEquals` compares `constructor`s, so a tag is NOT loose-equal to a
+    /// plain string. Measured against Obsidian 1.14.4: `tags == "project"` is
+    /// false for every tag shape, while `tags[0] == "#project"` is true.
+    ///
+    /// The text carries the `#`. Obsidian stores a tag as `#project` and
+    /// `tags[0].length` is 8, so the prefix is data rather than a display
+    /// convention.
+    Tag(String),
     Date(BasesDate),
     Duration(Duration),
     List(Vec<BasesValue>),
@@ -376,6 +388,24 @@ impl BasesValue {
         }
     }
 
+    /// The tag text, if this value is a tag.
+    pub fn as_tag(&self) -> Option<&str> {
+        match self {
+            BasesValue::Tag(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// A tag, built from a frontmatter value.
+    ///
+    /// Obsidian forces the leading `#` on every tag (`MW`), so `project` and
+    /// `#project` are the same tag. A value that is not a string is NOT a tag:
+    /// Obsidian's frontmatter loader only builds a tag list when every element
+    /// is a string, and a mixed list keeps its elements as they are.
+    pub fn tag(text: impl Into<String>) -> Self {
+        BasesValue::Tag(ensure_hash(text.into()))
+    }
+
     pub fn as_number(&self) -> Option<f64> {
         match self {
             BasesValue::Number(n) => Some(*n),
@@ -393,6 +423,8 @@ impl BasesValue {
             BasesValue::Bool(b) => b.to_string(),
             BasesValue::Number(n) => format_number(*n),
             BasesValue::String(s) => s.clone(),
+            // A tag renders as its text, `#` and all.
+            BasesValue::Tag(s) => s.clone(),
             BasesValue::Date(d) => d.to_string(),
             BasesValue::Duration(d) => d.to_string(),
             BasesValue::List(items) => items
@@ -450,6 +482,44 @@ fn render_namespace(map: &std::collections::BTreeMap<String, BasesValue>) -> Str
         .join("\u{1}")
 }
 
+/// The tag text with a leading `#`, which is how Obsidian stores one.
+///
+/// Obsidian's `MW`: a tag is `#name`, and the `#` is part of the data rather
+/// than a display convention -- `tags[0].length` is 8 for `#project`.
+pub fn ensure_hash(text: String) -> String {
+    if text.starts_with('#') {
+        text
+    } else {
+        format!("#{text}")
+    }
+}
+
+/// Whether a tag matches a needle, the way Obsidian's `tagMatches` does.
+///
+/// The rule, measured against Obsidian 1.14.4:
+///   * both sides are lowercased, so the match is case-insensitive;
+///   * the needle is normalised to a `#`-prefixed tag, so `project` and
+///     `#project` are the same needle;
+///   * the match is a PREFIX match on the tag, not an equality: `project`
+///     matches `#project/alpha`, but `proj` matches nothing;
+///   * the prefix must land on a `/` boundary, so `project` does not match
+///     `#projectile`;
+///   * an empty needle never matches.
+///
+/// This is what `tags.contains(x)` and `file.hasTag(x)` do. It is NOT what
+/// `==` does, which compares the text exactly.
+pub fn tag_matches(tag: &str, needle: &str) -> bool {
+    let tag_lower = tag.to_lowercase();
+    let needle_lower = ensure_hash(needle.to_string()).to_lowercase();
+    if needle_lower.len() > tag_lower.len() {
+        return false;
+    }
+    if !tag_lower.starts_with(&needle_lower) {
+        return false;
+    }
+    tag_lower.len() == needle_lower.len() || tag_lower.as_bytes()[needle_lower.len()] == b'/'
+}
+
 /// A number as Obsidian spells it: integral values have no `.0`.
 pub fn format_number(n: f64) -> String {
     if n.is_finite() && n.fract() == 0.0 && n.abs() < 1e15 {
@@ -473,6 +543,16 @@ pub fn compare(a: &BasesValue, b: &BasesValue) -> Option<std::cmp::Ordering> {
         (Bool(x), Bool(y)) => Some(x.cmp(y)),
         (Number(x), Number(y)) => x.partial_cmp(y),
         (String(x), String(y)) => Some(x.cmp(y)),
+        // A TAG IS A STRING, AND THE `#` IS PART OF THE TEXT.
+        //
+        // Obsidian stores a tag as `#project`, so `tags[0] == "#project"` is
+        // true and `tags[0] == "project"` is false. The `#` is data, not a
+        // display convention: `tags[0].length` is 8 for `#project`.
+        (Tag(x), Tag(y)) => Some(x.cmp(y)),
+        // A tag against a plain string compares the TEXT, so `#project` and
+        // `#project` are equal but `#project` and `project` are not.
+        (Tag(x), String(y)) => Some(x.cmp(y)),
+        (String(x), Tag(y)) => Some(x.cmp(y)),
         (Date(x), Date(y)) => Some(x.cmp(y)),
         (Duration(x), Duration(y)) => Some(x.cmp(y)),
         (List(x), List(y)) => {

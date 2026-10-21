@@ -319,6 +319,13 @@ impl Vault {
     /// `file.tags` covers frontmatter and body, and every element keeps its `#`
     /// prefix -- confirmed against `base:query format=json` on Obsidian 1.13.7,
     /// which emits `"Tags": "#Contacts, #Kontakte"`.
+    ///
+    /// The elements are TAGS, not plain strings. Obsidian's `file.tags` is a
+    /// `TagListValue`, and the class is load-bearing: `file.tags == "project"`
+    /// is false because a tag list is never loose-equal to a bare string,
+    /// while `file.tags.contains("project")` is true because `contains` on a tag
+    /// list is a tag match rather than an equality. Measured against Obsidian
+    /// 1.14.4.
     pub fn tags_for(&self, path: &str) -> Vec<BasesValue> {
         let Some(note) = self.note(path) else {
             return Vec::new();
@@ -331,18 +338,18 @@ impl Vault {
             .map(BasesValue::to_list)
             .unwrap_or_default()
         {
-            let BasesValue::String(text) = &tag else {
+            // A frontmatter `tags` property is already a list of TAGS by the
+            // time it reaches here; a value that is not a tag is not a tag.
+            let BasesValue::Tag(text) = &tag else {
                 continue;
             };
-            // A frontmatter tag may itself be `business-idea` or `#x`; normalise to
-            // the `#`-prefixed display form.
-            let clean = text.trim().trim_start_matches('#');
-            if !clean.is_empty() {
-                out.push(BasesValue::String(format!("#{clean}")));
+            let clean = text.trim();
+            if clean.len() > 1 {
+                out.push(BasesValue::Tag(clean.to_string()));
             }
         }
         for tag in &note.parsed.inline_tags {
-            out.push(BasesValue::String(format!("#{tag}")));
+            out.push(BasesValue::Tag(format!("#{tag}")));
         }
         dedupe(out)
     }
@@ -495,14 +502,11 @@ fn dedupe(values: Vec<BasesValue>) -> Vec<BasesValue> {
 ///
 /// - A **markdown link** (`[Business](Projects/Business)`) stays a String.
 ///   Only the `[[...]]` form is a Link.
-/// - The `tags` key is read as a TAG LIST rather than through the chain: each
-///   element is a `#`-prefixed String, never a Link, a URL or a Date. That is
-///   why `tags: ["[[Some Note]]"]` stays a String — the `[[…]]` inside a tag is
-///   part of the tag's name — and why `tags[1].toString()` is `#2026-01-05`
-///   rather than a Date. The rule is on the KEY NAME, at any depth and
-///   case-insensitively, and it covers a SCALAR too: `tags: "[[Some Note]]"` is
-///   the one-element tag list `["#[[Some Note]]"]`, not a Link. A scalar under
-///   any other key goes through the chain.
+/// - The `tags` key is typed **before** this runs: the YAML reader builds a
+///   tag list (`BasesValue::Tag`, `#` forced on) for a `tags` property that is
+///   a string or a list of strings, at any depth and case-insensitively. A tag
+///   is therefore never a Link, a URL or a Date, and a mixed list is left
+///   exactly as written. See `note::tag_list`.
 ///
 /// Called BEFORE the path index is populated, so `resolved` is always `None` for
 /// these links. That is the original's order and it is preserved: `file.links`
@@ -514,60 +518,22 @@ pub fn coerce_frontmatter(
     vault: &Vault,
 ) -> BTreeMap<String, BasesValue> {
     data.iter()
-        .map(|(key, value)| (key.clone(), coerce_value(value, vault, key)))
+        .map(|(key, value)| (key.clone(), coerce_value(value, vault)))
         .collect()
 }
 
 /// Coerce one value, and the values inside it.
-///
-/// The key name travels with the value because `tags` is read as a tag list
-/// wherever it appears — including nested inside another mapping — and the rule
-/// is on the name, not on the position.
-fn coerce_value(value: &BasesValue, vault: &Vault, key: &str) -> BasesValue {
+fn coerce_value(value: &BasesValue, vault: &Vault) -> BasesValue {
     match value {
-        // A `tags` LIST is a tag list: each element is a `#`-prefixed String and
-        // none of them is coerced. The `#` is only added where it is missing,
-        // so an element that already spells a tag is left alone.
-        BasesValue::List(items) if key.eq_ignore_ascii_case("tags") => {
-            BasesValue::List(items.iter().map(tag_string).collect())
+        BasesValue::List(items) => {
+            BasesValue::List(items.iter().map(|item| coerce_value(item, vault)).collect())
         }
-        BasesValue::List(items) => BasesValue::List(
-            items
-                .iter()
-                .map(|item| coerce_value(item, vault, key))
-                .collect(),
-        ),
         BasesValue::Namespace(map) => BasesValue::Namespace(std::sync::Arc::new(
             map.iter()
-                .map(|(k, v)| (k.clone(), coerce_value(v, vault, k)))
+                .map(|(k, v)| (k.clone(), coerce_value(v, vault)))
                 .collect(),
         )),
-        // A SCALAR string under `tags` is read as a ONE-ELEMENT TAG LIST.
-        // Measured against Obsidian 1.14.4: a scalar `tags: "[[Some Note]]"`
-        // answers `isType("list")` true and `isType("link")` false, its
-        // `toString()` is `"#[[Some Note]]"` and its length is 1; a scalar
-        // `tags: "plain"` is the one-element list `"#plain"`. A scalar that is
-        // NOT a string — `tags: 42` — is left alone and stays a number.
-        BasesValue::String(text) if key.eq_ignore_ascii_case("tags") => {
-            BasesValue::List(vec![tag_string(&BasesValue::String(text.clone()))])
-        }
         BasesValue::String(text) => coerce_string(text, vault),
-        other => other.clone(),
-    }
-}
-
-/// One element of a tag list, as Obsidian reads it.
-///
-/// A tag is a String with a `#` in front, and an element that already carries
-/// one is not double-prefixed: `"plain"` becomes `#plain` while `"#already"`
-/// stays `#already`. The empty element becomes `#` rather than being dropped.
-fn tag_string(item: &BasesValue) -> BasesValue {
-    match item {
-        BasesValue::String(text) => BasesValue::String(if text.starts_with('#') {
-            text.clone()
-        } else {
-            format!("#{text}")
-        }),
         other => other.clone(),
     }
 }
