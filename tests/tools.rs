@@ -30,6 +30,7 @@ use std::sync::Arc;
 use bases_mcp::config::{parse_config, ConfigResult, Env, VaultConfig};
 use bases_mcp::service::Resolver;
 use bases_mcp::tools::{tool_definitions, ToolSurface};
+use bases_mcp::vault::content_hash;
 use common::{futures_block_on, load_corpus_from, seed_dir, vault_dir};
 use serde_json::{json, Value as Json};
 use tempfile::TempDir;
@@ -207,6 +208,16 @@ fn the_input_schemas_are_the_arguments_the_descriptions_promise() {
 
     let write = schema("write_note");
     assert_eq!(write["required"], json!(["path", "content"]));
+    assert!(
+        write["properties"]["base_hash"].is_object(),
+        "write_note declares the base_hash it compares against: {write}"
+    );
+    assert!(
+        write["properties"]["base_hash"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("get_note")),
+        "and says where the hash comes from: {write}"
+    );
 
     let add = schema("add_note_to_base");
     assert_eq!(
@@ -568,6 +579,160 @@ fn a_note_that_does_not_exist_is_a_failed_tool() {
 
     assert_eq!(result.is_error, Some(true));
     assert_eq!(structured(&result)["error"]["note"], "Nope.md");
+}
+
+/// `get_note` returns the `base_hash` that `write_note` compares against.
+///
+/// The conditional-write flow is the documented one: an agent reads a note,
+/// edits the text it read, and sends back the hash of what it read, so a note
+/// that changed in the meantime is refused rather than overwritten. Obsidian
+/// autosaves constantly, so that refusal is the normal case, not a rare one.
+///
+/// The hash has to come FROM THE READ, or the flow is impossible: `write_note`
+/// documents its `base_hash` as "the base_hash from the `get_note` this edit is
+/// based on", and an agent that read the note and got no hash back has nothing
+/// to quote. The TypeScript tree returns it from the same read, and the two
+/// trees are recorded as equivalent, so a Rust `get_note` that omits it is a
+/// divergence between the implementations and not a design choice.
+#[test]
+fn get_note_returns_the_base_hash_write_note_compares_against() {
+    let surface = oracle();
+    let result = call(
+        &surface,
+        "get_note",
+        json!({ "path": "Projects/SomeProject.md", "raw": true }),
+    );
+
+    assert!(is_ok(&result));
+    let payload = structured(&result);
+    let base_hash = payload["base_hash"]
+        .as_str()
+        .expect("get_note returns the base_hash");
+    assert_eq!(
+        base_hash,
+        content_hash(payload["raw"].as_str().expect("raw")),
+        "the hash is of the text the agent is about to edit, and of nothing else"
+    );
+}
+
+/// The Projection carries the same hash as the raw text.
+///
+/// The two differ in `content` and in `regions`, and agree on `raw` -- which is
+/// what the hash is over. An agent that read the Projection and quoted a hash
+/// of the Projection would have every write refused, so the hash has to
+/// describe the stored text either way.
+#[test]
+fn the_projection_carries_the_same_base_hash_as_the_raw_text() {
+    let surface = oracle();
+    let path = "Projects/SomeProject.md";
+
+    let projected = call(&surface, "get_note", json!({ "path": path }));
+    let raw = call(&surface, "get_note", json!({ "path": path, "raw": true }));
+
+    assert!(is_ok(&projected));
+    assert!(is_ok(&raw));
+    let expected = content_hash(structured(&raw)["raw"].as_str().expect("raw"));
+    assert_eq!(
+        structured(&projected)["base_hash"].as_str(),
+        Some(expected.as_str()),
+        "the hash describes the stored text, which both reads returned"
+    );
+    assert_eq!(
+        structured(&projected)["base_hash"].as_str(),
+        structured(&raw)["base_hash"].as_str(),
+        "both reads report the same hash"
+    );
+}
+
+/// The documented flow, end to end through the tool surface: read, edit the
+/// text that was read, write it back with the hash from the read.
+///
+/// The three steps an agent is told to take. The middle one is the reason
+/// `base_hash` exists, and the last one is the only way to make the write
+/// conditional rather than blind.
+#[test]
+fn the_documented_conditional_write_flow_works_through_the_tool_surface() {
+    let (dir, surface) = sandbox();
+    let note = "Tickets/Invoice export.md";
+
+    let read = call(&surface, "get_note", json!({ "path": note, "raw": true }));
+    assert!(is_ok(&read));
+    let raw = structured(&read)["raw"].as_str().expect("raw").to_string();
+    let base_hash = structured(&read)["base_hash"]
+        .as_str()
+        .expect("base_hash")
+        .to_string();
+    let edited = raw.replace("# Invoice export", "# Invoice export, revised");
+
+    let write = call(
+        &surface,
+        "write_note",
+        json!({
+            "path": note,
+            "content": edited,
+            "base_hash": base_hash,
+        }),
+    );
+
+    assert!(
+        is_ok(&write),
+        "an uncontested conditional write applies: {write:?}"
+    );
+    assert!(
+        std::fs::read_to_string(dir.path().join(note))
+            .expect("the note is on disk")
+            .contains("# Invoice export, revised"),
+        "the edit landed"
+    );
+}
+
+/// The same flow, with the note changed in between: the write is REFUSED and
+/// the note on disk is untouched.
+///
+/// This is the half that makes the hash worth having. Without it, the flow is
+/// a blind write that silently discards whatever arrived since the read.
+#[test]
+fn a_hash_from_get_note_that_has_gone_stale_is_refused() {
+    let (dir, surface) = sandbox();
+    let note = "Tickets/Invoice export.md";
+
+    let read = call(&surface, "get_note", json!({ "path": note, "raw": true }));
+    let raw = structured(&read)["raw"].as_str().expect("raw").to_string();
+    let base_hash = structured(&read)["base_hash"]
+        .as_str()
+        .expect("base_hash")
+        .to_string();
+    let edited = raw.replace("# Invoice export", "# Invoice export, revised");
+
+    // Obsidian autosaves over the top of the note.
+    let changed = format!("{raw}\nThe user typed this after the agent read the note.\n");
+    std::fs::write(dir.path().join(note), &changed).expect("the user's save lands");
+
+    let write = call(
+        &surface,
+        "write_note",
+        json!({
+            "path": note,
+            "content": edited,
+            "base_hash": base_hash,
+        }),
+    );
+
+    assert_eq!(
+        write.is_error,
+        Some(true),
+        "the stale write must be refused: {write:?}"
+    );
+    assert_eq!(structured(&write)["error"]["construct"], "concurrent-edit");
+    let on_disk = std::fs::read_to_string(dir.path().join(note)).expect("the note is on disk");
+    assert!(
+        on_disk.contains("The user typed this after the agent read the note."),
+        "the user's edit was destroyed: {on_disk}"
+    );
+    assert!(
+        !on_disk.contains("revised"),
+        "the stale write landed anyway: {on_disk}"
+    );
 }
 
 // ---------------------------------------------------------------------------
