@@ -37,9 +37,9 @@
 //! Nothing here writes to `test/vault`. It is the parity oracle and stays at
 //! exactly [`CORPUS_SIZE`] files — a set the manifest pins, byte for byte.
 
-// Each integration test is its own crate, and not every one needs every helper.
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::collections::BTreeMap;

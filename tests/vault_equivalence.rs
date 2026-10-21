@@ -38,9 +38,9 @@
 //! would compare a fake against a fake and prove nothing, which is the same
 //! mistake the suite's own header warns about.
 
-// Each integration test is its own crate, and no two of them need every helper here.
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::collections::BTreeMap;
