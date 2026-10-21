@@ -631,10 +631,16 @@ fn the_projection_carries_the_same_base_hash_as_the_raw_text() {
 
     assert!(is_ok(&projected));
     assert!(is_ok(&raw));
+    let expected = content_hash(structured(&raw)["raw"].as_str().expect("raw"));
     assert_eq!(
-        structured(&projected)["base_hash"],
-        structured(&raw)["base_hash"],
+        structured(&projected)["base_hash"].as_str(),
+        Some(expected.as_str()),
         "the hash describes the stored text, which both reads returned"
+    );
+    assert_eq!(
+        structured(&projected)["base_hash"].as_str(),
+        structured(&raw)["base_hash"].as_str(),
+        "both reads report the same hash"
     );
 }
 

@@ -233,11 +233,6 @@ impl ToolSurface {
             "path": note.path,
             "raw": note.raw,
             "content": note.content,
-            // The hash of `raw`, so a write can be made conditional rather
-            // than blind. `write_note` documents its `base_hash` as coming from
-            // the `get_note` this edit is based on, so the value has to come
-            // back from the read -- otherwise the flow the description promises
-            // is impossible to perform.
             "base_hash": note.base_hash,
             "regions": note.regions.iter().map(fence_provenance).collect::<Vec<_>>(),
             "health": Health::Ok.as_str(),
