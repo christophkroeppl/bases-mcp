@@ -996,3 +996,64 @@ fn tomorrow_is_a_day_and_equals_that_day() {
         &ctx
     ));
 }
+
+/// `contains` on a list of dates takes the same day rule `==` does, in both
+/// directions, and no needle type is a type error.
+///
+/// Obsidian 1.14.4's bundle registers `list.contains` with
+/// `params: [self: List, value: "text" union over Any]` and
+/// `operate(e, t) { return e.includes(t) }`; `ListValue.includes` is
+/// `aK.looseEquals(e, this.get(n))`, and `DateValue.looseEquals` compares
+/// `date.getTime()` when BOTH sides carry a time and `dateOnly()` otherwise.
+/// So a date-only needle matches every moment on its day, and a Date needle is
+/// never rejected. The TypeScript tree's exact-millisecond Date arm is the
+/// divergence from that, not this.
+///
+/// The String-needle half is here too: it reaches the same equality through
+/// `values_equal`, so the two needle spellings must agree with the operator.
+#[test]
+fn contains_reads_a_date_needle_the_way_equality_does() {
+    let ctx = make_ctx(None);
+    // Two moments compare by instant.
+    assert!(b_in(
+        "[date(\"2026-01-05T17:30\")].contains(date(\"2026-01-05T17:30\"))",
+        &ctx
+    ));
+    assert!(!b_in(
+        "[date(\"2026-01-05T17:30\")].contains(date(\"2026-01-05T17:31\"))",
+        &ctx
+    ));
+    // A DAY on either side matches every moment on that day.
+    assert!(b_in(
+        "[date(\"2026-01-05T17:30\")].contains(date(\"2026-01-05\"))",
+        &ctx
+    ));
+    assert!(b_in(
+        "[date(\"2026-01-05\")].contains(date(\"2026-01-05T17:30\"))",
+        &ctx
+    ));
+    // A day is still not a blanket match.
+    assert!(!b_in(
+        "[date(\"2026-01-05T17:30\")].contains(date(\"2026-01-06\"))",
+        &ctx
+    ));
+    // The string spelling of the same day agrees, and a word is not a date.
+    assert!(b_in(
+        "[date(\"2026-01-05T17:30\")].contains(\"2026-01-05\")",
+        &ctx
+    ));
+    assert!(!b_in(
+        "[date(\"2026-01-05T17:30\")].contains(\"not a date\")",
+        &ctx
+    ));
+    // The variadic forms share `includes`, so they must agree with it.
+    assert!(b_in(
+        "[date(\"2026-01-05T17:30\")].containsAll([date(\"2026-01-05\")])",
+        &ctx
+    ));
+    // And the operator agrees with the list: same two values, same answer.
+    assert!(b_in(
+        "date(\"2026-01-05T17:30\") == date(\"2026-01-05\")",
+        &ctx
+    ));
+}
