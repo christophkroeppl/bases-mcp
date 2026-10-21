@@ -8,10 +8,11 @@
 //! ## Nothing here writes to `test/vault`
 //!
 //! `test/vault` is the parity oracle and stays at exactly [`CORPUS_SIZE`]
-//! files. Every test that writes works on a COPY seeded into a temp directory,
-//! so a test that dies mid-write can only ever leave a file in a temp dir that
-//! the OS reclaims. Read-only assertions still run against the real vault, so
-//! they are checking the same bytes the CLI compares against.
+//! files — a set the manifest pins, byte for byte. Every test that writes
+//! works on a COPY seeded into a temp directory, so a test that dies mid-write
+//! can only ever leave a file in a temp dir that the OS reclaims. Read-only
+//! assertions still run against the real vault, so they are checking the same
+//! bytes the CLI compares against.
 //!
 //! `test/fixtures/` is never written either: the fixtures that exercise
 //! filter inversion are read-only by construction, since nothing in these tests
@@ -32,9 +33,8 @@ use bases_mcp::error::{BasesError, Result};
 use bases_mcp::note::parse_note;
 use bases_mcp::service::{NoteOptions, Resolver};
 use bases_mcp::vault::content_hash;
-use common::{
-    count_files, futures_block_on, load_corpus_from, seed_dir, vault_dir, VaultFile, CORPUS_SIZE,
-};
+use common::manifest::assert_vault_matches_manifest;
+use common::{futures_block_on, load_corpus_from, seed_dir, vault_dir, VaultFile};
 use tempfile::TempDir;
 
 /// The scratch note most of these tests use; the rest name their own.
@@ -224,11 +224,10 @@ fn delete(resolver: &Resolver, path: &str) {
 
 #[test]
 fn the_testing_vault_is_untouched() {
-    assert_eq!(
-        count_files(&vault_dir()),
-        CORPUS_SIZE,
-        "test/vault is the parity oracle and must stay at exactly {CORPUS_SIZE} files"
-    );
+    // A MANIFEST, not a count. The count could only see a file being added; a
+    // file whose bytes changed is a changed oracle, and the desktop app
+    // rewriting a `.base` file is exactly that.
+    assert_vault_matches_manifest();
 }
 
 /// Every fixture vault indexes, and every base in one parses.

@@ -45,5 +45,5 @@ A self-contained mini-vault under `test/fixtures/`, isolating one spec construct
 _Avoid_: test case, sample
 
 **Testing vault**:
-The vault at `test/vault/`, holding a realistic project layout. Registered inside Obsidian so the CLI can query it. Contains `Tickets.base` (which scopes itself with `this`, exercising the divergence) and `AllNotes.base` (which does not, so the CLI is a genuine parity oracle).
+The vault at `test/vault/`, holding a realistic project layout. Registered inside Obsidian so the CLI can query it. Contains `Tickets.base` (which scopes itself with `this`, exercising the divergence) and `AllNotes.base` (which does not, so the CLI is a genuine parity oracle). Pinned by `test/vault.manifest`, a path plus SHA-256 for every file, so a file whose bytes changed is caught as well as one that was added.
 _Avoid_: demo vault, sample vault

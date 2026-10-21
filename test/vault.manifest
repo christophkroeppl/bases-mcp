@@ -1,0 +1,20 @@
+# The Testing vault's manifest: every file in it, with its SHA-256.
+#
+# The vault is the parity oracle, and this is what says it is still the
+# oracle. A COUNT cannot see a file whose bytes changed, and a changed
+# .base file changes what `obsidian base:query` returns.
+#
+# Regenerate it with:
+#   cargo test --test oracle_manifest -- --ignored regenerate
+#
+# A line is a SHA-256, two spaces, and the path relative to test/vault.
+# `cd test/vault && sha256sum -c ../vault.manifest` checks it.
+db3848275b24e0835b241abfc1417edec6fd87980477b4d079027f8b7ff60edb  AllNotes.base
+b2165ab0058108d513ab271039b760300e5ebf00e6fc6d6f3388ffe8d82b25d8  Projects/OtherProject.md
+68f8d427fb15f5083ab15b538f6fc2558a1d4ea24aba272cdeb8050e497e2acd  Projects/SomeProject.md
+f75918762f807fd421ca8bb7bf9b8abf8d85c8648edbac3bef375caa65b149f4  Root Project.md
+fc614aa0351f19ef637b2ef0cb77eac555766d80150b1a619de01ca45de44e03  Root Ticket.md
+3d059d2ae952b464323c4e3f1535bc794a8507b08ed1c75fe00eb3ea1369f033  Tickets.base
+c32a338dcacca44f734b58a0f05e12b4feab5e4d1b28571517e48c6afbc23c5f  Tickets/Add offline mode.md
+e78bab1412247db3c05662593eea1641d3539e0971bf0bed3099f8a431c43bf0  Tickets/Fix login redirect.md
+176786e197789531039e215f7a8a2599775604585e0f8f067fbdb2aa5c6b6d9e  Tickets/Invoice export.md

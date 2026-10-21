@@ -15,6 +15,10 @@
 //! Read-only by construction. Nothing here writes, and `test/vault` must stay at
 //! exactly [`CORPUS_SIZE`] files: it is the parity oracle, and a file added to it
 //! silently changes what `obsidian base:query` returns.
+//!
+//! The COUNT is not the guard, though — it is a floor. [`manifest`] holds the
+//! guard: a path and a SHA-256 per file, checked in beside the vault and
+//! compared on every gate run, so a file whose BYTES changed is caught too.
 
 // Every integration test is its own crate and includes this whole module, but
 // each suite needs a different part of it: the parity suite wants the runtime and
@@ -27,6 +31,7 @@ use std::path::{Path, PathBuf};
 use bases_mcp::vault::{FsVaultSource, VaultSource};
 
 pub mod fake_dav;
+pub mod manifest;
 pub mod memory;
 
 /// One file, as the fakes hold it.
@@ -85,9 +90,15 @@ pub fn futures_block_on<F: std::future::Future>(future: F) -> F::Output {
 
 /// Count the files in a directory tree, ignoring dot-directories.
 ///
-/// Used only to prove the oracle's size has not changed. It reads the tree
-/// itself rather than reusing the loader, because the loader's answer is the
-/// thing under test: asking it how many files there are would be circular.
+/// A FLOOR, not the guard: it proves a file was not added or removed, and
+/// cannot see a file whose bytes changed, which is the case that mattered —
+/// the desktop app rewriting a `.base` file still counts as one file. The
+/// manifest in [`manifest`] is the guard; this says the tree still has the
+/// shape the manifest describes.
+///
+/// It reads the tree itself rather than reusing the loader, because the
+/// loader's answer is the thing under test: asking it how many files there are
+/// would be circular.
 pub fn count_files(dir: &Path) -> usize {
     let mut total = 0;
     let Ok(entries) = std::fs::read_dir(dir) else {
