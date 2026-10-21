@@ -14,7 +14,7 @@
 use crate::ast::{BinOp, Literal, Node, NodeKind, Precedence, Span, UnaryOp};
 use crate::depth::{Depth, EXPRESSION};
 use crate::error::{BasesError, Result};
-use crate::lexer::{lex, Tok, Token};
+use crate::lexer::{Tok, Token, lex};
 
 pub fn parse(input: &str) -> Result<Node> {
     let mut parser = Parser {

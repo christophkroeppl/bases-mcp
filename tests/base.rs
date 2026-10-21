@@ -49,8 +49,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use bases_mcp::base::{
-    order_formulas, parse_base, query_base, BaseFile, Direction, FilterNode, QueryOptions,
-    QueryResult, SortEntry,
+    BaseFile, Direction, FilterNode, QueryOptions, QueryResult, SortEntry, order_formulas,
+    parse_base, query_base,
 };
 use bases_mcp::error::BasesError;
 use bases_mcp::labels::{canonical_id_of, display_name_for, label_for_id, strip_namespace};
@@ -434,11 +434,13 @@ fn a_composite_key_survives_a_round_trip_through_the_pipeline() {
             "formula.priority_display".to_string(),
             "type".to_string()
         ]));
-    assert!(!result
-        .view
-        .order
-        .as_ref()
-        .is_some_and(|order| order.iter().any(|id| id.contains('\u{1f}'))));
+    assert!(
+        !result
+            .view
+            .order
+            .as_ref()
+            .is_some_and(|order| order.iter().any(|id| id.contains('\u{1f}')))
+    );
 }
 
 #[test]
@@ -535,7 +537,9 @@ fn a_missing_or_lowercase_direction_is_ascending() {
     // Anything Obsidian does not spell `DESC` sorts ascending, including a
     // misspelling: refusing would lose a view over a one-character typo.
     for direction in ["DESC", "desc", "Desc"] {
-        let yaml = format!("views:\n  - type: table\n    name: V\n    sort:\n      - property: file.name\n        direction: {direction}\n");
+        let yaml = format!(
+            "views:\n  - type: table\n    name: V\n    sort:\n      - property: file.name\n        direction: {direction}\n"
+        );
         assert_eq!(
             parse_base("T.base", &yaml).unwrap().views[0]
                 .sort
@@ -546,7 +550,9 @@ fn a_missing_or_lowercase_direction_is_ascending() {
         );
     }
     for direction in ["", "ASC", "ascending", "ASCENDING", "nonsense"] {
-        let yaml = format!("views:\n  - type: table\n    name: V\n    sort:\n      - property: file.name\n        direction: {direction}\n");
+        let yaml = format!(
+            "views:\n  - type: table\n    name: V\n    sort:\n      - property: file.name\n        direction: {direction}\n"
+        );
         assert_eq!(
             parse_base("T.base", &yaml).unwrap().views[0]
                 .sort
@@ -574,9 +580,11 @@ fn a_group_by_without_a_property_is_ignored() {
     // A groupBy with nothing to group on cannot produce groups. Inventing a
     // property name would put every row in a bucket the author never asked for.
     let yaml = "views:\n  - type: cards\n    name: V\n    groupBy:\n      direction: ASC\n";
-    assert!(parse_base("T.base", yaml).unwrap().views[0]
-        .group_by
-        .is_none());
+    assert!(
+        parse_base("T.base", yaml).unwrap().views[0]
+            .group_by
+            .is_none()
+    );
 }
 
 #[test]

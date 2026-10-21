@@ -37,30 +37,30 @@ pub mod resolve;
 pub mod source;
 pub mod webdav;
 
-pub use fs::{content_hash, FsVaultSource};
-pub use resolve::{fold_key, match_path, points_at, PathIndex};
+pub use fs::{FsVaultSource, content_hash};
+pub use resolve::{PathIndex, fold_key, match_path, points_at};
 pub use source::{
-    is_base_path, is_indexable, is_note_path, normalise_line_endings, FileStat, SourceKind,
-    VaultSource,
+    FileStat, SourceKind, VaultSource, is_base_path, is_indexable, is_note_path,
+    normalise_line_endings,
 };
 pub use webdav::{
-    dav_refusal, parse_dav_date, parse_multistatus, vault_path_from_href, vault_relative_path,
     DavOperation, DavRequest, DavRequestOptions, DavResource, DavResponse, Depth, WebdavError,
-    WebdavMethod, WebdavTransport, WebdavVaultOptions, WebdavVaultSource,
+    WebdavMethod, WebdavTransport, WebdavVaultOptions, WebdavVaultSource, dav_refusal,
+    parse_dav_date, parse_multistatus, vault_path_from_href, vault_relative_path,
 };
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, FixedOffset};
 use regex::Regex;
 
 use crate::error::Result;
-use crate::note::{parse_note_with_embeds, ParsedNote, TaskItem, WikiLink};
-use crate::value::{strip_extension, BasesDate, BasesValue, FileAccessors, FileValue};
+use crate::note::{ParsedNote, TaskItem, WikiLink, parse_note_with_embeds};
+use crate::value::{BasesDate, BasesValue, FileAccessors, FileValue, strip_extension};
 
 /// One indexed note, with its frontmatter already coerced.
 #[derive(Debug, Clone)]

@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::note::{fence_attrs, is_base_region, parse_note_with_embeds, ParsedNote, Segment};
+use crate::note::{ParsedNote, Segment, fence_attrs, is_base_region, parse_note_with_embeds};
 
 /// The fence language for a rendered base. Deliberately not `base`.
 ///

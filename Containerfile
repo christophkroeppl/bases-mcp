@@ -6,11 +6,12 @@
 # service's home — and `.dockerignore` keeps the target directory and the
 # rootless image store out of that context.
 # The pinned toolchain has to satisfy the LOCKFILE, not just the crate's own
-# `rust-version`. The crate says `rust-version = "1.75"`, but the locked
-# dependency graph needs more: `rmcp 3.5.0` and the `icu` crates require
-# rustc 1.88, and `cargo build --locked` refuses the whole graph on an older
-# compiler. `rust:1.85-bookworm` therefore fails with "rmcp@3.5.0 requires
-# rustc 1.88" before a single crate of this project is compiled.
+# `rust-version`. The crate says `rust-version = "1.85"` — the edition-2024
+# floor — but the locked dependency graph needs more: `rmcp 3.5.0` and the
+# `icu` crates require rustc 1.88, and `cargo build --locked` refuses the
+# whole graph on an older compiler. `rust:1.85-bookworm` therefore fails with
+# "rmcp@3.5.0 requires rustc 1.88" before a single crate of this project is
+# compiled.
 #
 # 1.88 is the floor the lockfile sets, and the image is pinned to it so the
 # container and CI build the same thing. A newer image also works; an older one

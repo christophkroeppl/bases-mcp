@@ -16,13 +16,13 @@ use std::sync::Arc;
 use crate::ast::Node;
 use crate::depth::{Depth, FILTER};
 use crate::error::{BasesError, Result};
-use crate::evaluator::{evaluate, evaluate_expression, query_clock, EvalContext, ThisContext};
+use crate::evaluator::{EvalContext, ThisContext, evaluate, evaluate_expression, query_clock};
 use crate::parser::{parse, try_parse};
-use crate::value::{compare, BasesDate, BasesValue};
-use crate::vault::source::BASE_EXT;
+use crate::value::{BasesDate, BasesValue, compare};
 use crate::vault::Vault;
+use crate::vault::source::BASE_EXT;
 
-use super::parse::{select_view, BaseFile, BaseView, Direction, FilterNode, SortEntry};
+use super::parse::{BaseFile, BaseView, Direction, FilterNode, SortEntry, select_view};
 
 /// One note that matched, with everything the pipeline computed for it.
 #[derive(Debug, Clone, PartialEq)]

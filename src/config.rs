@@ -209,11 +209,7 @@ fn list(names: &[&str]) -> String {
 
 /// "is" for one name, "are" for more, so the sentence is never ungrammatical.
 fn plural(names: &[&str], one: &'static str, many: &'static str) -> &'static str {
-    if names.len() == 1 {
-        one
-    } else {
-        many
-    }
+    if names.len() == 1 { one } else { many }
 }
 
 /// The credentials a WebDAV configuration is missing, in the order usage lists them.

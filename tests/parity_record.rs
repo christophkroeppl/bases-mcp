@@ -25,8 +25,8 @@ use std::process::{Command, Output};
 
 use bases_mcp::base::QueryOptions;
 use bases_mcp::parity::{self, Recorded};
-use bases_mcp::service::{json_rows, Resolver};
-use serde_json::{json, Value};
+use bases_mcp::service::{Resolver, json_rows};
+use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_parity-record");
 

@@ -18,8 +18,8 @@ use chrono::{
 };
 
 use crate::error::{BasesError, Result};
-use crate::evaluator::{coerce_date, to_number_loose, EvalContext};
-use crate::value::{values_equal, BasesDate, BasesValue, Duration};
+use crate::evaluator::{EvalContext, coerce_date, to_number_loose};
+use crate::value::{BasesDate, BasesValue, Duration, values_equal};
 
 /// Which receiver type a value dispatches on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -934,12 +934,12 @@ fn g_number(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
                     return Err(
                         BasesError::new(format!("number() could not convert \"{s}\""))
                             .with_construct("number"),
-                    )
+                    );
                 }
             }
         }
         BasesValue::List(_) => {
-            return Err(BasesError::new("number() does not accept a List").with_construct("number"))
+            return Err(BasesError::new("number() does not accept a List").with_construct("number"));
         }
         _ => BasesValue::Number(0.0),
     })
@@ -986,7 +986,7 @@ fn collect_numbers(args: &[BasesValue], fn_name: &str) -> Result<Vec<f64>> {
                     "Type error in \"{fn_name}\", parameter expects Number, given {}",
                     describe(a)
                 ))
-                .with_construct(fn_name))
+                .with_construct(fn_name));
             }
         }
     }
@@ -1010,7 +1010,7 @@ fn g_date(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
             return Err(
                 BasesError::new(format!("date() cannot convert {}", describe(&other)))
                     .with_construct("date"),
-            )
+            );
         }
     })
 }
@@ -1024,7 +1024,7 @@ fn g_duration(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
             return Err(
                 BasesError::new(format!("duration() cannot convert {}", describe(&other)))
                     .with_construct("duration"),
-            )
+            );
         }
     })
 }
@@ -1378,11 +1378,7 @@ fn clamp_index(n: f64, len: usize) -> usize {
     }
     if n < 0.0 {
         let from_end = len as f64 + n;
-        if from_end < 0.0 {
-            0
-        } else {
-            from_end as usize
-        }
+        if from_end < 0.0 { 0 } else { from_end as usize }
     } else if n as usize > len {
         len
     } else {
@@ -1410,7 +1406,7 @@ fn m_str_split(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> 
                 "Type error in \"split\", separator expects String, given {}",
                 describe(other)
             ))
-            .with_construct("split"))
+            .with_construct("split"));
         }
     };
     if let Some(n) = limit {
@@ -1922,10 +1918,15 @@ fn m_link_links_to(
     let Some(from_file) = (ctx.file.accessors.resolve)(from) else {
         return Ok(BasesValue::Bool(false));
     };
+    // The links are a local rather than a temporary in the tail expression:
+    // edition 2024 drops a tail expression's temporaries before the block's
+    // locals, and a value whose release point is the edition's choice is not
+    // worth reading twice. Nothing here has a `Drop` that observes the
+    // difference — it is spelled out so the next reader does not have to
+    // check.
+    let links = (from_file.accessors.links)();
     Ok(BasesValue::Bool(
-        (from_file.accessors.links)()
-            .iter()
-            .any(|l| link_points_at(l, &to)),
+        links.iter().any(|l| link_points_at(l, &to)),
     ))
 }
 
@@ -2076,8 +2077,11 @@ fn m_file_has_link(
     let Some(to) = linkish_path(&other) else {
         return Ok(BasesValue::Bool(false));
     };
+    // A local, so the release point is written rather than chosen by the
+    // edition's tail-expression rule. See `m_link_links_to`.
+    let links = (f.accessors.links)();
     Ok(BasesValue::Bool(
-        (f.accessors.links)().iter().any(|l| link_points_at(l, &to)),
+        links.iter().any(|l| link_points_at(l, &to)),
     ))
 }
 
@@ -2094,8 +2098,11 @@ fn m_file_contains(
         return Ok(BasesValue::Bool(false));
     }
     let to = linkish_path(&needle).unwrap_or_default();
+    // A local, so the release point is written rather than chosen by the
+    // edition's tail-expression rule. See `m_link_links_to`.
+    let links = (f.accessors.links)();
     Ok(BasesValue::Bool(
-        (f.accessors.links)().iter().any(|l| link_points_at(l, &to)),
+        links.iter().any(|l| link_points_at(l, &to)),
     ))
 }
 
@@ -2259,7 +2266,7 @@ pub fn run_higher_order(
             return Err(
                 BasesError::new(format!("Unknown higher-order method \"{other}\""))
                     .with_construct(other),
-            )
+            );
         }
     })
 }

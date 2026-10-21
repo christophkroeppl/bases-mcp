@@ -17,7 +17,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 
 /// How long to wait for the first line before giving up.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -27,6 +27,26 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 /// this lock, so a test that sets `MCP_TRANSPORT=http` cannot race a test that
 /// reads it as the default.
 static ENV: Mutex<()> = Mutex::new(());
+
+/// Set a process-global variable under `ENV`.
+///
+/// `std::env::set_var` is `unsafe` from edition 2024: the write may reallocate
+/// the environment while another thread — including C code inside a dependency
+/// — reads it with `getenv`. Every environment access in this binary is
+/// serialised through `ENV`, so no two of them can overlap; the caller holds
+/// that lock, and holding it is what makes the write acceptable here.
+fn set_env(name: &str, value: &str) {
+    // SAFETY: the caller holds `ENV`, and every environment access in this
+    // binary takes it.
+    unsafe { std::env::set_var(name, value) }
+}
+
+/// Unset a process-global variable. See [`set_env`] for the safety argument.
+fn unset_env(name: &str) {
+    // SAFETY: the caller holds `ENV`, and every environment access in this
+    // binary takes it.
+    unsafe { std::env::remove_var(name) }
+}
 
 /// One server process, one JSON-RPC id counter.
 struct Server {
@@ -294,7 +314,7 @@ fn mcp_transport_selects_the_transport() {
     // a request sent there is never answered, and it listens instead. The
     // evidence that the branch was taken is that the process is alive and
     // silent on stdin.
-    std::env::set_var("MCP_TRANSPORT", "http");
+    set_env("MCP_TRANSPORT", "http");
     let mut child = Command::new(env!("CARGO_BIN_EXE_bases-mcp"))
         .env("BASES_MCP_VAULT", &vault)
         .env("MCP_HTTP_PORT", "0")
@@ -335,11 +355,11 @@ fn mcp_transport_selects_the_transport() {
     );
     let _ = child.kill();
     let _ = child.wait();
-    std::env::remove_var("MCP_TRANSPORT");
+    unset_env("MCP_TRANSPORT");
 
     // `MCP_TRANSPORT=stdio` is the default and still answers, which is what
     // makes the case above meaningful: the same request, answered.
-    std::env::set_var("MCP_TRANSPORT", "stdio");
+    set_env("MCP_TRANSPORT", "stdio");
     let mut server = Server::start_stdio(&vault);
     let response = server.request(
         "initialize",
@@ -351,17 +371,17 @@ fn mcp_transport_selects_the_transport() {
     );
     assert_eq!(response["result"]["serverInfo"]["name"], "bases-mcp");
     drop(server);
-    std::env::remove_var("MCP_TRANSPORT");
+    unset_env("MCP_TRANSPORT");
 
     // A value the selector does not know is a refusal naming it, and the process
     // exits non-zero rather than serving stdio.
-    std::env::set_var("MCP_TRANSPORT", "htp");
+    set_env("MCP_TRANSPORT", "htp");
     let output = Command::new(env!("CARGO_BIN_EXE_bases-mcp"))
         .env("BASES_MCP_VAULT", &vault)
         .stdin(Stdio::null())
         .output()
         .expect("the binary runs to a refusal");
-    std::env::remove_var("MCP_TRANSPORT");
+    unset_env("MCP_TRANSPORT");
     assert!(
         !output.status.success(),
         "an unknown transport exits non-zero: {:?}",

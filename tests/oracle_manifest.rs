@@ -25,10 +25,10 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::manifest::{
-    assert_vault_matches_manifest, file_digest, manifest_drift, manifest_entries, manifest_path,
-    read_manifest, vault_files, write_manifest, ManifestEntry,
+    ManifestEntry, assert_vault_matches_manifest, file_digest, manifest_drift, manifest_entries,
+    manifest_path, read_manifest, vault_files, write_manifest,
 };
-use common::{count_files, vault_dir, CORPUS_SIZE};
+use common::{CORPUS_SIZE, count_files, vault_dir};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------

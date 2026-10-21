@@ -25,9 +25,9 @@ use std::time::{Duration, Instant};
 
 use futures::stream::{FuturesUnordered, StreamExt};
 
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 
-use bases_mcp::transport::{select_transport, HttpEndpoint, Transport, HTTP_PATH};
+use bases_mcp::transport::{HTTP_PATH, HttpEndpoint, Transport, select_transport};
 
 /// How long to wait for the listener to come up before giving up.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -49,6 +49,26 @@ const START_ATTEMPTS: usize = 5;
 /// another test left behind. The stdio suite has its own lock for the same
 /// reason; the two files run in separate processes, so the two locks never meet.
 static ENV: Mutex<()> = Mutex::new(());
+
+/// Set a process-global variable under `ENV`.
+///
+/// `std::env::set_var` is `unsafe` from edition 2024: the write may reallocate
+/// the environment while another thread — including C code inside a dependency
+/// — reads it with `getenv`. Every environment access in this binary is
+/// serialised through `ENV`, so no two of them can overlap; the caller holds
+/// that lock, and holding it is what makes the write acceptable here.
+fn set_env(name: &str, value: &str) {
+    // SAFETY: the caller holds `ENV`, and every environment access in this
+    // binary takes it.
+    unsafe { std::env::set_var(name, value) }
+}
+
+/// Unset a process-global variable. See [`set_env`] for the safety argument.
+fn unset_env(name: &str) {
+    // SAFETY: the caller holds `ENV`, and every environment access in this
+    // binary takes it.
+    unsafe { std::env::remove_var(name) }
+}
 
 /// One server process, one session.
 struct Server {
@@ -630,14 +650,14 @@ fn the_probed_path_is_the_served_path() {
 #[test]
 fn a_flag_wins_over_the_environment() {
     let _guard = ENV.lock().expect("the env lock is not poisoned");
-    std::env::set_var("MCP_TRANSPORT", "http");
+    set_env("MCP_TRANSPORT", "http");
     let flag = || vec!["--transport".to_string(), "stdio".to_string()].into_iter();
     assert_eq!(select_transport(flag()).unwrap(), Transport::Stdio);
     assert_eq!(
         select_transport(std::iter::empty()).unwrap(),
         Transport::Http
     );
-    std::env::remove_var("MCP_TRANSPORT");
+    unset_env("MCP_TRANSPORT");
 }
 
 /// A `Host` that names the bound address is served; one that does not is a 403.
@@ -750,15 +770,15 @@ fn the_endpoint_derives_allowed_hosts_from_the_bound_address() {
     let _guard = ENV.lock().expect("the env lock is not poisoned");
 
     // Unset is loopback.
-    std::env::remove_var("MCP_HTTP_HOST");
-    std::env::remove_var("MCP_HTTP_PORT");
+    unset_env("MCP_HTTP_HOST");
+    unset_env("MCP_HTTP_PORT");
     let endpoint = HttpEndpoint::from_env().expect("an empty environment is loopback");
     assert_eq!(endpoint.address(), "127.0.0.1:8765".parse().unwrap());
 
     // A specific address is served on that address and on localhost, and not on
     // a neighbouring one.
-    std::env::set_var("MCP_HTTP_HOST", "192.168.1.50");
-    std::env::set_var("MCP_HTTP_PORT", "8791");
+    set_env("MCP_HTTP_HOST", "192.168.1.50");
+    set_env("MCP_HTTP_PORT", "8791");
     let endpoint = HttpEndpoint::from_env().expect("a literal address parses");
     assert_eq!(endpoint.address(), "192.168.1.50:8791".parse().unwrap());
     let names = endpoint.allowed_hosts();
@@ -767,13 +787,13 @@ fn the_endpoint_derives_allowed_hosts_from_the_bound_address() {
     assert!(!names.contains(&"192.168.1.99".to_string()));
 
     // Every interface means every Host, which rmcp spells as an empty list.
-    std::env::set_var("MCP_HTTP_HOST", "0.0.0.0");
+    set_env("MCP_HTTP_HOST", "0.0.0.0");
     let endpoint = HttpEndpoint::from_env().expect("0.0.0.0 parses");
     assert!(endpoint.allowed_hosts().is_empty());
 
     // A name is resolved, not refused: `localhost` is the value the review
     // named, and it binds the loopback it resolves to.
-    std::env::set_var("MCP_HTTP_HOST", "localhost");
+    set_env("MCP_HTTP_HOST", "localhost");
     let endpoint = HttpEndpoint::from_env().expect("localhost resolves");
     assert!(
         endpoint.address().ip().is_loopback(),
@@ -786,8 +806,8 @@ fn the_endpoint_derives_allowed_hosts_from_the_bound_address() {
         endpoint.allowed_hosts()
     );
 
-    std::env::remove_var("MCP_HTTP_HOST");
-    std::env::remove_var("MCP_HTTP_PORT");
+    unset_env("MCP_HTTP_HOST");
+    unset_env("MCP_HTTP_PORT");
 }
 
 /// A bad bind address or port is refused, loudly, naming the variable and the
@@ -806,8 +826,8 @@ fn a_bad_bind_address_or_port_is_refused_by_name() {
         ("localhost", ""),
         ("localhost", "   "),
     ] {
-        std::env::set_var("MCP_HTTP_HOST", host);
-        std::env::set_var("MCP_HTTP_PORT", port);
+        set_env("MCP_HTTP_HOST", host);
+        set_env("MCP_HTTP_PORT", port);
         let refusal = HttpEndpoint::from_env().expect_err("a bad value is not an endpoint");
         let (named, value) = if host.contains("invalid") {
             ("MCP_HTTP_HOST", host)
@@ -824,6 +844,6 @@ fn a_bad_bind_address_or_port_is_refused_by_name() {
         );
     }
 
-    std::env::remove_var("MCP_HTTP_HOST");
-    std::env::remove_var("MCP_HTTP_PORT");
+    unset_env("MCP_HTTP_HOST");
+    unset_env("MCP_HTTP_PORT");
 }
