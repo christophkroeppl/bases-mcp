@@ -311,7 +311,9 @@ fn a_root_note_reports_folder_as_slash() {
 }
 
 fn b_in(expr: &str, ctx: &EvalContext) -> bool {
-    match ev_in(expr, ctx).expect("expression evaluates") {
+    match ev_in(expr, ctx)
+        .unwrap_or_else(|e| panic!("expression {expr:?}: {}", e.display_message()))
+    {
         BasesValue::Bool(b) => b,
         other => panic!("expected a boolean, got {other:?}"),
     }
