@@ -319,6 +319,13 @@ impl Vault {
     /// `file.tags` covers frontmatter and body, and every element keeps its `#`
     /// prefix -- confirmed against `base:query format=json` on Obsidian 1.13.7,
     /// which emits `"Tags": "#Contacts, #Kontakte"`.
+    ///
+    /// The elements are TAGS, not plain strings. Obsidian's `file.tags` is a
+    /// `TagListValue`, and the class is load-bearing: `file.tags == "project"`
+    /// is false because a tag list is never loose-equal to a bare string,
+    /// while `file.tags.contains("project")` is true because `contains` on a tag
+    /// list is a tag match rather than an equality. Measured against Obsidian
+    /// 1.14.4.
     pub fn tags_for(&self, path: &str) -> Vec<BasesValue> {
         let Some(note) = self.note(path) else {
             return Vec::new();
@@ -331,18 +338,18 @@ impl Vault {
             .map(BasesValue::to_list)
             .unwrap_or_default()
         {
-            let BasesValue::String(text) = &tag else {
+            // A frontmatter `tags` property is already a list of TAGS by the
+            // time it reaches here; a value that is not a tag is not a tag.
+            let BasesValue::Tag(text) = &tag else {
                 continue;
             };
-            // A frontmatter tag may itself be `business-idea` or `#x`; normalise to
-            // the `#`-prefixed display form.
-            let clean = text.trim().trim_start_matches('#');
-            if !clean.is_empty() {
-                out.push(BasesValue::String(format!("#{clean}")));
+            let clean = text.trim();
+            if clean.len() > 1 {
+                out.push(BasesValue::Tag(clean.to_string()));
             }
         }
         for tag in &note.parsed.inline_tags {
-            out.push(BasesValue::String(format!("#{tag}")));
+            out.push(BasesValue::Tag(format!("#{tag}")));
         }
         dedupe(out)
     }
