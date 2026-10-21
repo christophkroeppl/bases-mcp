@@ -172,7 +172,7 @@ plugin, or a bad merge — which is exactly the shape a limit is for.
 | **Construct** | A note whose bytes on disk are CRLF, read through this server |
 | **Ours** | `VaultSource::read_note` and `read_fresh` replace `\r\n` with `\n` before anything above the backend sees the note. A lone `\r` is left alone. Every read, every cache entry and every `content_hash` taken above the backend is therefore over LF. |
 | **Obsidian** | Does not normalise at read time. It normalises on OPEN: opening a CRLF note converts it to LF in the app, and the conversion reaches disk the next time the note is saved. Until then the bytes stay CRLF, and so do any other reader's. |
-| **Evidence** | The five sources under "Obsidian writes LF on every platform", including the Obsidian staff reply that there is no way to change this. Our side is measured by `the_two_spellings_of_a_note_get_the_same_base_hash` and `a_base_hash_from_a_crlf_note_round_trips_through_an_obsidian_resave` in `tests/service.rs`. |
+| **Evidence** | The five sources under "Obsidian writes LF on every platform", including the Obsidian staff reply that there is no way to change this. Our side is measured by `the_two_spellings_of_a_note_get_the_same_base_hash` and `a_base_hash_from_a_crlf_note_round_trips_through_an_obsidian_resave`, and the no-op round trip is pinned by `a_crlf_edit_that_changes_nothing_does_not_touch_the_file`, all in `tests/service.rs`. |
 | **verify-in-obsidian** | no — the staff reply is decisive on the direction, and the open-time conversion is reported from three independent threads |
 
 **Where it is observable.** In `get_note`'s `raw`, and only there. An agent asking
@@ -215,10 +215,14 @@ its LF twin hash alike. Two classes of failure go with that:
   bytes after, still CRLF. Without normalisation the same round trip rewrites it —
   48 bytes to 49, a bare LF spliced in after the Base region and one extra blank
   line — which is the corruption recorded under "Bugs found in this implementation"
-  reached through a path nobody was watching. **Measured, not pinned by a test:** it
-  was observed with a throwaway harness rather than added as one, because the shape
-  tests this replaced are gone and a round-trip-no-op assertion for LF already
-  exists (`an_edit_that_changes_nothing_does_not_touch_the_file`).
+  reached through a path nobody was watching. **Pinned by a test.**
+  `a_crlf_edit_that_changes_nothing_does_not_touch_the_file` in `tests/service.rs`
+  takes a CRLF Host note through the same full Projection round trip and compares
+  the file's BYTES before and after rather than its length: the LF pin
+  (`an_edit_that_changes_nothing_does_not_touch_the_file`) compares `.len()`, which
+  would not see a same-size rewrite that changed the endings. Deleting the
+  normaliser makes the new test fail — the reconciled text no longer equals the
+  note that was read, so the no-op writes.
 
 **What it does not buy, and what must stay true elsewhere.** `content_hash` itself
 normalises nothing: it is a pure function of its argument, because the WebDAV

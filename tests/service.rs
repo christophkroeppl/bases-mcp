@@ -1655,6 +1655,93 @@ fn an_edit_that_changes_nothing_does_not_touch_the_file() {
     );
 }
 
+/// The CRLF spelling of the test above, and the reason the normaliser exists.
+///
+/// `an_edit_that_changes_nothing_does_not_touch_the_file` compares the file's
+/// LENGTH, which cannot tell a file that was left alone from one that was
+/// rewritten to the same size — and a rewrite that only changes the line endings
+/// is exactly that. This asserts the BYTES, on the shape where the corruption was
+/// actually found: a CRLF Host note put through a full Projection round trip.
+///
+/// With `VaultSource::read_note`/`read_fresh` normalising `\r\n` to `\n`, the
+/// reconciler is handed the same text the Projection was built from, produces it
+/// back unchanged, and `write_note` never writes, so the CRLF bytes on disk
+/// survive. Without the normaliser the round trip splices bare LFs into the note
+/// at the region joins — the reconciled text no longer equals the disk text, and
+/// a write that changed nothing rewrites the file. `docs/divergences.md` (D8)
+/// records that as the corruption reached through a path nobody was watching.
+#[test]
+fn a_crlf_edit_that_changes_nothing_does_not_touch_the_file() {
+    let host = "Root Project.md";
+    let dir = TempDir::new().expect("a temp dir is writable");
+    seed_dir(dir.path(), &load_corpus_from(&vault_dir()));
+
+    // A CRLF spelling of a real Host note, written BEFORE the vault is opened so
+    // the index and the fresh read agree about it. The note carries both region
+    // shapes — an embed and an inline base — so a splice has two places to show
+    // up, which is the arrangement the corruption was found in.
+    let lf = std::fs::read_to_string(dir.path().join(host)).expect("the host is on disk");
+    std::fs::write(dir.path().join(host), lf.replace('\n', "\r\n"))
+        .expect("the CRLF host is on disk");
+    let before = std::fs::read(dir.path().join(host)).expect("the bytes are readable");
+    let count = |haystack: &[u8], needle: &[u8]| {
+        haystack
+            .windows(needle.len())
+            .filter(|window| *window == needle)
+            .count()
+    };
+    assert_eq!(
+        count(&before, b"\r\n"),
+        count(&before, b"\n"),
+        "the fixture is not uniformly CRLF"
+    );
+
+    let resolver = Arc::new(
+        futures_block_on(Resolver::open_dir(dir.path()))
+            .unwrap_or_else(|error| panic!("the CRLF vault opens: {error}")),
+    );
+
+    // The agent reads a Projection and hands it straight back, as it would after
+    // deciding the note needs no change at all.
+    let projection = futures_block_on(resolver.read_note(host, NoteOptions::projection()))
+        .expect("the host projects");
+    let result = futures_block_on(resolver.write_note(host, &projection.content, None))
+        .expect("a no-op edit applies");
+
+    assert!(
+        result.refused.is_empty(),
+        "a clean round trip refused something: {:?}",
+        result.refused
+    );
+
+    // The pin: not a length, not a hash, the bytes an editor would see.
+    let after = std::fs::read(dir.path().join(host)).expect("the bytes are readable");
+    assert_eq!(
+        after,
+        before,
+        "a no-op write must leave the file alone: {} bytes became {}",
+        before.len(),
+        after.len()
+    );
+    assert_eq!(
+        count(&after, b"\r\n"),
+        count(&after, b"\n"),
+        "the file came back with a bare LF spliced into it"
+    );
+
+    // And the mechanism on both sides of the write: the read was normalised, and
+    // the reconciler handed back the note it was given rather than a rewrite.
+    assert!(
+        !projection.content.contains('\r'),
+        "a read hands back the normalised note: {:?}",
+        projection.content
+    );
+    assert_eq!(
+        result.text, lf,
+        "the round trip did not come back to the note it read"
+    );
+}
+
 #[test]
 fn editing_a_base_region_is_refused_and_the_rest_of_the_edit_still_lands() {
     let (dir, resolver) = sandbox();
