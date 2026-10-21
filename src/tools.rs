@@ -233,6 +233,12 @@ impl ToolSurface {
             "path": note.path,
             "raw": note.raw,
             "content": note.content,
+            // The hash of `raw`, so a write can be made conditional rather
+            // than blind. `write_note` documents its `base_hash` as coming from
+            // the `get_note` this edit is based on, so the value has to come
+            // back from the read -- otherwise the flow the description promises
+            // is impossible to perform.
+            "base_hash": note.base_hash,
             "regions": note.regions.iter().map(fence_provenance).collect::<Vec<_>>(),
             "health": Health::Ok.as_str(),
         });
@@ -716,7 +722,12 @@ pub fn tool_definitions() -> Vec<Tool> {
                 "This Projection is NEVER written back to disk. Obsidian treats a `base` fence \
                  as live YAML and would reject rendered markdown inside one. To edit a note, read \
                  it with raw=true, edit THAT, and send it to write_note.\n",
-                "`raw: true` returns the stored text untouched and an empty `regions`."
+                "`raw: true` returns the stored text untouched and an empty `regions`.\n",
+                "`base_hash` is the hash of `raw`. Send it back as `write_note`'s \
+                 `base_hash` so the write is conditional rather than blind: Obsidian \
+                 autosaves constantly, so a note can change under you between the read \
+                 and the write, and with the hash that write is REFUSED instead of \
+                 overwriting whatever arrived since."
             ),
             json!({
                 "type": "object",
@@ -745,7 +756,12 @@ pub fn tool_definitions() -> Vec<Tool> {
                  because the write itself succeeded.\n",
                 "Rows come from notes, not from the base file. To add a row, use \
                  add_note_to_base -- it authors a note whose properties satisfy the base's \
-                 filter."
+                 filter.\n",
+                "Send the `base_hash` from the get_note this edit is based on. Obsidian \
+                 autosaves constantly, so a note can change under you between the read and the \
+                 write; with the hash the write is REFUSED and nothing is touched, rather than \
+                 overwriting whatever arrived since. Omit it only when writing a note wholesale \
+                 rather than editing one read earlier."
             ),
             json!({
                 "type": "object",
@@ -754,6 +770,10 @@ pub fn tool_definitions() -> Vec<Tool> {
                     "content": {
                         "type": "string",
                         "description": "The agent's edited note. Send the `raw` text from get_note, never a Projection."
+                    },
+                    "base_hash": {
+                        "type": "string",
+                        "description": "The `base_hash` from the get_note this edit is based on. Supplying it makes the write conditional: if the note changed in the meantime the write is refused."
                     }
                 },
                 "required": ["path", "content"]

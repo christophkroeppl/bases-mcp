@@ -615,6 +615,63 @@ distinguishes `NotFound` from every other code and refuses the rest. `false` in
 this method is permission to destroy a note rather than an absence of
 information, so the looser reading is the one that loses data.
 
+### `get_note` never returned the `base_hash` its own `write_note` demanded
+
+`write_note` took an optional `base_hash` and refused the write when it did not
+match the note on disk — the conditional write that stops an agent's edit from
+overwriting whatever arrived since it read. Its argument description says where
+the value comes from: "the `base_hash` from the `get_note` this edit is based
+on".
+
+`get_note` never returned one. The payload carried `path`, `raw`, `content` and
+`regions`, and the `WriteNoteArgs` doc comment — the only place the contract was
+written down — described a value the read did not produce. An agent following the
+documented flow had nothing to quote, so every write it made was a BLIND write:
+`base_hash` omitted, the concurrency check skipped, and the note on disk
+overwritten with whatever had arrived since the read.
+
+The hash was never missing from the engine. `Resolver::read_note` computes it
+(`content_hash(&raw)`) on both paths, and `NoteView::base_hash` carried it — the
+tool simply did not put it in the payload. The TypeScript tree returned it from
+the same read, so this was a divergence between the two implementations and not
+a design choice.
+
+The cause is visible in the history. `c4af62f` ("Fix four data-loss bugs") added
+the conditional write to the Rust tree, and its own message says "`get_note`
+returns a `base_hash` and `write_note` takes it" — but the diff adds the
+`base_hash` argument to `write_note` and touches nothing in `get_note`'s
+payload. The port that added the check did not add the value the check
+compares against, and the half that was missing is the half an agent can see.
+The TypeScript port of the same fix (`9a86bd5`) added both halves, which is why
+the two trees disagreed.
+
+Fixed in `src/tools.rs`: `get_note`'s payload carries `base_hash`, and
+`write_note`'s schema declares the argument it has always accepted — the
+handler read `base_hash` from a struct field that no declared schema described,
+so a client reading `tools/list` had no way to know the argument existed. Both
+tool descriptions now name the value and the flow, because the description is
+the only channel a model reads.
+
+Pinned by `get_note_returns_the_base_hash_write_note_compares_against`,
+`the_projection_carries_the_same_base_hash_as_the_raw_text`,
+`the_documented_conditional_write_flow_works_through_the_tool_surface` and
+`a_hash_from_get_note_that_has_gone_stale_is_refused` in `tests/tools.rs`. The
+last one is the half worth having: it asserts that a note changed between the
+read and the write is REFUSED and the user's text survives.
+
+Measured across the two trees, over a real MCP stdio session, each side
+pointed at a private copy of the testing vault:
+
+```
+before:  DIFF base_hash: rust=None  ts='68f8d427fb15f5083ab15b538f6fc255'
+after:   OK   base_hash: rust='68f8d427fb15f5083ab15b538f6fc255'
+                                                  ts='68f8d427fb15f5083ab15b538f6fc255'
+```
+
+and the whole `get_note` payload — `path`, `raw`, `content`, `base_hash`,
+`regions`, `health` — is identical on both sides after the fix, which is what
+the "verified equivalent" claim above needs to be true of this tool.
+
 ### A restored Base region was spliced into a CRLF Host note with a bare LF
 
 > **Now unreachable.** D8 removed the machinery this entry describes.
