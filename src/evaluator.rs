@@ -40,6 +40,30 @@ pub struct EvalContext {
     pub this_value: Option<ThisContext>,
     /// Lambda parameters (`value`, `index`, `acc`).
     pub bindings: Option<BTreeMap<String, BasesValue>>,
+    /// The instant `now()` answers and `today()` truncates.
+    ///
+    /// One per context, and the SAME value for every row of a query: the
+    /// pipeline samples [`query_clock`] once and threads it through. It is
+    /// deliberately NOT `file.mtime` — a note's modification time is a
+    /// property of that note, and using it as the clock made `today()` mean
+    /// "the day this note was last edited", which is not a rule Obsidian has.
+    pub clock: BasesDate,
+}
+
+/// The wall clock a query runs against, sampled ONCE per query.
+///
+/// `today()` and `now()` are the wall clock in Obsidian, not the snapshot's
+/// mtime. Sampling once and handing every row the same instant keeps the
+/// property the clock is for: two rows of one view cannot disagree about
+/// `now()`, and a query cannot straddle local midnight. Sampling per row would
+/// let both happen; sampling per PROCESS (at vault load) would freeze `now()`
+/// for a long-running server, which is a worse divergence than a moving clock.
+///
+/// A caller that needs a fixed clock — a test, or a recorder that serialises a
+/// clock-dependent view — builds its [`EvalContext`] with a pinned value rather
+/// than calling this.
+pub fn query_clock() -> BasesDate {
+    BasesDate::new(chrono::Local::now().fixed_offset(), false)
 }
 
 impl std::fmt::Debug for EvalContext {
@@ -49,18 +73,26 @@ impl std::fmt::Debug for EvalContext {
             .field("file", &self.file.path)
             .field("formula", &self.formula)
             .field("has_this", &self.this_value.is_some())
+            .field("clock", &self.clock)
             .finish()
     }
 }
 
 impl EvalContext {
-    pub fn new(file: FileValue) -> Self {
+    /// A context for one note, running against `clock`.
+    ///
+    /// The clock is an argument rather than a default so a caller cannot build
+    /// a context without deciding what time it is. A query passes the one
+    /// instant it sampled for the whole view; anything else that evaluates an
+    /// expression passes [`query_clock`] once at its own entry point.
+    pub fn new(file: FileValue, clock: BasesDate) -> Self {
         Self {
             note: BTreeMap::new(),
             file,
             formula: BTreeMap::new(),
             this_value: None,
             bindings: None,
+            clock,
         }
     }
 

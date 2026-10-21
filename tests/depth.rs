@@ -142,7 +142,10 @@ fn ctx() -> EvalContext {
         resolve: Arc::new(|_: &str| None),
         links_to: Arc::new(|_: &str| false),
     };
-    EvalContext::new(FileValue::new("Note.md".to_string(), accessors))
+    EvalContext::new(
+        FileValue::new("Note.md".to_string(), accessors),
+        bases_mcp::value::BasesDate::from_millis(0),
+    )
 }
 
 // ---------------------------------------------------------------------------

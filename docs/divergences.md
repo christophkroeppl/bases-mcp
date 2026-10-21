@@ -799,6 +799,43 @@ the same way the old Rust code did (`args[0] ?? null` throughout
 D10, this is the Rust tree's repair; the TypeScript tree is a separate piece
 of work.
 
+## D13 — `today()` and `now()` are sampled ONCE per query
+
+| | |
+|---|---|
+| **Construct** | Any expression that reads the clock: `today()`, `now()`, and a method built on it (`relative()`) |
+| **Ours** | The query pipeline samples the wall clock ONCE, at the start of resolving a view, and hands that one instant to every row. `today()` is local midnight of that instant; `now()` is the instant itself. A draft's formula pass samples its own clock once. |
+| **Obsidian** | `today()` and `now()` read the wall clock when the expression is evaluated, so a view that took long enough could in principle see the clock advance between rows. |
+| **Evidence** | Not a rendering difference and not measured against the CLI: it is a property of the harness, observable only for a query that straddles local midnight. Pinned by `tests/expr.rs` (`the_clock_is_the_query_not_the_note_mtime`, `now_is_the_query_clock_with_its_own_offset`) and `tests/base.rs` (`one_query_clock_even_when_notes_were_edited_on_different_days`). |
+| **verify-in-obsidian** | no — the difference is when the clock is read, not what a construct renders |
+
+**The decision, and what it replaced.** A `.base` resolves every row in
+milliseconds, so sampling once and sampling per row are indistinguishable in
+Obsidian. Sampling once is what makes a port of it sane: two rows of one view
+cannot disagree about `now()`, and one view cannot straddle midnight halfway
+through its own resolution. That is why the clock is a field on the evaluator's
+context rather than a call at each use site.
+
+Two alternatives were considered and rejected:
+
+* **The current row's `file.mtime`** — the behaviour this replaced. It is not a
+  deliberate divergence at all: it made `today()` mean "the day THIS NOTE was
+  last edited", so rows edited on different days disagreed, and
+  `file.mtime == today()` was true for every row by construction. It is
+  recorded as the bug it was under "Bugs found in this implementation".
+* **The vault load instant** — reproducible for the whole life of a snapshot,
+  but in a long-running MCP server that freezes `now()` at process start. A
+  server up across midnight would keep answering yesterday's date until
+  restarted, which is a larger divergence from Obsidian than a moving clock.
+
+**What it costs.** A query is no longer a pure function of the vault snapshot:
+two queries of the same vault on different days can answer differently about
+`today()`, and that is the correct answer. Determinism is preserved where it
+matters — within one query — and anything that needs a FIXED clock (a test, or
+a future recorder that serialises our own output for a clock-dependent view)
+pins `EvalContext::clock` instead of asking the pipeline to lie.
+`tests/expr.rs`'s `clock_at` helper is that pin.
+
 ## Bugs found in this implementation
 
 Recorded separately from the divergences above, because these are defects we
@@ -1182,6 +1219,40 @@ The lesson generalises past this bug: the assertion was written to describe the
 shape we *expected* rather than the property that must hold. "No `\r` outside a
 `\r\n`" catches every corruption in the class; "no lone `\n`" catches one of them,
 and passed straight through this one.
+
+### `today()` and `now()` read the current row's mtime
+
+`now_millis` returned `(ctx.file.accessors.mtime)().millis()`, and `context_for`
+builds one `EvalContext` per note, so the "clock" was the modification time of
+the note being evaluated. Its own comment said "the clock, taken once per
+query"; the implementation took it once per ROW.
+
+Two consequences, both silent. On a vault whose notes were edited on different
+days, two rows of one view answered different `today()`s and different `now()`s.
+And `file.mtime == today()` was true for every row by construction, so the only
+rule that could have revealed it — date equality, `due == today()` — was
+comparing each note's due date against that note's own edit day.
+
+A fresh checkout hides both: every file gets one mtime, which is also why no
+fixture caught it. The test that does is a temp vault whose notes are given
+mtimes two years apart (`one_query_clock_even_when_notes_were_edited_on_different_days`
+in `tests/base.rs`); git cannot preserve mtimes, so such a fixture cannot be
+checked in.
+
+**Fix.** The clock is now a field on `EvalContext`, and
+`query_base` samples it ONCE (`evaluator::query_clock`) and passes that same
+instant to both the formula/filter pass and the property pass. `draft_eval_context`
+samples once for its own formula pass. `now_millis`, `today()` and `now()` read
+the field and never the file. The decision and its rejected alternatives are
+recorded under D13.
+
+Mutation: restoring `(ctx.file.accessors.mtime)()` at the three sites turns
+exactly the three clock tests red and nothing else — `tests/expr.rs` 57 → 55
+passing with the two named there failing, `tests/base.rs` 58 → 57 passing with
+the temp-vault one failing.
+
+Found while landing `t_f89ef4ef`, whose date-equality rule only means what it
+says once the clock is the query's.
 
 ## Branches
 

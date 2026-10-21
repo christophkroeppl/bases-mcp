@@ -16,9 +16,9 @@ use std::sync::Arc;
 use crate::ast::Node;
 use crate::depth::{Depth, FILTER};
 use crate::error::{BasesError, Result};
-use crate::evaluator::{evaluate, evaluate_expression, EvalContext, ThisContext};
+use crate::evaluator::{evaluate, evaluate_expression, query_clock, EvalContext, ThisContext};
 use crate::parser::{parse, try_parse};
-use crate::value::{compare, BasesValue};
+use crate::value::{compare, BasesDate, BasesValue};
 use crate::vault::source::BASE_EXT;
 use crate::vault::Vault;
 
@@ -80,6 +80,12 @@ pub fn query_base(
     let view = select_view(base, options.view.as_deref())?;
     let this_value = resolve_host_note(vault, options.context.as_deref())?;
 
+    // ONE clock for the whole query, sampled once. Every row's context gets this
+    // same instant, so two rows cannot disagree about `today()` or `now()`, and
+    // a view cannot straddle local midnight mid-resolution. It is deliberately
+    // not a per-row value: a note's mtime is a property of the note.
+    let clock = query_clock();
+
     // Formulas first: they may reference each other, so order them.
     let formula_order = order_formulas(&base.formulas)?;
     let mut compiled: Vec<Node> = Vec::with_capacity(formula_order.len());
@@ -105,7 +111,13 @@ pub fn query_base(
 
     let mut rows: Vec<ResolvedRow> = Vec::new();
     for note_path in vault.note_paths() {
-        let mut ctx = context_for(vault, &note_path, BTreeMap::new(), this_value.as_ref());
+        let mut ctx = context_for(
+            vault,
+            &note_path,
+            BTreeMap::new(),
+            this_value.as_ref(),
+            &clock,
+        );
         // Every formula, once, for this note. `ctx.formula` is filled as we go so
         // a formula referencing another sees the value already computed for it.
         for (name, node) in formula_order.iter().zip(&compiled) {
@@ -134,7 +146,13 @@ pub fn query_base(
     // matched nothing never pays for them.
     let needed = collect_properties(base, view);
     for row in &mut rows {
-        let ctx = context_for(vault, &row.path, row.formula.clone(), this_value.as_ref());
+        let ctx = context_for(
+            vault,
+            &row.path,
+            row.formula.clone(),
+            this_value.as_ref(),
+            &clock,
+        );
         for id in &needed {
             row.values.insert(id.clone(), resolve_property(id, &ctx)?);
         }
@@ -495,13 +513,17 @@ pub fn resolve_property(id: &str, ctx: &EvalContext) -> Result<BasesValue> {
 }
 
 /// The evaluation context for one note.
+///
+/// `clock` is the query's ONE instant, not anything read per note: see
+/// [`query_clock`].
 fn context_for(
     vault: &Arc<Vault>,
     path: &str,
     formula: BTreeMap<String, BasesValue>,
     this_value: Option<&ThisContext>,
+    clock: &BasesDate,
 ) -> EvalContext {
-    let mut ctx = EvalContext::new(vault.file_value(path));
+    let mut ctx = EvalContext::new(vault.file_value(path), clock.clone());
     ctx.note = vault
         .note(path)
         .map(|record| (*record.frontmatter).clone())

@@ -9,11 +9,43 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bases_mcp::evaluator::{evaluate_expression, EvalContext, ThisContext};
-use bases_mcp::value::{BasesValue, Duration, FileAccessors, FileValue};
+use bases_mcp::value::{BasesDate, BasesValue, Duration, FileAccessors, FileValue};
+
+/// The suite's clock: LOCAL midnight on 2026-01-01, plus a whole number of hours.
+///
+/// FIXED, and named, because `today()` and `now()` read the QUERY's clock (the
+/// [`EvalContext::clock`] field), not the note's mtime. A test that asserted
+/// against `today()` without pinning that field would be asserting against
+/// whatever day the suite ran on.
+///
+/// The DAY is fixed and the OFFSET is the host's, which is the shape a real
+/// backend reports: `date("2026-01-01")` is parsed as LOCAL midnight, so a clock
+/// pinned at local midnight keeps `now()`'s calendar fields and `today()`'s in
+/// one frame. A clock pinned at UTC midnight instead would have the suite answer
+/// a different question on a laptop than on CI.
+fn clock_at(hours_after_midnight: i64) -> BasesDate {
+    use chrono::{Local, TimeZone};
+
+    let midnight = chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+        .expect("a real date")
+        .and_time(chrono::NaiveTime::MIN);
+    let at = Local
+        .from_local_datetime(&midnight)
+        .single()
+        .expect("the suite's clock day starts at an unambiguous local midnight");
+    BasesDate::new(
+        (at + chrono::Duration::hours(hours_after_midnight)).fixed_offset(),
+        false,
+    )
+}
 
 /// A one-note vault, enough for link resolution and the file methods.
 fn make_ctx(options: Option<AccessorsOptions>) -> EvalContext {
     let opts = options.unwrap_or_default();
+    let mtime = opts
+        .mtime
+        .clone()
+        .unwrap_or_else(|| BasesDate::from_millis(1_767_225_600_000));
     let tags: Arc<Vec<BasesValue>> = Arc::new(
         opts.tags
             .iter()
@@ -38,7 +70,7 @@ fn make_ctx(options: Option<AccessorsOptions>) -> EvalContext {
         backlinks: Arc::new(Vec::new),
         properties: Arc::new(move || (*props).clone()),
         ctime: Arc::new(|| bases_mcp::value::BasesDate::from_millis(1_577_836_800_000)),
-        mtime: Arc::new(|| bases_mcp::value::BasesDate::from_millis(1_767_225_600_000)),
+        mtime: Arc::new(move || mtime.clone()),
         size: Arc::new(|| 42),
         tasks: Arc::new(Vec::new),
         resolve: Arc::new(|target: &str| {
@@ -51,7 +83,7 @@ fn make_ctx(options: Option<AccessorsOptions>) -> EvalContext {
         accessors,
     );
 
-    let mut ctx = EvalContext::new(file);
+    let mut ctx = EvalContext::new(file, opts.clock.clone().unwrap_or_else(|| clock_at(0)));
     ctx.note = opts.note.clone();
     if let Some(this_path) = &opts.this_path {
         let host = FileValue::new(this_path.to_string(), accessors_shim());
@@ -90,11 +122,28 @@ struct AccessorsOptions {
     note: BTreeMap<String, BasesValue>,
     this_path: Option<String>,
     this_note: BTreeMap<String, BasesValue>,
+    /// Overrides `file.mtime`/`file.ctime`. Distinct from `clock` on purpose:
+    /// a note's mtime and the query's clock are different things.
+    mtime: Option<BasesDate>,
+    /// Overrides the query clock the context evaluates against.
+    clock: Option<BasesDate>,
 }
 
 impl AccessorsOptions {
     fn at(mut self, path: &str) -> Self {
         self.path = Some(path.to_string());
+        self
+    }
+
+    /// Give this note its own modification time, without moving the clock.
+    fn edited_at(mut self, mtime: BasesDate) -> Self {
+        self.mtime = Some(mtime);
+        self
+    }
+
+    /// Run the expression against a fixed clock.
+    fn clock(mut self, clock: BasesDate) -> Self {
+        self.clock = Some(clock);
         self
     }
 
@@ -928,10 +977,81 @@ fn a_list_equals_a_scalar_only_when_it_has_one_element() {
 // ---------------------------------------------------------------------------
 // Date equality: a DAY on either side compares by calendar day
 //
-// `make_ctx` pins the note's mtime to 2026-01-01T00:00Z, and `today()` reads the
-// clock from that mtime, so these assertions are about the rule rather than
-// about the day the suite runs on.
+// `make_ctx` pins the QUERY CLOCK to local midnight on 2026-01-01 (and the
+// note's mtime to a different instant), so these assertions are about the rule
+// rather than about the day the suite runs on.
 // ---------------------------------------------------------------------------
+
+/// `today()` and `now()` read the query's clock, not the current row's mtime.
+///
+/// This is the defect: the clock used to come from `file.mtime` of the note
+/// being evaluated, so on a real vault `today()` was the day THAT NOTE was last
+/// edited. Two rows edited on different days answered differently, and
+/// `file.mtime == today()` was true for every row by construction.
+///
+/// Two contexts, two notes edited ten days apart, one query clock: the clock
+/// must not move with the note.
+#[test]
+fn the_clock_is_the_query_not_the_note_mtime() {
+    let edited = clock_at(0);
+    let edited_much_later = edited.shifted_by_millis(10 * 86_400_000);
+    let early = make_ctx(Some(
+        AccessorsOptions::default()
+            .at("Notes/Early.md")
+            .edited_at(edited),
+    ));
+    let late = make_ctx(Some(
+        AccessorsOptions::default()
+            .at("Notes/Late.md")
+            .edited_at(edited_much_later),
+    ));
+
+    // The two notes really do carry different mtimes...
+    assert!(b_in("file.mtime == date(\"2026-01-01\")", &early));
+    assert!(b_in("file.mtime == date(\"2026-01-11\")", &late));
+    // ...but the view's clock does not.
+    assert!(b_in("today() == date(\"2026-01-01\")", &early));
+    assert!(b_in("today() == date(\"2026-01-01\")", &late));
+    assert_eq!(
+        ev_in("today().format(\"YYYY-MM-DD\")", &early)
+            .expect("today formats")
+            .to_display_string(),
+        ev_in("today().format(\"YYYY-MM-DD\")", &late)
+            .expect("today formats")
+            .to_display_string(),
+    );
+    assert_eq!(
+        ev_in("number(now())", &early)
+            .expect("now numbers")
+            .as_number(),
+        ev_in("number(now())", &late)
+            .expect("now numbers")
+            .as_number(),
+    );
+    // The identity that used to hold for every row and must now be false.
+    assert!(!b_in("file.mtime == today()", &late));
+}
+
+/// `now()` is the same instant as the clock that produces `today()`, and it is
+/// not rebuilt from a UTC timestamp: a local clock keeps its offset.
+#[test]
+fn now_is_the_query_clock_with_its_own_offset() {
+    let ctx = make_ctx(Some(
+        AccessorsOptions::default()
+            .edited_at(clock_at(0).shifted_by_millis(10 * 86_400_000))
+            .clock(clock_at(14)),
+    ));
+
+    // 14:00 local on the pinned day: the clock, not the note's mtime.
+    assert!(b_in("now() == date(\"2026-01-01T14:00\")", &ctx));
+    assert!(b_in("now().format(\"YYYY-MM-DD\") == \"2026-01-01\"", &ctx));
+    assert!(b_in(
+        "today().format(\"YYYY-MM-DD\") == \"2026-01-01\"",
+        &ctx
+    ));
+    // The note was edited ten days later; the clock did not follow it.
+    assert!(!b_in("now() == file.mtime", &ctx));
+}
 
 #[test]
 fn a_date_time_equals_today_on_the_day_it_falls_on() {

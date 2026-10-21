@@ -43,8 +43,10 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use bases_mcp::base::{
     order_formulas, parse_base, query_base, BaseFile, Direction, FilterNode, QueryOptions,
@@ -1529,4 +1531,97 @@ fn the_rendered_cells_are_what_an_agent_reads() {
         .expect("a row");
     assert_eq!(add.1["note.status"], "active");
     assert_eq!(add.1["formula.priority_display"], "2 – normal");
+}
+
+// ---------------------------------------------------------------------------
+// The query clock: ONE instant for the whole view, not one per row
+// ---------------------------------------------------------------------------
+
+/// `today()` and `now()` are the query's clock, not each row's `file.mtime`.
+///
+/// The vault is built here rather than checked in because git does not preserve
+/// mtimes: a fresh checkout gives every fixture file the same one, which is
+/// exactly why the defect this pins was invisible. Two notes edited two years
+/// apart must still agree about the day and the instant, and neither note's
+/// mtime may be the clock.
+#[test]
+fn one_query_clock_even_when_notes_were_edited_on_different_days() {
+    use chrono::TimeZone;
+
+    let dir = tempfile::tempdir().expect("a temp dir is writable");
+    fs::create_dir_all(dir.path().join("Notes")).expect("the notes directory is created");
+    fs::write(
+        dir.path().join("Clock.base"),
+        r#"formulas:
+  day: 'today().format("YYYY-MM-DD")'
+  stamp: 'number(now())'
+  mtime_is_today: 'file.mtime == today()'
+views:
+  - type: table
+    name: Clock
+    order:
+      - file.name
+      - formula.day
+      - formula.stamp
+      - formula.mtime_is_today
+"#,
+    )
+    .expect("the base is written");
+
+    // Two notes, edited on 2024-01-01 and 2024-05-31.
+    for (name, edited) in [("One", 1_704_067_200_u64), ("Two", 1_717_200_000_u64)] {
+        let path = dir.path().join("Notes").join(format!("{name}.md"));
+        fs::write(&path, format!("---\ntitle: {name}\n---\n")).expect("the note is written");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("the note opens")
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(edited)),
+            )
+            .expect("the mtime is settable");
+    }
+
+    let vault = load(dir.path());
+    let result = query(&vault, "Clock.base", Some("Clock"), None);
+    assert_eq!(result.rows.len(), 2, "both notes resolve; {result:?}");
+
+    let day = |path: &str| cell(&result, path, "formula.day").to_display_string();
+    let stamp = |path: &str| {
+        cell(&result, path, "formula.stamp")
+            .as_number()
+            .expect("now() numbers")
+    };
+
+    assert_eq!(
+        day("Notes/One.md"),
+        day("Notes/Two.md"),
+        "one clock, one day"
+    );
+    assert_eq!(
+        stamp("Notes/One.md"),
+        stamp("Notes/Two.md"),
+        "one clock, one instant"
+    );
+    // The wall clock, not either 2024 mtime: 2025-06-15T00:00Z, in millis.
+    assert!(
+        stamp("Notes/One.md") > 1_750_000_000_000.0,
+        "now() is the wall clock, got {}",
+        stamp("Notes/One.md")
+    );
+    // `today()` is the local day `now()` falls on...
+    let local = chrono::Local
+        .timestamp_millis_opt(stamp("Notes/One.md") as i64)
+        .single()
+        .expect("a representable instant");
+    assert_eq!(day("Notes/One.md"), local.format("%Y-%m-%d").to_string());
+    // ...and no row's own mtime is the clock.
+    for path in ["Notes/One.md", "Notes/Two.md"] {
+        assert_eq!(
+            cell(&result, path, "formula.mtime_is_today").to_display_string(),
+            "false",
+            "{path}'s mtime is not today()"
+        );
+    }
 }
