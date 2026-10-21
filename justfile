@@ -1,26 +1,16 @@
-# Task runner for this crate. `cargo` alone does not cover the things that are not
-# cargo: the Obsidian CLI, the parity corpus, and the release flow.
-#
-# Recipes are grouped so `just --list` reads as the workflow rather than as a
-# flat list of verbs.
-
 set shell := ["bash", "-uc"]
 
-# Show every recipe.
 default:
     @just --list
 
 # -- gates -------------------------------------------------------------------
 
-# Format every source file in place.
 fmt:
     cargo fmt
 
-# Lint without failing the build, for a quick look.
 lint:
     cargo clippy --all-targets
 
-# What CI runs. Fast, and provably no Obsidian: `OBSIDIAN_BIN` below cannot exist.
 check:
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
@@ -29,19 +19,15 @@ check:
 
 # -- tests -------------------------------------------------------------------
 
-# Unit and integration tests, no Obsidian required.
 test *ARGS:
     cargo test --all-targets {{ARGS}}
 
-# Everything except parity, single-threaded, so a failing assertion is readable.
 verify:
     cargo test --all-targets -- --test-threads=1
 
-# The Obsidian CLI gate, behind a Cargo feature. Panics by design if Obsidian cannot answer.
 parity:
     cargo test --features parity --test parity
 
-# Run everything, requiring the live Obsidian CLI.
 check-all:
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
@@ -55,69 +41,44 @@ build:
 
 # -- transport probes --------------------------------------------------------
 
-# Both transports, driven by hand: same vault, same binary, same four
-# messages. Cross-checks the tool surface over stdio against HTTP. Needs a
-# debug build; resolves its own paths, so it runs from any worktree.
 probe-transport:
     @./scripts/probe-transport.sh
 
-# Both transports, driven by hand: the same seven tool calls, including the
-# query pipeline and the error envelope, compared as parsed JSON.
 probe-tool-bodies:
     @./scripts/probe-tool-bodies.sh
 
 # -- Obsidian CLI ------------------------------------------------------------
 
-# Is the CLI present, and which version?
 cli-version:
     @command -v obsidian >/dev/null || { echo "obsidian CLI not on PATH"; exit 1; }
     @obsidian version
 
-# Is the testing vault registered with Obsidian?
 cli-vaults:
     @obsidian vaults
 
-# Record the CLI's answers for every Base and view. Needs Obsidian.
-#
-# The recorder does not exist. `parity-record` is not a bin target in
-# Cargo.toml, so this recipe cannot work. Building it is tracked as
-# STATUS.md item 2; until it exists, the recipe says so instead of failing
-# with "no bin target named `parity-record`".
 record *ARGS:
-    @echo "parity-record is not built yet (STATUS.md item 2)." >&2
+    @echo "parity-record is not built yet." >&2
     @echo "This recipe needs a snapshot recorder that does not exist." >&2
     @exit 1
 
-# Run the live-CLI parity suite: compare the rendered output against the
-# installed Obsidian CLI, directly. There is no recorded snapshot to compare
-# against yet -- see STATUS.md item 2 and the `record` recipe above.
 parity-recorded:
     cargo test --features parity --test parity
 
-# Does the testing vault still match the recorded snapshot?
-#
-# There is no snapshot corpus to check against: `test/parity/data/` does not
-# exist, and `tests/parity.rs` calls the live CLI rather than reading a
-# corpus. The recorder is tracked as STATUS.md item 2; until it exists, the
-# recipe says so instead of failing with "no bin target named `parity-record`".
 corpus-check:
-    @echo "parity-record is not built yet (STATUS.md item 2)." >&2
+    @echo "parity-record is not built yet." >&2
     @echo "There is no snapshot corpus to check against test/parity/data/." >&2
     @exit 1
 
 # -- housekeeping ------------------------------------------------------------
 
-# Cargo.toml and Cargo.lock must agree with each other.
 check-versions:
     @./scripts/check-versions.sh
 
-# Pre-commit checks the commit is allowed to exist at all.
 precommit:
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
     OBSIDIAN_BIN=/nonexistent/obsidian cargo test --all-targets
     @just check-versions
 
-# What a new machine needs, once. Prints the path to register.
 dev-setup:
     @./scripts/dev-setup.sh

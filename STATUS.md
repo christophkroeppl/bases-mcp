@@ -87,25 +87,15 @@ changes.
 
 ## The todo queue
 
-### Blocking — the security backlog is not landed
-
-1. **The security backlog document does not exist on `develop`.** It lives on
-   `feat/security-backlog` (`48cf2cb`) and, in a richer form, on
-   `feat/guarden-deploy` (`8ae0f4c`). Both forked at `dd80ca0` and neither was
-   merged. `develop` has **dangling references** to the file it names:
-   `docs/divergences.md:265` and `.guarden/service.yml:10`. Plan Phase 2
-   lands one document at `docs/BACKLOG-network-security.md` — the path the
-   ticket names and both references point at — carrying the guarden branch's
-   content with its stale "HTTP does not exist yet" claim corrected.
-
-### The security backlog document has LANDED
+### The security backlog document has LANDED (todo item 1 — resolved)
 
 `docs/BACKLOG-network-security.md` (plan Phase 2) is now on `develop`, at the
-path the ticket names *and* the path both dangling references pointed at. It
-carries the seven-item hardening list with the OWASP API Security Top 10
-(2023) mapping, and every claim in it was checked against the tree before it
-was written — the tool count, the `MAX_DEPTH = 96` guard, the parser's
-measured 471-level edge, the path assertions, the config redaction.
+path the ticket names — which is also the path both references point at
+(`docs/divergences.md:265`, `.guarden/service.yml:10`). Neither is dangling
+any more. It carries the seven-item hardening list with the OWASP API Security
+Top 10 (2023) mapping, and every claim in it was checked against the tree
+before it was written — the tool count, the `MAX_DEPTH = 96` guard, the
+parser's measured 471-level edge, the path assertions, the config redaction.
 
 The one claim that had to change is the one the stale branch got wrong: the
 transport **ships**. The old draft said "an HTTP transport does not exist on
@@ -117,7 +107,7 @@ a *containment* control and says nothing about who may call the tools.
 
 `docs/divergences.md` no longer points at a branch that does not exist.
 
-### Bugs known, not fixed
+### Bugs known, not fixed (todo items 2-10; item 1 is the backlog, landed above)
 
 2. **`just record` and `just corpus-check` now fail HONESTLY** (was: they
    failed with cargo's `no bin target named 'parity-record'`). Both recipes

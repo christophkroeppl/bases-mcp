@@ -396,8 +396,8 @@ recipes that would manage a corpus are placeholders, and they say so instead of
 pretending:
 
 ```bash
-just record        # -> "parity-record is not built yet (STATUS.md item 2)."  exit 1
-just corpus-check  # -> "There is no snapshot corpus to check against ..."     exit 1
+just record        # -> "parity-record is not built yet."   exit 1
+just corpus-check  # -> "There is no snapshot corpus ..."   exit 1
 ```
 
 Neither refreshes anything. `test/parity/data/` does not exist. Recording a

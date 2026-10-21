@@ -3,7 +3,7 @@ name = "bases-mcp"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
-description = "MCP server that resolves Obsidian Bases to human-readable markdown"
+description = "MCP server that resolves Obsidian Bases to human- & agent-readable markdown"
 license = "MIT"
 default-run = "bases-mcp"
 
@@ -16,106 +16,45 @@ name = "bases_mcp"
 path = "src/lib.rs"
 
 [features]
-# Parity is a FEATURE, not a name filter.
-#
-# `cargo test -- --skip parity` filters by test NAME, and exactly one of the eight
-# tests in tests/parity.rs has "parity" in its name. The other seven ran; three of
-# them panicked at the no-CLI guard, by design, because a parity run that compared
-# nothing must not report green. CI has therefore been red on every push since
-# `f377887`, while its own comment claimed parity was excluded. The same filter was
-# also quietly dropping two ordinary tests — `render_is_the_flat_cli_parity_surface`
-# and `resolve_base_says_which_of_its_two_surfaces_is_the_parity_one` — from suites
-# that never touch the CLI.
-#
-# A `required-features` gate excludes the TARGET, which is the unit that was wrong:
-# no test in it runs, and nothing has to remember a substring.
 parity = []
 
-# Only the target that needs a live Obsidian CLI. Declaring it turns off
-# autodiscovery for this name alone, so every other tests/*.rs is still found.
 [[test]]
 name = "parity"
 required-features = ["parity"]
 
 [dependencies]
-
-# The official Rust MCP SDK, so the wire format cannot drift from the clients
-# this has to talk to. `schemars` is not optional here: tool input schemas are
-# derived from the parameter types, and a tool with no schema is a tool an
-# agent cannot call correctly.
-#
-# `transport-streamable-http-server` is the second transport this binary
-# speaks, selected by `--transport http` (see `src/main.rs`). The Streamable
-# HTTP service is a tower `Service`, so it is mounted on a minimal axum router
-# rather than wrapped in a second process: one binary, one vault, two
-# transports. `local` is NOT enabled: the vault index is behind `RwLock` rather
-# than `RefCell`, so the handler is `Send + Sync` and the multi-threaded
-# runtime can run it — see `src/vault.rs`.
 rmcp = { version = "3", features = ["server", "transport-io", "schemars", "transport-streamable-http-server"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs", "net", "signal"] }
-# Mounts rmcp's Streamable HTTP service at a path. `http1` and `tokio` are all
-# the server needs; body handling is rmcp's own.
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
-# `StreamableHttpService` is a tower service; axum drives it through the
-# tower-service trait directly.
 tower = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
-# Draft ids are opaque handles an agent resends, and a v4 UUID is the shape the
-# tool surface documents. Nothing reads them back, only compares them.
 uuid = { version = "1", features = ["v4"] }
-# One vault backend, several implementations: the fs and WebDAV sources and the
-# draft overlay are all reached as a single trait object.
 async-trait = "0.1"
-# The evaluator's errors name a construct, a position and a property. That
-# detail has to reach the tool result, not be flattened into a string, so the
-# error is a type rather than a message.
-# Percent-decoding of WebDAV hrefs, and percent-encoding on the way out.
 percent-encoding = "2"
-# WebDAV `getlastmodified` arrives in three formats across three RFCs, and the
-# local offset decides what `file.mtime` means. chrono keeps the offset.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 sha2 = "0.10"
 hex = "0.4"
-# An HTTP client for the WebDAV backend. rustls, so no system OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
   "charset",
   "http2",
 ] }
 regex = "1.13.1"
-# Link resolution has to fold `Página` onto `Pagina` the way JavaScript's
-# `normalize("NFKD")` does, and `to_lowercase()` alone does not: the fold has to
-# happen before the diacritics are dropped or the accents survive.
 unicode-normalization = "0.1.25"
-# HTTP Basic is the only credential this client holds, and it lives in exactly
-# one place: the `Authorization` header.
 base64 = "0.23.1"
-# `207 Multi-Status` bodies are untrusted input and this is the only XML reader in
-# the project. A tree binding would answer with a vault that looks empty rather
-# than refuse, because an empty `<resourcetype/>` and an absent property are the
-# same shape to it; see `src/vault/webdav.rs`.
 quick-xml = { version = "0.39", default-features = false, features = ["encoding"] }
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-# The HTTP suite drives several sessions at once; `FuturesUnordered` is the
-# join that keeps them from being a fixed sequence.
 futures = "0.3"
 
 [profile.release]
-# The evaluator recurses over a Pratt AST and is the hot path of every query.
 lto = "thin"
 codegen-units = 1
 strip = true
 
-# The parity tests shell out to one shared Obsidian bridge. Running them in
-# parallel makes them race that single process -- Obsidian does not flush stdout
-# before exiting, and a query issued while another is in flight comes back empty,
-# which reads as "no rows" rather than as "try again".
 [profile.test]
-# Serial harness: `--test-threads=1` below is the mechanism, this just documents
-# why it is needed.
 opt-level = 0
