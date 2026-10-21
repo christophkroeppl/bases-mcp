@@ -389,6 +389,26 @@ construct and never registered in Obsidian.
 
 `.obsidian/` inside `test/vault` is Obsidian's own state and is gitignored.
 
+**The vault is pinned by a manifest, not only by a count.** `test/vault.manifest`
+records every file of the oracle with its SHA-256, and the gate compares the
+vault against it on every run:
+
+```bash
+cd test/vault && sha256sum -c ../vault.manifest        # GNU coreutils
+cd test/vault && shasum -a 256 -c ../vault.manifest    # macOS
+```
+
+A count could only see a file being added or removed. A file whose bytes changed
+is still one file, so the desktop app rewriting `Tickets.base` — which is what
+running any `obsidian` command does — left the count at nine while the oracle had
+silently changed what `obsidian base:query` returns. The manifest names the
+offender, the digest it expected, and the digest it found. The format is
+`sha256sum`'s own, so the stock tool checks it; the digest is over the file's
+bytes, so no line-ending normalisation can call a rewrite a match.
+
+The manifest changes only deliberately: `cargo test --test oracle_manifest --
+--ignored regenerate` rewrites it, and the diff is the review.
+
 **There is no recorded corpus yet.** `tests/parity.rs` calls the **live**
 Obsidian CLI and compares against it directly, so the parity oracle is the
 installed CLI on the machine running the tests — not a stored answer. The

@@ -35,7 +35,7 @@
 //! thing under test.
 //!
 //! Nothing here writes to `test/vault`. It is the parity oracle and stays at
-//! exactly [`CORPUS_SIZE`] files.
+//! exactly [`CORPUS_SIZE`] files — a set the manifest pins, byte for byte.
 
 // Each integration test is its own crate, and not every one needs every helper.
 // Each integration test is its own crate, and no suite needs every helper here.
@@ -54,7 +54,8 @@ use bases_mcp::error::BasesError;
 use bases_mcp::labels::{canonical_id_of, display_name_for, label_for_id, strip_namespace};
 use bases_mcp::value::BasesValue;
 use bases_mcp::vault::{FsVaultSource, Vault};
-use common::{count_files, futures_block_on, vault_dir, CORPUS_SIZE};
+use common::manifest::assert_vault_matches_manifest;
+use common::{futures_block_on, vault_dir};
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -215,10 +216,14 @@ fn grouped<'a>(result: &'a QueryResult, group_key: &str, path: &str, id: &str) -
 
 #[test]
 fn the_testing_vault_is_untouched() {
-    // The oracle's size underpins every comparison below: a tenth file would
-    // change what Obsidian returns for the same query. This suite reads the
-    // vault and never writes to it, so this must not move.
-    assert_eq!(count_files(&vault_dir()), CORPUS_SIZE);
+    // The oracle underpins every comparison below: a changed file would change
+    // what Obsidian returns for the same query. This suite reads the vault and
+    // never writes to it, so this must not move.
+    //
+    // A MANIFEST, not a count. The count could only see a file being added;
+    // the desktop app rewriting a `.base` file leaves the count at nine and
+    // the oracle changed underneath it.
+    assert_vault_matches_manifest();
 }
 
 // ---------------------------------------------------------------------------

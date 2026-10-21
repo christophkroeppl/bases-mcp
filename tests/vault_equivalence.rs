@@ -18,8 +18,9 @@
 //!     that compared nothing.
 //!
 //! Nothing here writes to `test/vault`. It is the Obsidian parity oracle and
-//! stays at exactly [`CORPUS_SIZE`] files. The write comparisons happen in two
-//! throwaway sandboxes -- a temp directory and a map -- seeded identically.
+//! stays at exactly [`CORPUS_SIZE`] files — a set the manifest pins, byte for
+//! byte. The write comparisons happen in two throwaway sandboxes -- a temp
+//! directory and a map -- seeded identically.
 //!
 //! mtime is the one field the two backends cannot agree on, and the reason the
 //! memory source has a fixed clock at all. `Vault` feeds `stat().mtime` to
@@ -52,12 +53,12 @@ use bases_mcp::vault::{
     coerce_frontmatter, content_hash, fold_key, is_indexable, match_path, points_at, FileStat,
     FsVaultSource, PathIndex, SourceKind, Vault, VaultSource,
 };
+use common::manifest::assert_vault_matches_manifest;
 use common::memory::{
     MemoryFault, MemoryOp, MemoryVaultSource, SharedSource, ANY_PATH, MEMORY_MTIME_MS,
 };
 use common::{
-    count_files, dotfile_tree, futures_block_on, load_corpus, seed_dir, vault_dir, VaultFile,
-    CORPUS_SIZE,
+    dotfile_tree, futures_block_on, load_corpus, seed_dir, vault_dir, VaultFile, CORPUS_SIZE,
 };
 use tempfile::TempDir;
 
@@ -133,11 +134,14 @@ where
 
 #[test]
 fn the_corpus_is_the_testing_vault_and_the_testing_vault_is_untouched() {
-    // The oracle's size underpins every comparison below: a tenth file would
-    // change what Obsidian returns for the same query, so the parity and
-    // equivalence suites would then be describing different vaults.
+    // The oracle underpins every comparison below: a changed file would change
+    // what Obsidian returns for the same query, so the parity and equivalence
+    // suites would then be describing different vaults.
+    //
+    // A MANIFEST, not a count: the count could only see a file being added, and
+    // the desktop app rewriting a `.base` file leaves the count at nine.
     assert_eq!(load_corpus().len(), CORPUS_SIZE);
-    assert_eq!(count_files(&vault_dir()), CORPUS_SIZE);
+    assert_vault_matches_manifest();
 }
 
 #[test]
