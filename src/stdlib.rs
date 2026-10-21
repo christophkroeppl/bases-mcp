@@ -142,6 +142,21 @@ pub fn get_method(target: &BasesValue, name: &str) -> Option<&'static MethodDef>
                 .get(ReceiverType::Null.key())
                 .and_then(|by_name| by_name.get(name))
         })
+        // D10: a null receiver answers null, whatever the method is called.
+        .or_else(|| (matches!(target, BasesValue::Null)).then_some(&NULL_RECEIVER))
+}
+
+static NULL_RECEIVER: MethodDef = MethodDef {
+    fn_body: m_null_receiver,
+    lambda_arity: None,
+};
+
+fn m_null_receiver(
+    _target: &BasesValue,
+    _args: &[BasesValue],
+    _ctx: &EvalContext,
+) -> Result<BasesValue> {
+    Ok(BasesValue::Null)
 }
 
 // ---------------------------------------------------------------------------
@@ -846,7 +861,11 @@ fn m_to_string(
     _args: &[BasesValue],
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
-    Ok(BasesValue::String(target.to_display_string()))
+    // D10: null stringifies to "null" here, unlike a null CELL (rendered empty).
+    match target {
+        BasesValue::Null => Ok(BasesValue::String("null".to_string())),
+        other => Ok(BasesValue::String(other.to_display_string())),
+    }
 }
 
 fn m_is_truthy(

@@ -306,6 +306,84 @@ fn contains_is_type_strict_and_says_so() {
     );
 }
 
+/// A null RECEIVER answers null, whatever the method is called.
+///
+/// Obsidian's rule, read out of the Bases evaluator Obsidian ships in
+/// `resources/obsidian.asar`: its call site resolves the receiver and then
+///
+///     if(s=r.getValue(e)||gW.value, !(t=KW.findForValue(s,i)) && s===gW.value) return gW.value
+///
+/// so a null receiver with an unknown method answers the null value instead
+/// of raising "no such method". This is what makes a null property DROP a row
+/// instead of failing the whole query -- Obsidian's filter predicate is
+/// `this.getValue(e).isTruthy()`, and its null value is falsy.
+///
+/// The four universal methods are the exception, and they are defined on null.
+#[test]
+fn a_null_receiver_answers_null_whatever_the_method_is_called() {
+    let ctx = make_ctx(Some(AccessorsOptions::default().prop("status", "active")));
+    for expr in [
+        "missingprop.contains(\"x\")",
+        "missingprop.containsAll(\"a\")",
+        "missingprop.containsAny(\"a\")",
+        "missingprop.startsWith(\"x\")",
+        "missingprop.endsWith(\"x\")",
+        "missingprop.lower()",
+        "missingprop.abs()",
+        "missingprop.bogus()",
+        "missingprop.count()",
+        "missingprop.filter(value == \"active\")",
+    ] {
+        assert!(
+            matches!(ev_in(expr, &ctx), Ok(BasesValue::Null)),
+            "{expr} on a null receiver is null, not an error"
+        );
+    }
+}
+
+/// The universal methods are defined ON null and answer normally.
+///
+/// Obsidian registers exactly these four for a null receiver -- `isEmpty` on
+/// Null itself, and `toString`/`isTruthy`/`isType` on Any, which Null extends
+/// -- and looks them up by walking that prototype chain, so they are found
+/// before the null-receiver fallback can answer for them.
+#[test]
+fn the_universal_methods_answer_on_a_null_receiver() {
+    let ctx = make_ctx(Some(AccessorsOptions::default().prop("status", "active")));
+    assert_eq!(
+        ev_in("missingprop.toString()", &ctx)
+            .unwrap()
+            .to_display_string(),
+        "null"
+    );
+    assert!(!b_in("missingprop.isTruthy()", &ctx));
+    assert!(b_in("missingprop.isEmpty()", &ctx));
+    assert!(b_in("missingprop.isType(\"null\")", &ctx));
+}
+
+/// A receiver that is NOT null still errors on an unknown method.
+///
+/// The fallback is keyed on the receiver being null, so it cannot swallow the
+/// "no such method" error for a real receiver -- which is Obsidian's rule too:
+/// its null check is on the receiver itself, and a non-null receiver falls
+/// through to `Cannot find function "x" on type <type>`.
+#[test]
+fn a_non_null_receiver_with_an_unknown_method_still_errors() {
+    let ctx = make_ctx(Some(AccessorsOptions::props(&[
+        ("s", BasesValue::String("active".into())),
+        ("n", BasesValue::Number(42.0)),
+        ("b", BasesValue::Bool(true)),
+    ])));
+    for expr in ["s.bogus()", "n.bogus()", "b.bogus()", "list(s).bogus()"] {
+        let err = ev_in(expr, &ctx).expect_err("a non-null receiver still errors");
+        assert!(
+            err.display_message().contains("is not a method on"),
+            "{expr} names the type it failed on: {}",
+            err.display_message()
+        );
+    }
+}
+
 #[test]
 fn an_empty_list_is_falsy() {
     // Which is what makes `if(projects, projects.length, 0)` work as a null guard.
