@@ -27,12 +27,12 @@ mod common;
 use std::path::Path;
 use std::sync::Arc;
 
-use bases_mcp::config::{parse_config, ConfigResult, Env, VaultConfig};
+use bases_mcp::config::{ConfigResult, Env, VaultConfig, parse_config};
 use bases_mcp::service::Resolver;
-use bases_mcp::tools::{tool_definitions, ToolSurface};
+use bases_mcp::tools::{ToolSurface, tool_definitions};
 use bases_mcp::vault::content_hash;
 use common::{futures_block_on, load_corpus_from, seed_dir, vault_dir};
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use tempfile::TempDir;
 
 /// A tool surface over a private copy of the testing vault.
@@ -529,14 +529,18 @@ fn get_note_answers_with_the_projection_and_its_provenance() {
     assert_eq!(health_of(&result), "ok");
     let payload = structured(&result);
     assert_eq!(payload["path"], "Projects/SomeProject.md");
-    assert!(payload["content"]
-        .as_str()
-        .expect("content")
-        .contains("base-rendered"));
-    assert!(payload["raw"]
-        .as_str()
-        .expect("raw")
-        .contains("![[Tickets.base]]"));
+    assert!(
+        payload["content"]
+            .as_str()
+            .expect("content")
+            .contains("base-rendered")
+    );
+    assert!(
+        payload["raw"]
+            .as_str()
+            .expect("raw")
+            .contains("![[Tickets.base]]")
+    );
 
     let regions = payload["regions"].as_array().expect("regions");
     assert_eq!(regions.len(), 1);
@@ -793,10 +797,12 @@ fn a_refused_region_is_a_success_with_partial_health_and_no_is_error() {
     assert_eq!(refusals[0]["region"], 0);
     assert_eq!(refusals[0]["base"], "Tickets.base");
     assert_eq!(refusals[0]["reason"], "The base region was removed.");
-    assert!(refusals[0]["guidance"]
-        .as_str()
-        .expect("guidance")
-        .contains("never removed"));
+    assert!(
+        refusals[0]["guidance"]
+            .as_str()
+            .expect("guidance")
+            .contains("never removed")
+    );
     assert_eq!(payload["removedRegion"], true);
 
     let warning = text(&result);
@@ -882,10 +888,12 @@ fn the_first_call_returns_a_draft_and_writes_nothing() {
     assert_eq!(payload["view"], "All");
     assert_eq!(payload["context"], "Projects/SomeProject.md");
     assert_eq!(payload["draft_id"].as_str().expect("an id").len(), 36);
-    assert!(payload["content"]
-        .as_str()
-        .expect("a draft")
-        .contains("- ticket"));
+    assert!(
+        payload["content"]
+            .as_str()
+            .expect("a draft")
+            .contains("- ticket")
+    );
 
     let note = text(&result);
     assert!(note.contains("NOTHING has been written yet"), "{note}");

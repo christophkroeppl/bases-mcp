@@ -28,14 +28,14 @@ use std::sync::Arc;
 
 use bases_mcp::base::QueryOptions;
 use bases_mcp::drafts::{
-    AddNoteOptions, AddNoteToBaseResult, DraftProposal, DraftSeed, DraftStore, DRAFT_TTL_MS,
+    AddNoteOptions, AddNoteToBaseResult, DRAFT_TTL_MS, DraftProposal, DraftSeed, DraftStore,
 };
 use bases_mcp::error::{BasesError, Result};
 use bases_mcp::note::parse_note;
 use bases_mcp::service::{NoteOptions, Resolver};
 use bases_mcp::vault::content_hash;
 use common::manifest::assert_vault_matches_manifest;
-use common::{futures_block_on, load_corpus_from, seed_dir, vault_dir, VaultFile};
+use common::{VaultFile, futures_block_on, load_corpus_from, seed_dir, vault_dir};
 use tempfile::TempDir;
 
 /// The scratch note most of these tests use; the rest name their own.

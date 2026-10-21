@@ -30,11 +30,11 @@ use chrono::TimeZone;
 use chrono::Utc;
 
 use bases_mcp::base::{BaseFile, BaseView, PropertyConfig, QueryGroup, QueryResult, ResolvedRow};
-use bases_mcp::note::{is_base_region, parse_note_with_embeds, RENDER_FENCE_LANG};
-use bases_mcp::render::markdown::{display_width, render_columns, render_markdown, RenderStyle};
+use bases_mcp::note::{RENDER_FENCE_LANG, is_base_region, parse_note_with_embeds};
+use bases_mcp::render::markdown::{RenderStyle, display_width, render_columns, render_markdown};
 use bases_mcp::render::project::{
-    base_regions, fence_info, parse_fence_info, project, reconcile_note, wrap_in_fence,
-    FenceProvenance, RENDER_FENCE,
+    FenceProvenance, RENDER_FENCE, base_regions, fence_info, parse_fence_info, project,
+    reconcile_note, wrap_in_fence,
 };
 use bases_mcp::value::{BasesDate, BasesValue};
 use serde_yaml::Mapping;
@@ -340,11 +340,13 @@ fn structured_left_aligns_cells_instead_of_centring_them() {
     let markdown = render(&base(), &result("table"), RenderStyle::Structured);
     assert_eq!(markdown, STRUCTURED_TABLE);
     // No leading pad before the first cell's text: `| Alpha` and nothing more.
-    assert!(markdown
-        .lines()
-        .nth(3)
-        .expect("the Alpha row")
-        .starts_with("| Alpha"));
+    assert!(
+        markdown
+            .lines()
+            .nth(3)
+            .expect("the Alpha row")
+            .starts_with("| Alpha")
+    );
 }
 
 #[test]
@@ -979,9 +981,11 @@ fn every_refusal_explains_where_rows_come_from() {
     );
 
     let deleted = reconcile_note("Host.md", HOST, &HOST.replace("![[Tickets.base]]\n", ""));
-    assert!(deleted.refused[0]
-        .guidance
-        .contains("never removed by a note edit"));
+    assert!(
+        deleted.refused[0]
+            .guidance
+            .contains("never removed by a note edit")
+    );
 }
 
 // ---------------------------------------------------------------------------

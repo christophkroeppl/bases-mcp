@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{BasesError, Result};
 use crate::vault::source::{
-    is_indexable, normalise_line_endings, FileStat, SourceKind, VaultSource,
+    FileStat, SourceKind, VaultSource, is_indexable, normalise_line_endings,
 };
 
 /// The content hash every backend must compute identically.

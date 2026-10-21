@@ -193,11 +193,7 @@ fn declared_name(line: &str) -> Option<String> {
         .take_while(|character| character.is_alphanumeric() || *character == '_')
         .collect();
 
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    if name.is_empty() { None } else { Some(name) }
 }
 
 /// Whether a line declares the item called `name`.

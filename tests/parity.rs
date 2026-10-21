@@ -18,7 +18,7 @@
 //! cannot bind — it returns `[]` — and is asserted as the known divergence.
 
 use bases_mcp::base::QueryOptions;
-use bases_mcp::parity::{compare_rows, Cli};
+use bases_mcp::parity::{Cli, compare_rows};
 use bases_mcp::render::markdown::RenderStyle;
 use bases_mcp::service::Resolver;
 

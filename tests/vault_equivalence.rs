@@ -50,15 +50,15 @@ use std::sync::Arc;
 use bases_mcp::error::BasesError;
 use bases_mcp::value::BasesValue;
 use bases_mcp::vault::{
-    coerce_frontmatter, content_hash, fold_key, is_indexable, match_path, points_at, FileStat,
-    FsVaultSource, PathIndex, SourceKind, Vault, VaultSource,
+    FileStat, FsVaultSource, PathIndex, SourceKind, Vault, VaultSource, coerce_frontmatter,
+    content_hash, fold_key, is_indexable, match_path, points_at,
 };
 use common::manifest::assert_vault_matches_manifest;
 use common::memory::{
-    MemoryFault, MemoryOp, MemoryVaultSource, SharedSource, ANY_PATH, MEMORY_MTIME_MS,
+    ANY_PATH, MEMORY_MTIME_MS, MemoryFault, MemoryOp, MemoryVaultSource, SharedSource,
 };
 use common::{
-    dotfile_tree, futures_block_on, load_corpus, seed_dir, vault_dir, VaultFile, CORPUS_SIZE,
+    CORPUS_SIZE, VaultFile, dotfile_tree, futures_block_on, load_corpus, seed_dir, vault_dir,
 };
 use tempfile::TempDir;
 
@@ -530,9 +530,11 @@ fn exists_sees_a_note_written_behind_the_listing() {
 
     // Prime both listings, so both are snapshots of a vault without this note.
     assert!(!run(fs.list()).expect("lists").contains(&late.to_string()));
-    assert!(!run(memory.list())
-        .expect("lists")
-        .contains(&late.to_string()));
+    assert!(
+        !run(memory.list())
+            .expect("lists")
+            .contains(&late.to_string())
+    );
     assert!(!run(fs.exists(late)).expect("answers"));
     assert!(!run(memory.exists(late)).expect("answers"));
 
@@ -941,9 +943,11 @@ fn a_fault_fires_only_as_many_times_as_it_is_given() {
         .expect("the fault is well formed");
     let error = failure_of(source.read_note("Root Ticket.md"));
     assert!(error.message().contains("503"), "{error}");
-    assert!(read_of(&source, "Root Ticket.md")
-        .expect("the fault is spent")
-        .contains("Root ticket"));
+    assert!(
+        read_of(&source, "Root Ticket.md")
+            .expect("the fault is spent")
+            .contains("Root ticket")
+    );
 }
 
 #[test]
@@ -954,9 +958,11 @@ fn a_fault_on_one_path_leaves_the_rest_of_the_vault_readable() {
         .expect("the fault is well formed");
     assert!(read_of(&source, "Tickets.base").is_err());
     assert_eq!(list_of(&source).len(), CORPUS_SIZE);
-    assert!(read_of(&source, "Root Project.md")
-        .expect("an unrelated path is fine")
-        .contains("business-idea"));
+    assert!(
+        read_of(&source, "Root Project.md")
+            .expect("an unrelated path is fine")
+            .contains("business-idea")
+    );
 }
 
 #[test]
@@ -967,9 +973,11 @@ fn clear_faults_disarms_so_one_test_cannot_inherit_anothers_fault() {
         .expect("the fault is well formed");
     assert!(read_of(&source, "Root Ticket.md").is_err());
     source.clear_faults();
-    assert!(read_of(&source, "Root Ticket.md")
-        .expect("disarmed")
-        .contains("Root ticket"));
+    assert!(
+        read_of(&source, "Root Ticket.md")
+            .expect("disarmed")
+            .contains("Root ticket")
+    );
 }
 
 /// A source that cannot list reports the failure rather than an empty vault. The
@@ -1254,9 +1262,11 @@ fn file_backlinks_are_the_notes_that_link_here_in_both_directions() {
         ]
     );
     // A host note is not its own backlink, even though it embeds a base.
-    assert!(!vault
-        .backlinks_for("Root Project.md")
-        .contains(&BasesValue::String("Root Project.md".to_string())));
+    assert!(
+        !vault
+            .backlinks_for("Root Project.md")
+            .contains(&BasesValue::String("Root Project.md".to_string()))
+    );
 }
 
 #[test]

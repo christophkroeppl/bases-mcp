@@ -46,7 +46,7 @@ use sha2::{Digest, Sha256};
 
 use crate::base::QueryOptions;
 use crate::error::{BasesError, Result};
-use crate::service::{json_rows, Resolver};
+use crate::service::{Resolver, json_rows};
 
 /// The on-disk format this binary reads and writes.
 ///

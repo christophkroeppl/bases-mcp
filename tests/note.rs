@@ -22,9 +22,9 @@ use std::path::{Path, PathBuf};
 #[allow(unused_imports)]
 use bases_mcp::note::is_base_embed;
 use bases_mcp::note::{
-    extract_inline_tags, extract_links, extract_tasks, fence_attrs, is_base_region, parse_note,
-    parse_note_with_embeds, serialise, BaseFence, ParsedNote, Segment, SegmentKind, TaskItem,
-    RENDER_FENCE_LANG,
+    BaseFence, ParsedNote, RENDER_FENCE_LANG, Segment, SegmentKind, TaskItem, extract_inline_tags,
+    extract_links, extract_tasks, fence_attrs, is_base_region, parse_note, parse_note_with_embeds,
+    serialise,
 };
 use bases_mcp::value::BasesValue;
 
@@ -182,10 +182,12 @@ fn an_ordinary_code_fence_is_still_prose() {
         base_regions(&note).is_empty(),
         "a `ts` fence is not a Base region"
     );
-    assert!(!note
-        .segments
-        .iter()
-        .any(|s| s.kind() == SegmentKind::BaseFence));
+    assert!(
+        !note
+            .segments
+            .iter()
+            .any(|s| s.kind() == SegmentKind::BaseFence)
+    );
     assert_eq!(serialise(&note.segments), text);
 }
 

@@ -22,15 +22,15 @@
 use std::net::SocketAddr;
 use std::process::ExitCode;
 
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::ServiceExt;
+use rmcp::transport::streamable_http_server::StreamableHttpService;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 
-use bases_mcp::config::{open_source, parse_config, process_env, ConfigResult, NAME};
+use bases_mcp::config::{ConfigResult, NAME, open_source, parse_config, process_env};
 use bases_mcp::service::Resolver;
 use bases_mcp::tools::ToolSurface;
 use bases_mcp::transport::{
-    select_transport, usage, wants_help, HttpEndpoint, Transport, HTTP_PATH,
+    HTTP_PATH, HttpEndpoint, Transport, select_transport, usage, wants_help,
 };
 
 /// Start the server on the named transport, or exit non-zero explaining why not.

@@ -37,16 +37,16 @@ use serde::Deserialize;
 use serde_yaml::{Mapping, Value as Yaml};
 
 use crate::ast::{Literal, Node, NodeKind};
-use crate::base::{order_formulas, resolve_host_note, select_view, BaseFile, BaseView, FilterNode};
+use crate::base::{BaseFile, BaseView, FilterNode, order_formulas, resolve_host_note, select_view};
 use crate::depth::{Depth, FILTER};
 use crate::error::{BasesError, Result};
-use crate::evaluator::{evaluate, query_clock, EvalContext, RESERVED};
+use crate::evaluator::{EvalContext, RESERVED, evaluate, query_clock};
 use crate::note::parse_note_with_embeds;
 use crate::parser::{parse, try_parse};
 use crate::service::Resolver;
-use crate::value::{strip_extension, BasesValue};
-use crate::vault::source::{normalise_line_endings, FileStat, SourceKind, VaultSource};
-use crate::vault::{content_hash, Vault};
+use crate::value::{BasesValue, strip_extension};
+use crate::vault::source::{FileStat, SourceKind, VaultSource, normalise_line_endings};
+use crate::vault::{Vault, content_hash};
 
 // ---------------------------------------------------------------------------
 // Surface

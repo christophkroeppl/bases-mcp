@@ -17,10 +17,10 @@ pub mod parse;
 pub mod query;
 
 pub use parse::{
-    normalise_filters, parse_base, select_view, BaseFile, BaseView, Direction, FilterNode, GroupBy,
-    PropertyConfig, SortEntry,
+    BaseFile, BaseView, Direction, FilterNode, GroupBy, PropertyConfig, SortEntry,
+    normalise_filters, parse_base, select_view,
 };
 pub use query::{
-    canonical, order_formulas, query_base, resolve_host_note, resolve_property, QueryGroup,
-    QueryOptions, QueryResult, ResolvedRow,
+    QueryGroup, QueryOptions, QueryResult, ResolvedRow, canonical, order_formulas, query_base,
+    resolve_host_note, resolve_property,
 };

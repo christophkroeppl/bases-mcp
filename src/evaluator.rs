@@ -17,8 +17,8 @@ use crate::ast::{BinOp, Node, NodeKind, UnaryOp};
 use crate::depth::{Depth, EXPRESSION};
 use crate::error::{BasesError, MissingThisContext, Result};
 use crate::parser::parse;
-use crate::stdlib::{get_global, get_method, MethodFn};
-use crate::value::{compare, values_equal, BasesDate, BasesValue, Duration, FileValue};
+use crate::stdlib::{MethodFn, get_global, get_method};
+use crate::value::{BasesDate, BasesValue, Duration, FileValue, compare, values_equal};
 
 /// The host note `this` binds to.
 #[derive(Debug, Clone)]
@@ -509,7 +509,7 @@ fn evaluate_binary(
             return Err(
                 BasesError::new(format!("Unsupported operator \"{}\"", op.as_str()))
                     .with_construct(op.as_str()),
-            )
+            );
         }
     })
 }

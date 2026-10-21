@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use bases_mcp::evaluator::{evaluate_expression, EvalContext, ThisContext};
+use bases_mcp::evaluator::{EvalContext, ThisContext, evaluate_expression};
 use bases_mcp::value::{BasesDate, BasesValue, Duration, FileAccessors, FileValue};
 
 /// The suite's clock: LOCAL midnight on 2026-01-01, plus a whole number of hours.
@@ -676,7 +676,9 @@ fn a_missing_required_argument_is_not_enough_arguments() {
         let err = ev(expr).expect_err("a missing required argument must be an error");
         assert_eq!(
             err.display_message(),
-            format!("Cannot call function \"{function}\", not enough arguments. (construct: {function})"),
+            format!(
+                "Cannot call function \"{function}\", not enough arguments. (construct: {function})"
+            ),
             "{expr}"
         );
     }

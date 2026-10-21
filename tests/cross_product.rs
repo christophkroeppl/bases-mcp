@@ -41,7 +41,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 
 /// How long to wait for a listener to come up before giving up.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);

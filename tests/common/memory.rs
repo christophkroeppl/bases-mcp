@@ -32,7 +32,7 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use bases_mcp::error::BasesError;
 use bases_mcp::vault::{
-    content_hash, is_indexable, normalise_line_endings, FileStat, SourceKind, VaultSource,
+    FileStat, SourceKind, VaultSource, content_hash, is_indexable, normalise_line_endings,
 };
 use chrono::{DateTime, FixedOffset};
 

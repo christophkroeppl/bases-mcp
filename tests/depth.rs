@@ -26,10 +26,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bases_mcp::ast::{Literal, Node, NodeKind, Span, UnaryOp};
-use bases_mcp::base::{parse_base, query_base, BaseFile, QueryOptions};
+use bases_mcp::base::{BaseFile, QueryOptions, parse_base, query_base};
 use bases_mcp::depth::MAX_DEPTH;
 use bases_mcp::error::BasesError;
-use bases_mcp::evaluator::{evaluate, EvalContext};
+use bases_mcp::evaluator::{EvalContext, evaluate};
 use bases_mcp::parser::parse;
 use bases_mcp::value::{BasesValue, FileValue};
 use bases_mcp::vault::{FsVaultSource, Vault};

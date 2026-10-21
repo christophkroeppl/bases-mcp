@@ -36,15 +36,15 @@ mod common;
 use bases_mcp::error::BasesError;
 use bases_mcp::vault::fs::content_hash;
 use bases_mcp::vault::webdav::{
-    dav_refusal, parse_dav_date, parse_multistatus, vault_path_from_href, vault_relative_path,
-    DavOperation, DavRequest, DavRequestOptions, DavResponse, Depth, WebdavError, WebdavMethod,
-    WebdavTransport, WebdavVaultOptions, WebdavVaultSource, DAV_PROPFIND_BODY,
+    DAV_PROPFIND_BODY, DavOperation, DavRequest, DavRequestOptions, DavResponse, Depth,
+    WebdavError, WebdavMethod, WebdavTransport, WebdavVaultOptions, WebdavVaultSource, dav_refusal,
+    parse_dav_date, parse_multistatus, vault_path_from_href, vault_relative_path,
 };
-use bases_mcp::vault::{is_indexable, FsVaultSource, VaultSource};
+use bases_mcp::vault::{FsVaultSource, VaultSource, is_indexable};
 use std::sync::Arc;
 
-use common::fake_dav::{FakeDav, Recorded, Status, BASE_PATH, BASE_URL};
-use common::{futures_block_on, load_corpus, vault_dir, VaultFile, CORPUS_SIZE};
+use common::fake_dav::{BASE_PATH, BASE_URL, FakeDav, Recorded, Status};
+use common::{CORPUS_SIZE, VaultFile, futures_block_on, load_corpus, vault_dir};
 
 /// The mtime every fake server hands out, so no assertion is against a clock.
 const SERVER_MTIME: &str = "Tue, 01 Oct 2024 10:11:12 GMT";
@@ -544,9 +544,11 @@ fn keeps_the_properties_from_a_200_propstat_when_a_sibling_propstat_is_a_404() {
 
 #[test]
 fn an_empty_collection_is_an_empty_listing_not_a_malformed_document() {
-    assert!(parse_multistatus(EMPTY_LISTING, BASE_PATH)
-        .expect("an empty collection is fine")
-        .is_empty());
+    assert!(
+        parse_multistatus(EMPTY_LISTING, BASE_PATH)
+            .expect("an empty collection is fine")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -620,27 +622,31 @@ fn refuses_a_date_it_cannot_read_rather_than_yielding_an_invalid_date() {
 #[test]
 fn a_2xx_passes_and_207_with_it() {
     for status in [200, 201, 204, 207, 299] {
-        assert!(dav_refusal(
-            DavOperation::Read,
-            WebdavMethod::Get,
-            "Note.md",
-            status,
-            "OK"
-        )
-        .is_none());
+        assert!(
+            dav_refusal(
+                DavOperation::Read,
+                WebdavMethod::Get,
+                "Note.md",
+                status,
+                "OK"
+            )
+            .is_none()
+        );
     }
 }
 
 #[test]
 fn mkcol_tolerates_405_because_the_collection_is_already_there() {
-    assert!(dav_refusal(
-        DavOperation::EnsureDir,
-        WebdavMethod::Mkcol,
-        "Projects",
-        405,
-        "Method Not Allowed"
-    )
-    .is_none());
+    assert!(
+        dav_refusal(
+            DavOperation::EnsureDir,
+            WebdavMethod::Mkcol,
+            "Projects",
+            405,
+            "Method Not Allowed"
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -648,44 +654,52 @@ fn delete_tolerates_404_because_the_resource_is_already_not_there() {
     // The deliberate divergence from the filesystem backend, which runs
     // `rm --force`. Both backends report "gone"; only this one was told `404`
     // first. `tests/vault_equivalence.rs` pins the filesystem half.
-    assert!(dav_refusal(
-        DavOperation::Delete,
-        WebdavMethod::Delete,
-        "Note.md",
-        404,
-        "Not Found"
-    )
-    .is_none());
+    assert!(
+        dav_refusal(
+            DavOperation::Delete,
+            WebdavMethod::Delete,
+            "Note.md",
+            404,
+            "Not Found"
+        )
+        .is_none()
+    );
 }
 
 #[test]
 fn the_tolerance_is_the_operations_not_a_blanket_one() {
     // 405 on a read is a server that does not PROPFIND, and 404 on a read is a
     // note that is not there. Neither is the MKCOL or DELETE answer.
-    assert!(dav_refusal(
-        DavOperation::Read,
-        WebdavMethod::Get,
-        "Note.md",
-        404,
-        "Not Found"
-    )
-    .is_some());
-    assert!(dav_refusal(
-        DavOperation::List,
-        WebdavMethod::Propfind,
-        "",
-        405,
-        "Method Not Allowed"
-    )
-    .is_some());
-    assert!(dav_refusal(
-        DavOperation::Write,
-        WebdavMethod::Put,
-        "Note.md",
-        404,
-        "Not Found"
-    )
-    .is_some());
+    assert!(
+        dav_refusal(
+            DavOperation::Read,
+            WebdavMethod::Get,
+            "Note.md",
+            404,
+            "Not Found"
+        )
+        .is_some()
+    );
+    assert!(
+        dav_refusal(
+            DavOperation::List,
+            WebdavMethod::Propfind,
+            "",
+            405,
+            "Method Not Allowed"
+        )
+        .is_some()
+    );
+    assert!(
+        dav_refusal(
+            DavOperation::Write,
+            WebdavMethod::Put,
+            "Note.md",
+            404,
+            "Not Found"
+        )
+        .is_some()
+    );
 }
 
 #[test]

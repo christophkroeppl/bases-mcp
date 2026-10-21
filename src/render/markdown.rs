@@ -24,10 +24,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::base::{canonical, BaseFile, BaseView, QueryResult, ResolvedRow};
+use crate::base::{BaseFile, BaseView, QueryResult, ResolvedRow, canonical};
 use crate::error::{BasesError, Result};
 use crate::labels::display_name_for;
-use crate::value::{format_number, BasesDate, BasesValue};
+use crate::value::{BasesDate, BasesValue, format_number};
 
 /// A rendered column: the Property ID its rows are keyed by, and its header.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,11 +276,7 @@ pub fn display_width(text: &str) -> usize {
             }
             // One column, or two -- never zero: a zero here would silently eat a
             // character and under-size every column it appears in.
-            if is_east_asian_wide(code) {
-                2
-            } else {
-                1
-            }
+            if is_east_asian_wide(code) { 2 } else { 1 }
         })
         .sum()
 }
@@ -510,7 +506,7 @@ fn summarise(spec: &str, values: &[&BasesValue]) -> Result<String> {
 (Average, Min, Max, Sum, Range, Median, Stddev, Unique, Filled, Empty, Checked, Unchecked, \
 Count, Earliest, Latest)."
             ))
-            .with_construct(spec))
+            .with_construct(spec));
         }
     })
 }

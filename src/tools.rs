@@ -60,15 +60,15 @@ use rmcp::model::{
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{json, Map, Value as Json};
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value as Json, json};
 
 use crate::base::{QueryOptions, QueryResult};
-use crate::drafts::{iso_millis, AddNoteOptions, AddNoteToBaseResult};
+use crate::drafts::{AddNoteOptions, AddNoteToBaseResult, iso_millis};
 use crate::error::BasesError;
-use crate::render::markdown::{render_markdown, RenderStyle};
-use crate::service::{json_rows, NoteOptions, Resolver};
+use crate::render::markdown::{RenderStyle, render_markdown};
+use crate::service::{NoteOptions, Resolver, json_rows};
 
 /// The server name a client sees.
 pub const SERVER_NAME: &str = "bases-mcp";

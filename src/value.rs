@@ -547,8 +547,8 @@ pub fn format_number(n: f64) -> String {
 /// Returns `None` when the two values are not comparable at all, which is what
 /// lets `==` be false rather than an error for mismatched types.
 pub fn compare(a: &BasesValue, b: &BasesValue) -> Option<std::cmp::Ordering> {
-    use std::cmp::Ordering;
     use BasesValue::*;
+    use std::cmp::Ordering;
 
     match (a, b) {
         (Null, Null) => Some(Ordering::Equal),

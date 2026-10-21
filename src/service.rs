@@ -19,21 +19,21 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use serde_json::{json, Map, Value as Json};
+use serde_json::{Map, Value as Json, json};
 
 use crate::base::{
-    canonical, parse_base, query_base, BaseFile, BaseView, QueryOptions, QueryResult,
+    BaseFile, BaseView, QueryOptions, QueryResult, canonical, parse_base, query_base,
 };
 use crate::drafts::{AddNoteOptions, AddNoteToBaseResult};
 use crate::error::{BasesError, Result};
 use crate::labels::display_name_for;
 use crate::note::{parse_note_with_embeds, serialise};
-use crate::render::markdown::{render_markdown, RenderStyle};
+use crate::render::markdown::{RenderStyle, render_markdown};
 use crate::render::project::{
-    base_regions, project, reconcile_note, wrap_in_fence, BaseRegionRef, FenceProvenance,
-    ReconcileResult, RefusedRegion, RenderedRegion,
+    BaseRegionRef, FenceProvenance, ReconcileResult, RefusedRegion, RenderedRegion, base_regions,
+    project, reconcile_note, wrap_in_fence,
 };
-use crate::value::{strip_extension, BasesValue};
+use crate::value::{BasesValue, strip_extension};
 use crate::vault::fs::content_hash;
 use crate::vault::{FsVaultSource, Vault, VaultSource};
 

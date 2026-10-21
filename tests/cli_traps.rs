@@ -51,12 +51,12 @@ mod common;
 use std::path::Path;
 use std::sync::Arc;
 
-use bases_mcp::base::{canonical, parse_base, query_base, BaseFile, QueryOptions, QueryResult};
-use bases_mcp::render::markdown::{render_columns, render_markdown, RenderStyle};
+use bases_mcp::base::{BaseFile, QueryOptions, QueryResult, canonical, parse_base, query_base};
+use bases_mcp::render::markdown::{RenderStyle, render_columns, render_markdown};
 use bases_mcp::service::{json_rows, stringified};
 use bases_mcp::value::BasesValue;
 use bases_mcp::vault::{FsVaultSource, Vault};
-use common::{count_files, futures_block_on, vault_dir, CORPUS_SIZE};
+use common::{CORPUS_SIZE, count_files, futures_block_on, vault_dir};
 
 // ---------------------------------------------------------------------------
 // Harness
