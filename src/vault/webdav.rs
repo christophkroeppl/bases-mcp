@@ -41,7 +41,7 @@ use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone};
 use crate::error::{BasesError, Result};
 use crate::vault::fs::content_hash;
 use crate::vault::source::{
-    is_indexable, normalise_line_endings, FileStat, SourceKind, VaultSource,
+    FileStat, SourceKind, VaultSource, is_indexable, normalise_line_endings,
 };
 
 /// The media type a `PROPFIND` request body is sent as.
@@ -482,9 +482,9 @@ fn is_success(status: Option<&str>) -> bool {
         let Some(code) = chars.get(index + 1..index + 4).and_then(code_of) else {
             continue;
         };
-        // `map_or(true, ..)` rather than `is_none_or(..)`: the latter is newer than the
-        // crate's MSRV.
-        if chars.get(index + 4).map_or(true, |c| c.is_whitespace()) {
+        // `is_none_or(..)` needs 1.82; the crate's floor is 1.85 now that it
+        // is on edition 2024.
+        if chars.get(index + 4).is_none_or(|c| c.is_whitespace()) {
             return (200..300).contains(&code);
         }
     }
@@ -527,11 +527,7 @@ fn trimmed(value: Option<&String>) -> Option<String> {
 /// filesystem walk and the in-memory source both call it, and an empty string in
 /// prose reads as a missing value rather than as `/`.
 fn at_root(path: &str) -> &str {
-    if path.is_empty() {
-        "/"
-    } else {
-        path
-    }
+    if path.is_empty() { "/" } else { path }
 }
 
 /// The vault-relative path a `DAV:href` names.

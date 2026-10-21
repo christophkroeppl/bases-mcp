@@ -1,8 +1,8 @@
 [package]
 name = "bases-mcp"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.75"
+edition = "2024"
+rust-version = "1.85"
 description = "MCP server that resolves Obsidian Bases to human- & agent-readable markdown"
 license = "MIT"
 default-run = "bases-mcp"

@@ -168,9 +168,20 @@ fn parse_host(value: Option<String>) -> Result<Host, String> {
 /// `MCP_HTTP_PORT`, defaulting to 8765.
 fn read_port() -> Result<u16, String> {
     match std::env::var("MCP_HTTP_PORT") {
-        Ok(value) => value.trim().parse::<u16>().map_err(|_| bad_port(&value)),
+        Ok(value) => parse_port(&value),
         Err(_) => Ok(8765),
     }
+}
+
+/// The port rule, over the value rather than over the environment.
+///
+/// A variable that is set and blank is a refusal, not an absence: blank
+/// trims to nothing, which would otherwise look like an unset variable to the
+/// code that replaced it. Split out the way [`parse_host`] is, so the rule is
+/// testable without writing a process-global variable — which a test in this
+/// binary must not do, because other tests here read the environment.
+fn parse_port(value: &str) -> Result<u16, String> {
+    value.trim().parse::<u16>().map_err(|_| bad_port(value))
 }
 
 /// A variable with content in it: present, non-blank, trimmed.
@@ -538,12 +549,17 @@ mod tests {
         // `filled` is the rule `config::parse_config` applies to a selector, so
         // the blank case is exercised here rather than by a subprocess: the
         // refusal text is the same code path.
-        std::env::set_var("MCP_HTTP_PORT", "   ");
-        let refusal = read_port().expect_err("a blank port is not an absence");
+        //
+        // Over the value, not over the environment. `MCP_HTTP_PORT` is
+        // process-global, and this binary's other tests read it — the test
+        // above asserts that an unset environment is loopback:8765 — so a test
+        // that set it would be racing them. `parse_port` is the half that
+        // holds the rule, the way `config`'s `Env` map is the half that holds
+        // that parse.
+        let refusal = parse_port("   ").expect_err("a blank port is not an absence");
         assert!(
             refusal.contains("MCP_HTTP_PORT"),
             "names the variable: {refusal}"
         );
-        std::env::remove_var("MCP_HTTP_PORT");
     }
 }

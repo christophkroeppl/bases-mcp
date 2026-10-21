@@ -159,12 +159,13 @@ runtime, and it happens before the `Containerfile` is read at all.
 
 ### The image is pinned to the toolchain the LOCKFILE needs
 
-The crate declares `rust-version = "1.75"`, but that is not the constraint the
-build has. The **locked dependency graph** is: `rmcp 3.5.0` and the `icu`
-crates require rustc 1.88, and `cargo build --locked` refuses the whole graph
-on an older compiler. The build image is pinned to `rust:1.88-bookworm` for
-that reason — an older image fails with "rmcp@3.5.0 requires rustc 1.88",
-which names a dependency rather than the image.
+The crate declares `rust-version = "1.85"` — the edition-2024 floor — but that
+is not the constraint the build has. The **locked dependency graph** is:
+`rmcp 3.5.0` and the `icu` crates require rustc 1.88, and `cargo build
+--locked` refuses the whole graph on an older compiler. The build image is
+pinned to `rust:1.88-bookworm` for that reason — an older image fails with
+"rmcp@3.5.0 requires rustc 1.88", which names a dependency rather than the
+image.
 
 The image also carries a placeholder at `tests/parity.rs`. `Cargo.toml`
 declares that test target by path, and a declared target whose file is missing
@@ -344,10 +345,15 @@ than by omission.
 Project-scoped, plain JSON, no comments.
 
 ```
-formatter  rustfmt   rustfmt --edition 2021 $FILE     .rs
+formatter  rustfmt   rustfmt --edition 2024 $FILE     .rs
 formatter  prettier  disabled
 lsp        rust      rust-analyzer                   .rs
 ```
+
+`--edition 2024` here is the **style** edition, and it matches both `Cargo.toml`
+and `rustfmt.toml`: edition 2024's style sorts imports version-wise, so the
+edition bump reordered `use` blocks across the tree. A bare `rustfmt file.rs`
+uses this flag; `cargo fmt` passes the manifest's edition itself.
 
 There is **no `linter` key** in opencode's config schema; it sets
 `additionalProperties: false`, so writing one is a validation error. Linting is

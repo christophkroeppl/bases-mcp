@@ -119,9 +119,9 @@ pub fn match_path(target: &str, by_path: &PathIndex) -> Option<String> {
         if fold_key(&strip_extension(key)) != wanted {
             continue;
         }
-        // `map_or(true, ..)` rather than `is_none_or(..)`: the latter is newer than the
-        // crate's MSRV, and clippy is right to say so.
-        if best.map_or(true, |current| link_length(path) < link_length(current)) {
+        // `is_none_or(..)` needs 1.82; the crate's floor is 1.85 now that it
+        // is on edition 2024.
+        if best.is_none_or(|current| link_length(path) < link_length(current)) {
             best = Some(path);
         }
     }
