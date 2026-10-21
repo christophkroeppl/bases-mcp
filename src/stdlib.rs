@@ -142,47 +142,10 @@ pub fn get_method(target: &BasesValue, name: &str) -> Option<&'static MethodDef>
                 .get(ReceiverType::Null.key())
                 .and_then(|by_name| by_name.get(name))
         })
-        .or_else(|| {
-            // A NULL RECEIVER ANSWERS null, whatever the method is called.
-            //
-            // Obsidian's rule, read out of the Bases evaluator Obsidian ships
-            // in `resources/obsidian.asar`. Its call site resolves the receiver,
-            // looks the method up on the receiver's type chain, and then:
-            //
-            //     if(s=r.getValue(e)||gW.value, !(t=KW.findForValue(s,i)) && s===gW.value) return gW.value
-            //
-            // `gW.value` is Obsidian's null singleton. So a receiver that is
-            // null, with a method that does not exist on it, answers the null
-            // value -- it does not raise "no such method". A receiver that is
-            // NOT null falls through to Obsidian's
-            // `Cannot find function "x" on type <type>`, because the null
-            // check is on the receiver itself.
-            //
-            // This is what makes a null property DROP a row rather than fail
-            // the query. Obsidian's filter predicate is
-            // `this.getValue(e).isTruthy()`, and Obsidian's null value answers
-            // `isTruthy()` false, so a null filter expression drops the row --
-            // which is what the CLI does with `type.contains("task")` on a note
-            // with no `type`.
-            //
-            // The lookup is by RECEIVER TYPE, so it cannot be confused with
-            // the "no such method" error: a Number receiver with a bogus
-            // method still errors, because the receiver is not null.
-            //
-            // The four universal methods are found first, at step 2 above.
-            // Obsidian registers exactly those four for a null receiver
-            // (`isEmpty` on Null itself; `toString`, `isTruthy` and `isType`
-            // on Any, which Null extends), and its lookup walks that same
-            // prototype chain, so the fallback can only shadow a method that
-            // exists on no type at all.
-            (matches!(target, BasesValue::Null)).then_some(&NULL_RECEIVER)
-        })
+        // D10: a null receiver answers null, whatever the method is called.
+        .or_else(|| (matches!(target, BasesValue::Null)).then_some(&NULL_RECEIVER))
 }
 
-/// The method every null receiver resolves to: it answers null.
-///
-/// See [`get_method`] for why a null receiver answers null rather than
-/// refusing.
 static NULL_RECEIVER: MethodDef = MethodDef {
     fn_body: m_null_receiver,
     lambda_arity: None,
@@ -898,17 +861,7 @@ fn m_to_string(
     _args: &[BasesValue],
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
-    // Null stringifies to the WORD "null", not to the empty string.
-    //
-    // Obsidian's own null value says so: its `toString` returns "null", and
-    // the universal `toString` method Obsidian registers on `Any` applies
-    // `e.toString()` to whatever it was handed -- so `missingprop.toString()`
-    // is the string "null".
-    //
-    // This is a different thing from [`BasesValue::to_display_string`], which
-    // renders a null CELL as the empty string -- a cell with no value and a
-    // cell holding the text "null" are different, and the JSON surface relies
-    // on the difference.
+    // D10: null stringifies to "null" here, unlike a null CELL (rendered empty).
     match target {
         BasesValue::Null => Ok(BasesValue::String("null".to_string())),
         other => Ok(BasesValue::String(other.to_display_string())),
