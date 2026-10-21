@@ -11,15 +11,14 @@
 //! every query returns an empty string, and a suite that treats an empty result
 //! as a pass reports GREEN while having compared nothing. That is the exact
 //! failure mode this suite exists to catch, so [`available`] requires non-empty
-//! stdout, and [`Cli::available`] is asserted to be false for a dead bridge.
+//! stdout, and [`available`] is asserted to be false for a dead bridge.
 //!
 //! Only `AllNotes.base` is a genuine oracle: it never references `this`, so the
 //! CLI can answer it. `Tickets.base` scopes itself with `this`, which the CLI
 //! cannot bind — it returns `[]` — and is asserted as the known divergence.
 
-use std::process::Command;
-
 use bases_mcp::base::QueryOptions;
+use bases_mcp::parity::{compare_rows, Cli};
 use bases_mcp::render::markdown::RenderStyle;
 use bases_mcp::service::Resolver;
 
@@ -33,80 +32,27 @@ use common::{futures_block_on, vault_dir};
 /// directory name, not the path.
 const CLI_VAULT: &str = "vault";
 
-struct Cli {
-    binary: String,
+/// Whether the CLI can answer a real query.
+///
+/// `obsidian version` is not enough. The bridge reports a version and then
+/// returns empty for every query while it is still handing the vault over to
+/// a newly started app, and an exit code is not a signal in either case —
+/// Obsidian exits 0 even when the bridge is down. So the probe is an actual
+/// `base:query`, and it must produce PARSEABLE, NON-EMPTY ROWS: a half-started
+/// bridge answers `version` and then returns "" for every query, so a
+/// non-empty check on raw stdout would pass while nothing can be compared.
+fn available(cli: &Cli) -> bool {
+    matches!(
+        cli.query_json("AllNotes.base", Some("All")),
+        Ok(rows) if !rows.is_empty()
+    )
 }
 
-impl Cli {
-    fn new() -> Self {
-        Self {
-            binary: std::env::var("OBSIDIAN_BIN").unwrap_or_else(|_| "obsidian".into()),
-        }
-    }
-
-    /// Whether the CLI can answer a real query.
-    ///
-    /// `obsidian version` is not enough. The bridge reports a version and then
-    /// returns empty for every query while it is still handing the vault over to
-    /// a newly started app, and an exit code is not a signal in either case —
-    /// Obsidian exits 0 even when the bridge is down. So the probe is an actual
-    /// `base:query`, which is the only thing that proves the comparison can run.
-    fn available(&self) -> bool {
-        // Must produce PARSEABLE ROWS, not merely some output. A half-started
-        // bridge answers `version` and then returns "" for every query, so a
-        // non-empty check passes while nothing can actually be compared.
-        matches!(
-            self.query_json("AllNotes.base", Some("All")),
-            Ok(rows) if !rows.is_empty()
-        )
-    }
-
-    fn run(&self, args: &[String]) -> Result<String, String> {
-        let output = Command::new(&self.binary)
-            .args(args)
-            .output()
-            .map_err(|e| format!("could not run {}: {e}", self.binary))?;
-        if !output.status.success() {
-            return Err(format!("{} exited {:?}", self.binary, output.status));
-        }
-        String::from_utf8(output.stdout).map_err(|e| e.to_string())
-    }
-
-    /// Query a base as JSON. `path` is the exact vault-relative path including
-    /// the `.base` extension — the `file=` spelling needs it and `path=` is
-    /// preferred either way.
-    fn query_json(&self, base: &str, view: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
-        let mut args = vec![
-            format!("vault={CLI_VAULT}"),
-            "base:query".into(),
-            format!("path={base}"),
-            "format=json".into(),
-        ];
-        if let Some(v) = view {
-            args.push(format!("view={v}"));
-        }
-        let out = self.run(&args)?;
-        if out.trim().is_empty() {
-            // Empty where rows were expected. Obsidian does not flush stdout
-            // before exiting, so a heavy query can come back empty; treat it as
-            // a failure rather than as an empty result set.
-            return Err("empty stdout where rows were expected".into());
-        }
-        serde_json::from_str(&out).map_err(|e| format!("unparseable JSON: {e}"))
-    }
-
-    fn query_markdown(&self, base: &str, view: Option<&str>) -> Result<String, String> {
-        let mut args = vec![
-            format!("vault={CLI_VAULT}"),
-            "base:query".into(),
-            format!("path={base}"),
-            "format=md".into(),
-        ];
-        if let Some(v) = view {
-            args.push(format!("view={v}"));
-        }
-        self.run(&args)
-    }
+fn cli() -> Cli {
+    Cli::new(
+        std::env::var("OBSIDIAN_BIN").unwrap_or_else(|_| "obsidian".into()),
+        CLI_VAULT,
+    )
 }
 
 /// Require a live CLI, or say clearly that this run compared nothing.
@@ -116,13 +62,12 @@ impl Cli {
 /// returning early this PANICS unless `BASES_MCP_ALLOW_SKIP=1`. That makes an
 /// unverified parity run loud by default and deliberate to opt into, which is
 /// the opposite of the original bug.
-/// Whether this run may proceed without a live CLI.
 ///
 /// Returns true when the CLI answered and the caller should compare, and false
-/// when the run is deliberately unverified. Panics in the second case unless the
-/// opt-in is set, so "compared nothing" is never a silent pass.
+/// when the run is deliberately unverified — reached only through the same
+/// opt-in, so "compared nothing" is never a silent pass.
 fn require_cli(cli: &Cli) -> bool {
-    if cli.available() {
+    if available(cli) {
         return true;
     }
     if std::env::var("BASES_MCP_ALLOW_SKIP").as_deref() == Ok("1") {
@@ -142,37 +87,12 @@ fn resolver() -> Resolver {
 
 /// Compare two JSON row sets, naming the row and column that disagreed.
 ///
-/// A wholesale array comparison would report "these two big things differ",
-/// which is not something an agent can act on at 3am. This walks to the exact
-/// cell.
-fn compare_rows(ours: &[serde_json::Value], theirs: &[serde_json::Value], label: &str) {
-    assert_eq!(
-        ours.len(),
-        theirs.len(),
-        "{label}: row COUNT differs — ours {}, theirs {}",
-        ours.len(),
-        theirs.len()
-    );
-
-    for (i, (our, their)) in ours.iter().zip(theirs.iter()).enumerate() {
-        let our_map = our.as_object().expect("a row is an object");
-        let their_map = their.as_object().expect("a row is an object");
-        assert_eq!(
-            our_map.len(),
-            their_map.len(),
-            "{label} row {i}: column COUNT differs — ours {}, theirs {}",
-            our_map.len(),
-            their_map.len()
-        );
-        for (key, value) in our_map {
-            let expected = their_map.get(key).unwrap_or_else(|| {
-                panic!(
-                    "{label} row {i}: theirs has no column {key:?}; it has {:?}",
-                    their_map.keys().collect::<Vec<_>>()
-                )
-            });
-            assert_eq!(value, expected, "{label} row {i}, column {key:?}");
-        }
+/// The comparison lives in [`bases_mcp::parity`] so the live suite and the
+/// recorded-corpus comparison cannot drift. This wrapper keeps the suite's
+/// failure a panic, which is what the harness reports as a failed test.
+fn assert_rows_match(ours: &[serde_json::Value], theirs: &[serde_json::Value], label: &str) {
+    if let Err(difference) = compare_rows(ours, theirs, label) {
+        panic!("{difference}");
     }
 }
 
@@ -180,18 +100,16 @@ fn compare_rows(ours: &[serde_json::Value], theirs: &[serde_json::Value], label:
 fn the_cli_is_detected_as_unavailable_when_its_bridge_is_dead() {
     // Guards the guard. A binary that exits 0 with empty stdout must NOT read as
     // available, because that turns every parity assertion into a no-op.
-    let cli = Cli {
-        binary: "true".into(),
-    }; // `true` exits 0 and prints nothing.
+    let cli = Cli::new("true", CLI_VAULT); // `true` exits 0 and prints nothing.
     assert!(
-        !cli.available(),
+        !available(&cli),
         "an empty response must not count as an available CLI"
     );
 }
 
 #[test]
 fn our_json_matches_the_cli() {
-    let cli = Cli::new();
+    let cli = cli();
     if !require_cli(&cli) {
         return;
     }
@@ -211,13 +129,13 @@ fn our_json_matches_the_cli() {
         let theirs = cli
             .query_json("AllNotes.base", Some(view))
             .expect("the CLI answers");
-        compare_rows(&ours, &theirs, &format!("AllNotes.base [{view}]"));
+        assert_rows_match(&ours, &theirs, &format!("AllNotes.base [{view}]"));
     }
 }
 
 #[test]
 fn our_markdown_matches_the_cli_byte_for_byte() {
-    let cli = Cli::new();
+    let cli = cli();
     if !require_cli(&cli) {
         return;
     }
@@ -244,7 +162,7 @@ fn our_markdown_matches_the_cli_byte_for_byte() {
 
 #[test]
 fn the_cli_cannot_bind_this_and_returns_an_empty_result() {
-    let cli = Cli::new();
+    let cli = cli();
     if !require_cli(&cli) {
         return;
     }

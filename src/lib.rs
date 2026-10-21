@@ -22,6 +22,9 @@
 //!   - [`depth`] — the nesting budget the recursive walks spend, so an
 //!     over-nested `.base` is a refusal rather than a dead process.
 //!
+//!   - [`parity`] — the recorded snapshot corpus: what the CLI answered, kept so
+//!     a parity comparison can run where Obsidian cannot.
+//!
 //! Two decisions shape the top of that stack and are stated where they happen
 //! rather than here: the Resolver's renders are two surfaces, not one (see
 //! [`service`]), and a tool's `isError` is reserved for a failure rather than a
@@ -37,6 +40,7 @@ pub mod evaluator;
 pub mod labels;
 pub mod lexer;
 pub mod note;
+pub mod parity;
 pub mod parser;
 pub mod render;
 pub mod service;

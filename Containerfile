@@ -33,7 +33,10 @@ COPY src ./src
 # (`test/`), so this is a placeholder rather than the real file: the parity
 # suite needs an Obsidian CLI, and no container has one.
 RUN mkdir -p tests && printf '// The parity suite needs a live Obsidian CLI and is not run in the container.\\n// This file exists so Cargo can parse the manifest that declares it.\\n' > tests/parity.rs
-RUN cargo build --release --locked
+# Only the server binary. `src/bin/parity-record.rs` is a development tool that
+# records the parity corpus from a live Obsidian CLI; nothing in this image can
+# run it, so it is not linked here even though the source is in context.
+RUN cargo build --release --locked --bin bases-mcp
 
 FROM docker.io/debian:bookworm-slim
 
