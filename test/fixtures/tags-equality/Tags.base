@@ -1,0 +1,89 @@
+# A tag is a DISTINCT type, and the `#` is part of its text.
+#
+# Obsidian types `tags` as a tag list: a `TagValue` extends `StringValue`, and
+# `looseEquals` compares constructors, so a tag list is never loose-equal to a
+# bare string. That is why `tags == "project"` is FALSE in Obsidian while
+# `tags.contains("project")` is TRUE -- `contains` on a tag list is a tag
+# match, not an equality.
+#
+# Every value below was measured against Obsidian 1.14.4, with an equivalent
+# base queried in an ISOLATED vault (`obsidian base:query format=json`). The
+# fixture itself is never registered in Obsidian -- fixtures are exercised by
+# the suites, not by CLI parity (AGENTS.md) -- so what is measured is the rule,
+# and what is checked in is the same rule written for a vault under test.
+#
+# Nothing here indexes into `tags` on a note whose list is empty, and nothing
+# here calls a method ON a `tags[0]` that may be null: a null receiver is its
+# own divergence (STATUS.md item 5) and a fixture that depended on it would
+# encode another ticket's bug.
+filters:
+  and:
+    - file.ext == "md"
+formulas:
+  # The equality rules.
+  eq_bare: tags == "project"
+  eq_hash: tags == "#project"
+  eq_list: tags == ["#project"]
+  eq_list_bare: tags == ["project"]
+  eq_not_bare: tags != "project"
+  # The tag-match rules.
+  contains_bare: tags.contains("project")
+  contains_hash: tags.contains("#project")
+  contains_upper: tags.contains("PROJECT")
+  contains_prefix: tags.contains("proj")
+  contains_empty: tags.contains("")
+  contains_ticket: tags.contains("ticket")
+  contains_all: tags.containsAll(["project"])
+  contains_any: tags.containsAny(["project", "ticket"])
+  has_tag: file.hasTag("project")
+  has_tag_upper: file.hasTag("PROJECT")
+  has_tag_prefix: file.hasTag("proj")
+  has_tag_hash: file.hasTag("#project")
+  has_tag_nested: file.hasTag("project/alpha")
+  # The shape of the value.
+  tags_len: tags.length
+  tags_is_empty: tags.isEmpty()
+  tags_first: tags[0]
+  tags_first_eq_bare: tags[0] == "project"
+  tags_first_eq_hash: tags[0] == "#project"
+  tags_join: tags.join(",")
+  # `file.tags`, which is a tag list too -- and an EMPTY one on a note that
+  # carries no tags at all, where the `tags` PROPERTY is null.
+  file_tags_len: file.tags.length
+  file_tags_contains: file.tags.contains("project")
+  file_tags_eq_bare: file.tags == "project"
+  # A plain string property is unaffected.
+  status_eq: status == "active"
+views:
+  - type: table
+    name: All
+    order:
+      - file.name
+      - formula.eq_bare
+      - formula.eq_hash
+      - formula.eq_list
+      - formula.eq_list_bare
+      - formula.eq_not_bare
+      - formula.contains_bare
+      - formula.contains_hash
+      - formula.contains_upper
+      - formula.contains_prefix
+      - formula.contains_empty
+      - formula.contains_ticket
+      - formula.contains_all
+      - formula.contains_any
+      - formula.has_tag
+      - formula.has_tag_upper
+      - formula.has_tag_prefix
+      - formula.has_tag_hash
+      - formula.has_tag_nested
+      - formula.tags_len
+      - formula.tags_is_empty
+      - formula.tags_first
+      - formula.tags_first_eq_bare
+      - formula.tags_first_eq_hash
+      - formula.tags_join
+      - formula.file_tags_len
+      - formula.file_tags_contains
+      - formula.file_tags_eq_bare
+      - formula.status_eq

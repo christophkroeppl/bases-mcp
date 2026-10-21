@@ -649,6 +649,9 @@ pub fn to_json_value(value: &BasesValue) -> Json {
         BasesValue::Bool(flag) => Json::Bool(*flag),
         BasesValue::Number(number) => json_number(*number),
         BasesValue::String(text) => Json::String(text.clone()),
+        // A tag is a string in JSON: Obsidian's `TagValue` extends `StringValue`,
+        // and `JSON.stringify` of one is its text.
+        BasesValue::Tag(text) => Json::String(text.clone()),
         BasesValue::List(items) => Json::Array(items.iter().map(to_json_value).collect()),
         BasesValue::Namespace(map) => Json::Object(
             map.iter()

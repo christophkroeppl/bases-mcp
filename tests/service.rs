@@ -651,9 +651,12 @@ fn nothing_is_written_on_the_first_call() {
 fn file_has_tag_becomes_a_tag() {
     let (_dir, resolver) = sandbox();
     let proposal = draft_for(&resolver, SCRATCH, Some(HOST), None);
+    // The draft spells the tag the way the filter did, and `- ticket` is what
+    // lands on the page -- Obsidian forces the `#` itself. Read back, `tags` is
+    // a TAG LIST, so the same value renders normalised, with its `#`.
     assert_eq!(
         frontmatter(SCRATCH, &proposal.content, "tags").as_deref(),
-        Some("ticket")
+        Some("#ticket")
     );
     assert!(
         proposal.content.contains("- ticket"),
