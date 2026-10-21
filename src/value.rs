@@ -180,9 +180,9 @@ pub type Resolver = std::sync::Arc<dyn Fn(&str) -> Option<FileValue> + Send + Sy
 
 /// A file plus the accessors the vault supplies.
 ///
-/// `Rc` rather than `Arc`: a query is single-threaded, and the reference cycles
-/// a shared-mutable-accessor design would need are avoided entirely because the
-/// accessors are pure functions of the vault.
+/// `Arc` rather than `Rc`, and `Send + Sync` rather than plain: rmcp serves the
+/// tool surface across worker threads, so the closures have to be able to cross
+/// them.
 #[derive(Debug, Clone)]
 pub struct FileValue {
     pub path: String,
