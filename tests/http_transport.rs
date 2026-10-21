@@ -32,6 +32,17 @@ use bases_mcp::transport::{select_transport, HttpEndpoint, Transport, HTTP_PATH}
 /// How long to wait for the listener to come up before giving up.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// How many times to retry binding an ephemeral port.
+///
+/// [`ephemeral_port`] asks the kernel for a free port, closes it, and spawns a
+/// server to bind it. Another process can take the port in that gap, and then
+/// the readiness probe connects to a stranger while our server exits on its own
+/// failed bind — the probe sees an open port, never looks at the child, and the
+/// first real request dies with `Connection reset by peer`. Measured exactly
+/// once in a gate run at load 60, which is why the retry and the child check
+/// below exist rather than a bare connect.
+const START_ATTEMPTS: usize = 5;
+
 /// `MCP_TRANSPORT`, `MCP_HTTP_HOST` and `MCP_HTTP_PORT` are process-global, and
 /// this file shares a process with the other tests in this binary. The tests
 /// that set them take this lock, so the endpoint tests cannot read a value
@@ -64,7 +75,21 @@ impl Server {
     /// `host` is anything `ToSocketAddrs` accepts, so a name is resolved here
     /// rather than assumed: a test that binds `localhost` gets the address the
     /// resolver actually returned, which is the address the process is bound to.
+    ///
+    /// Retried, because the port can be taken between [`ephemeral_port`]
+    /// releasing it and this child binding it — see [`START_ATTEMPTS`].
     fn start_on(host: &str) -> Self {
+        let mut last = String::new();
+        for _ in 0..START_ATTEMPTS {
+            match Self::try_start_on(host) {
+                Ok(server) => return server,
+                Err(reason) => last = reason,
+            }
+        }
+        panic!("the HTTP server did not start in {START_ATTEMPTS} attempts: {last}");
+    }
+
+    fn try_start_on(host: &str) -> Result<Self, String> {
         let port = ephemeral_port();
         let vault = vault_dir();
         let resolved = (host, port)
@@ -95,21 +120,29 @@ impl Server {
                 "the HTTP server did not start listening within {STARTUP_TIMEOUT:?}"
             );
             if port_is_open(bound) {
+                // An open port is not proof it is OUR server: a process that
+                // took the port would answer here while our child exits on its
+                // own failed bind, and the first real request would then die
+                // with "Connection reset by peer". So let the child's exit land
+                // and require it to still be running.
+                std::thread::sleep(Duration::from_millis(20));
+                if let Some(status) = child.try_wait().expect("the child is pollable") {
+                    return Err(format!("exited {status} after port {port} was taken"));
+                }
                 break;
             }
-            assert!(
-                child.try_wait().expect("the child is pollable").is_none(),
-                "the HTTP server exited before it started listening"
-            );
+            if let Some(status) = child.try_wait().expect("the child is pollable") {
+                return Err(format!("exited {status} before listening on port {port}"));
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        Self {
+        Ok(Self {
             child,
             bound,
             base_url,
             session_id: None,
-        }
+        })
     }
 
     /// Complete a session: `initialize`, then `notifications/initialized`.
