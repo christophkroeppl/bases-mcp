@@ -1544,27 +1544,17 @@ fn m_list_contains(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let items = as_list(target, "contains")?;
-    // The parameter is the `text` union, which accepts null, so a null needle is
-    // compared rather than answering the call null (D12).
     let needle = args
         .first()
         .ok_or_else(|| not_enough_arguments("contains"))?;
-    match needle {
-        BasesValue::Link { .. } | BasesValue::File(_) | BasesValue::List(_) => Ok(
-            BasesValue::Bool(items.iter().any(|item| values_equal_loose(item, needle))),
-        ),
-        BasesValue::Null => Ok(BasesValue::Bool(
-            items.iter().any(|item| matches!(item, BasesValue::Null)),
-        )),
-        BasesValue::String(_) | BasesValue::Number(_) | BasesValue::Bool(_) => Ok(
-            BasesValue::Bool(items.iter().any(|item| values_equal_loose(item, needle))),
-        ),
-        other => Err(BasesError::new(format!(
-            "Type error in \"contains\", parameter \"value\". Expected String not, given {}.",
-            describe(other)
-        ))
-        .with_construct("contains")),
-    }
+    // The needle is COMPARED, never answered with null (D12): `contains` takes
+    // the `text` union, whose type list is `Any`, and the list's own `includes`
+    // compares with loose equality. So no needle type is a type error either.
+    // A Date used to fall into one; Obsidian compares it by the same day rule
+    // `==` uses, so it reaches `dates_equal` through this path too.
+    Ok(BasesValue::Bool(
+        items.iter().any(|item| values_equal_loose(item, needle)),
+    ))
 }
 
 /// Whether a list holds a tag matching the needle.
