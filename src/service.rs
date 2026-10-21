@@ -537,7 +537,7 @@ impl Resolver {
 /// `resolve_base`, because Obsidian stringifies every cell the same way on both
 /// surfaces and two copies would be free to drift.
 pub fn json_rows(base: &BaseFile, result: &QueryResult, extra_formulas: &[String]) -> Vec<Json> {
-    let columns = json_columns(base, &result.view);
+    let columns = json_columns(&result.view);
 
     result
         .rows
@@ -570,17 +570,20 @@ pub fn json_rows(base: &BaseFile, result: &QueryResult, extra_formulas: &[String
 
 /// The columns a JSON row carries, in order.
 ///
-/// `order` is honoured when it is PRESENT, including when it is present and
-/// empty: the Obsidian CLI emits exactly the columns the view orders, so an
-/// author who wrote `order: []` gets no columns rather than a fallback.
-fn json_columns(base: &BaseFile, view: &BaseView) -> Vec<String> {
-    match &view.order {
-        Some(ids) => ids.clone(),
-        None => {
-            let mut ids = vec!["file.name".to_string()];
-            ids.extend(base.properties.keys().cloned());
-            ids
-        }
+/// `order` is honoured when it is PRESENT AND NON-EMPTY. Obsidian's own
+/// accessor is `this.order || ["file.name"]`, and an empty array is falsy in
+/// JavaScript, so `order: []` falls back to the file-name column exactly as a
+/// missing `order` does.
+///
+/// The fallback is `file.name` alone, NOT the Base's declared properties.
+/// Obsidian's accessor names one column, and the CLI builds its rows from
+/// `getOrder()` -- so a property the Base DECLARES is not a column unless the
+/// view ORDERS it. Inventing columns from the declarations would put
+/// properties in the output that Obsidian never emits.
+fn json_columns(view: &BaseView) -> Vec<String> {
+    match view.order.as_deref() {
+        Some(ids) if !ids.is_empty() => ids.to_vec(),
+        _ => vec!["file.name".to_string()],
     }
 }
 
@@ -649,6 +652,9 @@ pub fn to_json_value(value: &BasesValue) -> Json {
         BasesValue::Bool(flag) => Json::Bool(*flag),
         BasesValue::Number(number) => json_number(*number),
         BasesValue::String(text) => Json::String(text.clone()),
+        // A tag is a string in JSON: Obsidian's `TagValue` extends `StringValue`,
+        // and `JSON.stringify` of one is its text.
+        BasesValue::Tag(text) => Json::String(text.clone()),
         BasesValue::List(items) => Json::Array(items.iter().map(to_json_value).collect()),
         BasesValue::Namespace(map) => Json::Object(
             map.iter()

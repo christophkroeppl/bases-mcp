@@ -570,7 +570,7 @@ fn a_bare_display_name_key_is_dead_config() {
 }
 
 #[test]
-fn an_unordered_view_lists_the_bases_own_properties() {
+fn an_unordered_view_lists_only_the_file_name() {
     let base = BaseFile {
         properties: BTreeMap::from([
             ("note.status".to_string(), PropertyConfig::default()),
@@ -580,15 +580,16 @@ fn an_unordered_view_lists_the_bases_own_properties() {
     };
     let mut result = result("table");
     result.view.order = None;
-    // `BaseFile::properties` is a sorted map, so an unordered view lists its
-    // properties in key order rather than in the order the file declared them.
-    // Only views with no `order` are affected, and Obsidian always writes one.
+    // A property the Base DECLARES is not a column unless the view ORDERS it.
+    // Obsidian's accessor is `this.order || ["file.name"]` -- one column, and
+    // not the declarations. A renderer that invented columns from the
+    // declarations would show properties Obsidian never emits.
     assert_eq!(
         render(&base, &result, RenderStyle::Flat),
-        r#"| file name | owner | status |
-| --------- | ----- | ------ |
-|   Beta    |       | active |
-|   Alpha   |       |  done  |"#
+        r#"| file name |
+| --------- |
+|   Beta    |
+|   Alpha   |"#
     );
 }
 

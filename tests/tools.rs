@@ -19,9 +19,9 @@
 //!
 //! Nothing here writes to `test/vault`. Writing tools work on a temp copy.
 
-// Each integration test is its own crate, and not every one needs every helper.
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::path::Path;

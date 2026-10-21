@@ -18,8 +18,9 @@
 //! filter inversion are read-only by construction, since nothing in these tests
 //! commits a note into them.
 
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -650,9 +651,12 @@ fn nothing_is_written_on_the_first_call() {
 fn file_has_tag_becomes_a_tag() {
     let (_dir, resolver) = sandbox();
     let proposal = draft_for(&resolver, SCRATCH, Some(HOST), None);
+    // The draft spells the tag the way the filter did, and `- ticket` is what
+    // lands on the page -- Obsidian forces the `#` itself. Read back, `tags` is
+    // a TAG LIST, so the same value renders normalised, with its `#`.
     assert_eq!(
         frontmatter(SCRATCH, &proposal.content, "tags").as_deref(),
-        Some("ticket")
+        Some("#ticket")
     );
     assert!(
         proposal.content.contains("- ticket"),

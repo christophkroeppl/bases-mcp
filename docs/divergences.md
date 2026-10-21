@@ -318,6 +318,101 @@ Obsidian on all of these; each is pinned by a test so it cannot regress.
 | Ambiguous link resolution | Resolves to the **shortest path**, not a same-folder sibling | `[[Root Project]]` resolves to `Root Project.md`, not anything under `Projects/`. |
 | `format=md` cell alignment | Every cell is **centred**, short values padded with spaces on both sides | Centred text is harder to scan than left-aligned, so it is tempting to "fix" — but `flat` is byte-compared against the CLI, so the centring is load-bearing. Only `structured` left-aligns. See D2. |
 | **Notes are always LF** | Obsidian writes `\n` on every platform, and converts a note's CRLF back to LF when it opens it | It looks like a bug when a Windows vault is full of CRLF and Obsidian "changed" every file on open. It is Obsidian doing the normalising, not the server. |
+| **The string methods do NOT share one case rule** | `contains` is **case-insensitive**; `==`, `startsWith` and `endsWith` are **case-sensitive** | The obvious expectation is that a family of search methods behaves uniformly. It does not, and it is Obsidian's asymmetry. See the table below. |
+| **`contains("")` is false, but `containsAll("")` and `containsAny("")` are true** | The empty-needle guard is on `contains` alone | Every other string contains the empty string, and the variadic forms do behave that way. See the table below. |
+| **A link's `contains` compares the RAW TARGET, not the `[[...]]` rendering** | `linkish.contains("[")` is **false** | The brackets look like part of the value. They are not — they are the rendering. See the table below. |
+
+### The case rules of the string methods
+
+Measured against the live Obsidian CLI on **1.14.4**, over a throwaway vault
+holding one note with `title: Hello World` and `mixed: Hello World`. Every
+cell below is a CLI answer, and every one of them is pinned by
+`contains_folds_case_and_the_other_three_do_not` in `tests/base.rs` over the
+`string-case` fixture, so the four cannot drift apart again.
+
+| Construct | Obsidian | Why it looks wrong |
+|---|---|---|
+| `"Hello World".contains("hello")` | **true** — case-insensitive | A case-insensitive search in a case-sensitive language. |
+| `"Hello World".contains("HELLO")` | **true** | Same rule, other direction. |
+| `"Hello World".contains("")` | **false** | Every other string contains the empty string. |
+| `"Hello World".containsAll("")` | **true** | The variadic forms have no empty-needle guard. |
+| `"Hello World".containsAny("")` | **true** | Same. |
+| `"Hello World".startsWith("hello")` | **false** — case-sensitive | `contains` folds and this does not. |
+| `"Hello World".endsWith("world")` | **false** | Same. |
+| `"Hello World" == "hello world"` | **false** | Equality is case-sensitive, as everywhere. |
+| `"Hello World".startsWith("")` | **true** | The empty-needle guard belongs to `contains` alone. |
+
+**Why this is not a Divergence.** We match Obsidian on all of it. It is
+recorded here because the ASYMMETRY is the kind of thing that gets "fixed" by
+someone reading the method list and assuming uniformity: folding
+`startsWith`/`endsWith` to match `contains` would make the family uniform and
+would **introduce** a divergence from Obsidian. The entry is a warning
+against a well-meaning change, pinned by a test so the warning survives.
+
+**The empty-needle guard.** Obsidian's own implementation is
+`"" !== needle && haystack.toLowerCase().includes(needle.toLowerCase())` —
+the guard is on the NEEDLE, and the variadic forms
+(`containsAll`, `containsAny`) have no such guard, so they fold the case and
+call `includes` per needle, and `includes("")` is true. A single
+`str_contains` helper for all three would have been wrong on exactly this
+point, which is why the guard lives in one place and the case folding in
+another.
+
+**A link's `contains` compares the raw target.** Obsidian's `LinkValue` is a
+SUBCLASS of `String` whose data is the target the author wrote, so
+`linkish.contains("[")` is false for `linkish: "[[Hello World]]"` — the
+brackets are the rendering, not the data. The rendering is reachable through
+`toString()`, which answers `[[Hello World]]`. We compare the raw target for
+the same reason.
+
+**Not the same as the list receiver.** A note property whose inferred type is
+`multitext` is promoted to a LIST for these five methods, and a list answers
+`contains` by ELEMENT equality — `words.contains("hello")` is false for
+`words: [Hello, World]`, and `words.startsWith(...)` is refused outright
+("Cannot find function startsWith on type List"). That promotion is a
+type-coercion question rather than a case question, so it is not settled
+here; it belongs with the frontmatter-coercion work.
+
+**The TypeScript tree has the same divergence.** `main` and `ts-implementation`
+implement `contains` as `str(target).includes(needle)` — case-SENSITIVE, and
+with no empty-needle guard — so they answer this the way we used to. Those
+branches are the cross-implementation ORACLE rather than the shipping tree
+(`develop` is the shipping one), and `main` is frozen at `0fbef40`, so this
+entry records the divergence rather than repairing it there. The Rust side is
+the one the project ships, so the Rust side is the one that was repaired.
+
+| `limit: 0` | **No limit at all** — the view keeps every row | The one value that looks like "keep nothing" and means "keep everything". Obsidian's view parser only keeps a limit that is a number AND positive. |
+| `order: []` | Falls back to the single `file.name` column | An empty array is falsy in JavaScript, so Obsidian's own accessor (`this.order \|\| ["file.name"]`) never sees it as "no columns". |
+| Nulls in a sort | Sort **last**, in **both** directions | The direction is applied to the comparison of two VALUES, not to the null check, so a row with no value stays at the bottom whichever way the sort runs. A descending sort that simply reversed the ascending order would put it first. |
+| The columns of a view | Exactly the ones the view **orders** | A property the Base *declares*, or one the view *sorts* on, is not a column. Obsidian builds both its JSON rows and its markdown table from `getOrder()`. |
+| The keys of a JSON row | The columns' **display names** | Two columns sharing a display name share one key, and the later one overwrites the earlier — so a column can vanish from the JSON without the row changing shape. |
+
+
+### The CLI's traps, and where their evidence comes from
+
+These five are the ones that fail SILENTLY: a regression in any of them produces
+a result that looks complete and is not. Each is pinned by
+`tests/cli_traps.rs`, against the fixture vault `test/fixtures/cli-traps`.
+
+The evidence is the **shipped Obsidian application**, not a live query. The
+installation on this host ships its own JavaScript bundle, and the Bases engine
+is inside it; reading that file launches nothing, opens no vault and writes
+nothing. That matters because the CLI cannot be run here at all — it talks to
+the desktop app, which rewrites the `.base` files of the vault it is pointed at,
+and the vault the app has open is the parity oracle on `develop`.
+
+The three facts that decide the traps, transcribed from that bundle:
+
+| Trap | The code |
+|---|---|
+| The columns | `getOrder()` returns `this.order \|\| ["file.name"]`; the CLI maps its rows over it and keys each one by `getDisplayName()`. |
+| The values | The cell is `null == n \|\| n === NullValue.value ? "" : n.toString()` — a string, always, with the empty string for an absent one. |
+| The sort | The comparator returns `1` when the left value is the null value and `-1` when the right one is, and only THEN applies the direction to the value comparison. |
+
+The live CLI comparison is still owed: it is the deferred UI-validation work
+(STATUS.md item 14), and it needs a human in the Obsidian UI. What is here is
+the behaviour the shipped code implements, which is stronger than a probe —
+it is the code that decides.
 
 
 ### Obsidian writes LF on every platform

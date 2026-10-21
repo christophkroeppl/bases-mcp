@@ -1,0 +1,59 @@
+# The case rules of the string methods, measured against the Obsidian CLI.
+#
+# `contains` is case-INSENSITIVE and its empty needle is false. `startsWith`
+# and `endsWith` are case-SENSITIVE. `==` is case-SENSITIVE. The asymmetry is
+# Obsidian's, and this base pins every cell of it so the four cannot drift
+# apart again.
+filters:
+  and:
+    - file.ext == "md"
+formulas:
+  eq_exact: 'title == "Hello World"'
+  eq_lower: 'title == "hello world"'
+  contains_lower: 'mixed.contains("hello")'
+  contains_upper: 'mixed.contains("HELLO")'
+  contains_exact: 'mixed.contains("Hello World")'
+  contains_empty: 'mixed.contains("")'
+  contains_all_lower: 'mixed.containsAll("hello", "world")'
+  contains_all_upper: 'mixed.containsAll("HELLO", "WORLD")'
+  contains_all_empty: 'mixed.containsAll("")'
+  contains_any_lower: 'mixed.containsAny("zzz", "hello")'
+  contains_any_upper: 'mixed.containsAny("zzz", "HELLO")'
+  contains_any_empty: 'mixed.containsAny("")'
+  starts_lower: 'mixed.startsWith("hello")'
+  starts_upper: 'mixed.startsWith("HELLO")'
+  starts_exact: 'mixed.startsWith("Hello World")'
+  starts_empty: 'mixed.startsWith("")'
+  ends_lower: 'mixed.endsWith("world")'
+  ends_upper: 'mixed.endsWith("WORLD")'
+  ends_exact: 'mixed.endsWith("Hello World")'
+  ends_empty: 'mixed.endsWith("")'
+  file_name_contains_lower: 'file.name.contains("case")'
+  file_name_starts_lower: 'file.name.startsWith("case")'
+views:
+  - type: table
+    name: All
+    order:
+      - file.name
+      - formula.eq_exact
+      - formula.eq_lower
+      - formula.contains_lower
+      - formula.contains_upper
+      - formula.contains_exact
+      - formula.contains_empty
+      - formula.contains_all_lower
+      - formula.contains_all_upper
+      - formula.contains_all_empty
+      - formula.contains_any_lower
+      - formula.contains_any_upper
+      - formula.contains_any_empty
+      - formula.starts_lower
+      - formula.starts_upper
+      - formula.starts_exact
+      - formula.starts_empty
+      - formula.ends_lower
+      - formula.ends_upper
+      - formula.ends_exact
+      - formula.ends_empty
+      - formula.file_name_contains_lower
+      - formula.file_name_starts_lower

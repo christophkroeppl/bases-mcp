@@ -38,9 +38,9 @@
 //! would compare a fake against a fake and prove nothing, which is the same
 //! mistake the suite's own header warns about.
 
-// Each integration test is its own crate, and no two of them need every helper here.
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::collections::BTreeMap;
@@ -1138,17 +1138,23 @@ fn file_tags_carry_their_hash_prefix_from_both_the_frontmatter_and_the_body() {
     // Confirmed against `base:query format=json` on Obsidian 1.13.7, which emits
     // `"Tags": "#Contacts, #Kontakte"`. A frontmatter tag may be written with or
     // without the `#`, and both normalise to the prefixed form.
+    //
+    // The elements are TAGS, not plain strings: Obsidian's `file.tags` is a
+    // `TagListValue`, whose elements are `TagValue`s. The class is load-bearing
+    // for equality -- a tag is never loose-equal to a plain string -- so the
+    // representation here has to be the tag one, not the string one. Measured
+    // against Obsidian 1.14.4.
     let vault = loaded();
     assert_eq!(
         vault.tags_for("Root Ticket.md"),
-        [BasesValue::String("#ticket".to_string())]
+        [BasesValue::Tag("#ticket".to_string())]
     );
     let project = vault.tags_for("Root Project.md");
     assert_eq!(
         project,
         [
-            BasesValue::String("#business-idea".to_string()),
-            BasesValue::String("#project".to_string()),
+            BasesValue::Tag("#business-idea".to_string()),
+            BasesValue::Tag("#project".to_string()),
         ]
     );
     assert!(vault.tags_for("Nope.md").is_empty());

@@ -323,6 +323,15 @@ pub fn read_member(target: &BasesValue, name: &str) -> BasesValue {
                 BasesValue::Null
             }
         }
+        // A tag is a string, so it answers `length` the same way. The `#` counts:
+        // Obsidian reports 8 for `#project`. Measured against 1.14.4.
+        BasesValue::Tag(s) => {
+            if name == "length" {
+                BasesValue::Number(s.encode_utf16().count() as f64)
+            } else {
+                BasesValue::Null
+            }
+        }
         BasesValue::Namespace(map) => match map.get(name) {
             Some(v) => v.clone(),
             None => BasesValue::Null,

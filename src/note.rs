@@ -577,14 +577,63 @@ fn parse_frontmatter(yaml: &str) -> (Properties, bool) {
 /// Keys are taken in sorted order because [`BasesValue`] has no map type but
 /// `BTreeMap`; that is the one place a note's property order is not the order it
 /// was written in.
+///
+/// The `tags` property is special: Obsidian types it as a TAG LIST, and a tag
+/// is a distinct type rather than a plain string. That is load-bearing for
+/// equality -- `tags == "project"` is false in Obsidian because a tag list is
+/// never loose-equal to a bare string, while `tags[0] == "#project"` is true
+/// because the `#` is part of the tag's text.
 fn yaml_properties(value: &Yaml) -> Properties {
     let Yaml::Mapping(entries) = value else {
         return Properties::new();
     };
     entries
         .iter()
-        .map(|(key, item)| (yaml_key(key), yaml_value(item)))
+        .map(|(key, item)| {
+            let key = yaml_key(key);
+            let value = yaml_value(item);
+            let value = if key.eq_ignore_ascii_case("tags") {
+                tag_list(value)
+            } else {
+                value
+            };
+            (key, value)
+        })
         .collect()
+}
+
+/// A `tags` property as Obsidian types it: a list of tags.
+///
+/// Obsidian's frontmatter loader only builds a tag list when the value is a
+/// list of strings, or a single string; anything else keeps its own shape.
+/// Measured against Obsidian 1.14.4: `tags: [project]` gives `["#project"]`,
+/// `tags: project` gives `["#project"]`, and `tags: [42]` stays `[42]` -- a
+/// Number, whose `isType("string")` is false and whose `.length` is an error.
+///
+/// A MIXED list (`tags: [project, 42]`) is left exactly as written, so the
+/// string keeps whatever `#` the page carried. That follows from the measured
+/// rule above rather than being measured itself: the all-strings test is what
+/// decides, and a list that fails it never reaches the tag path.
+fn tag_list(value: BasesValue) -> BasesValue {
+    match &value {
+        BasesValue::String(text) => BasesValue::List(vec![BasesValue::tag(text.clone())]),
+        BasesValue::List(items)
+            if items
+                .iter()
+                .all(|item| matches!(item, BasesValue::String(_))) =>
+        {
+            BasesValue::List(
+                items
+                    .iter()
+                    .map(|item| match item {
+                        BasesValue::String(text) => BasesValue::tag(text.clone()),
+                        other => other.clone(),
+                    })
+                    .collect(),
+            )
+        }
+        _ => value,
+    }
 }
 
 /// A YAML value as the value lattice reads it.

@@ -79,6 +79,14 @@ pub fn receiver_type(v: &BasesValue) -> ReceiverType {
         BasesValue::Duration(_) => ReceiverType::Duration,
         BasesValue::List(_) => ReceiverType::List,
         BasesValue::String(_) => ReceiverType::String,
+        // A tag IS a string for method dispatch: Obsidian's `TagValue` extends
+        // `StringValue`, so `tags[0].startsWith("#")` works. Measured against
+        // Obsidian 1.14.4.
+        //
+        // It is NOT a string for equality: `looseEquals` compares classes, so a
+        // tag is never loose-equal to a plain string. See
+        // [`crate::value::compare`].
+        BasesValue::Tag(_) => ReceiverType::String,
         BasesValue::Number(_) => ReceiverType::Number,
         BasesValue::Bool(_) => ReceiverType::Boolean,
         // A namespace is `note`, `formula` and `file.properties`. Those read as
@@ -221,6 +229,10 @@ fn required_variadic(args: &[BasesValue]) -> Option<&[BasesValue]> {
 fn as_str(v: &BasesValue, fn_name: &str) -> Result<String> {
     match v {
         BasesValue::String(s) => Ok(s.clone()),
+        // A tag IS a string for the string methods: Obsidian's `TagValue`
+        // extends `StringValue`, so `tags[0].startsWith("#")` works. Measured
+        // against Obsidian 1.14.4.
+        BasesValue::Tag(s) => Ok(s.clone()),
         other => Err(BasesError::new(format!(
             "Type error in \"{fn_name}\", parameter expects String, given {}",
             describe(other)
@@ -939,6 +951,8 @@ fn m_is_empty(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> 
         BasesValue::Null => true,
         BasesValue::List(items) => items.is_empty(),
         BasesValue::String(s) => s.is_empty(),
+        // A tag is never empty: it always carries at least its `#`.
+        BasesValue::Tag(_) => false,
         BasesValue::Number(n) => n.is_nan(),
         BasesValue::Bool(_) => false,
         // A Date is never "empty" -- Obsidian defines date.isEmpty() as always
@@ -952,6 +966,17 @@ fn m_is_empty(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> 
 // ---------------------------------------------------------------------------
 // String methods
 // ---------------------------------------------------------------------------
+
+// Obsidian's measured case-rule table is under "Behaviour probes" in
+// docs/divergences.md: contains folds, startsWith and endsWith do not.
+fn str_contains_ci(haystack: &str, needle: &str) -> bool {
+    haystack.to_lowercase().contains(&needle.to_lowercase())
+}
+
+// The empty-needle guard is on `contains` alone; containsAll("") is true.
+fn str_contains(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty() && str_contains_ci(haystack, needle)
+}
 
 fn m_str_contains(
     target: &BasesValue,
@@ -969,7 +994,7 @@ fn m_str_contains(
         ))
         .with_construct("contains"));
     };
-    Ok(BasesValue::Bool(haystack.contains(n.as_str())))
+    Ok(BasesValue::Bool(str_contains(&haystack, n.as_str())))
 }
 
 fn m_str_contains_all(
@@ -982,7 +1007,7 @@ fn m_str_contains_all(
         return Ok(BasesValue::Null);
     };
     Ok(BasesValue::Bool(values.iter().all(
-        |a| matches!(a, BasesValue::String(n) if s.contains(n.as_str())),
+        |a| matches!(a, BasesValue::String(n) if str_contains_ci(&s, n.as_str())),
     )))
 }
 
@@ -996,7 +1021,7 @@ fn m_str_contains_any(
         return Ok(BasesValue::Null);
     };
     Ok(BasesValue::Bool(values.iter().any(
-        |a| matches!(a, BasesValue::String(n) if s.contains(n.as_str())),
+        |a| matches!(a, BasesValue::String(n) if str_contains_ci(&s, n.as_str())),
     )))
 }
 
@@ -1019,6 +1044,10 @@ fn m_str_starts_with(
     Ok(BasesValue::Bool(s.starts_with(query.as_str())))
 }
 
+/// `endsWith` is CASE-SENSITIVE, unlike `contains`.
+///
+/// See [`m_str_starts_with`]; the two agree with each other and disagree with
+/// `contains` in the same way.
 fn m_str_ends_with(
     target: &BasesValue,
     args: &[BasesValue],
@@ -1288,15 +1317,82 @@ fn m_list_contains(
     }
 }
 
+/// Whether a list holds a tag matching the needle.
+///
+/// Obsidian's `contains` on a TAG LIST is a tag match, not an equality: it is
+/// case-insensitive, it accepts the needle with or without its `#`, and it
+/// matches on a `/` boundary so `project` matches `#project/alpha` while `proj`
+/// matches nothing. Measured against Obsidian 1.14.4.
+///
+/// A list that holds no tags at all falls back to the ordinary equality rule,
+/// so `plain.contains("alpha")` behaves like any other list.
+fn list_has_tag(items: &[BasesValue], needle: &BasesValue) -> Option<bool> {
+    let needle_text = match needle {
+        BasesValue::String(text) => text.clone(),
+        BasesValue::Tag(text) => text.clone(),
+        _ => return None,
+    };
+    if needle_text.is_empty() {
+        // An empty needle never matches a tag.
+        return Some(false);
+    }
+    let tags: Vec<&str> = items.iter().filter_map(BasesValue::as_tag).collect();
+    if tags.is_empty() {
+        return None;
+    }
+    Some(
+        tags.iter()
+            .any(|tag| crate::value::tag_matches(tag, &needle_text)),
+    )
+}
+
+/// Whether a list holds the needle, by the tag rule if it holds tags and by
+/// loose equality otherwise.
+fn list_includes(items: &[BasesValue], needle: &BasesValue) -> bool {
+    list_has_tag(items, needle)
+        .unwrap_or_else(|| items.iter().any(|item| values_equal_loose(item, needle)))
+}
+
+/// The needles of a `containsAll`/`containsAny` call.
+///
+/// Obsidian's list `containsAll` and `containsAny` take either a list of needles
+/// or one list to expand: the body is `if (1 === args.length && args[0]
+/// instanceof List)` then walk its elements, else walk the arguments. Measured
+/// against Obsidian 1.14.4: `tags.containsAll(["project"])` is TRUE, which our
+/// varargs-only reading got wrong because a one-element list of a bare string is
+/// not loose-equal to a tag.
+fn needles(args: &[BasesValue]) -> Vec<&BasesValue> {
+    match args {
+        [BasesValue::List(items)] => items.iter().collect(),
+        _ => args.iter().collect(),
+    }
+}
+
+/// `contains` on a list that holds tags.
+fn m_tag_list_contains(
+    target: &BasesValue,
+    args: &[BasesValue],
+    ctx: &EvalContext,
+) -> Result<BasesValue> {
+    let items = as_list(target, "contains")?;
+    let needle = arg(args, 0);
+    if let Some(hit) = list_has_tag(items, &needle) {
+        return Ok(BasesValue::Bool(hit));
+    }
+    m_list_contains(target, args, ctx)
+}
+
 fn m_list_contains_all(
     target: &BasesValue,
     args: &[BasesValue],
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let items = as_list(target, "containsAll")?;
-    Ok(BasesValue::Bool(args.iter().all(|needle| {
-        items.iter().any(|item| values_equal_loose(item, needle))
-    })))
+    Ok(BasesValue::Bool(
+        needles(args)
+            .iter()
+            .all(|needle| list_includes(items, needle)),
+    ))
 }
 
 fn m_list_contains_any(
@@ -1305,9 +1401,11 @@ fn m_list_contains_any(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let items = as_list(target, "containsAny")?;
-    Ok(BasesValue::Bool(args.iter().any(|needle| {
-        items.iter().any(|item| values_equal_loose(item, needle))
-    })))
+    Ok(BasesValue::Bool(
+        needles(args)
+            .iter()
+            .any(|needle| list_includes(items, needle)),
+    ))
 }
 
 fn m_list_join(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
@@ -1585,12 +1683,26 @@ fn m_link_links_to(
 
 /// `subcategory.contains(link("Note#Heading", "Alias"))` is a documented
 /// pattern, so a Link receiver compares against the link text.
+///
+/// A Link in Obsidian is a SUBCLASS of String whose data is the RAW TARGET,
+/// not the `[[...]]` rendering. So `linkish.contains("hello")` folds the case
+/// and `linkish.contains("")` is false — the string rules — but
+/// `linkish.contains("[")` is **false**, because the brackets are part of the
+/// rendering, not of the data. Measured against the CLI on 1.14.4: for
+/// `linkish: "[[Hello World]]"`, `contains("hello")` and `contains("Hello")`
+/// are true, `contains("[")` is false, and `contains("")` is false.
+///
+/// The rendering is reachable through `toString()`, which is what
+/// `linkish.toString()` answers: `[[Hello World]]`.
 fn m_link_contains(
     target: &BasesValue,
     args: &[BasesValue],
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
-    let s = target.to_display_string();
+    let s = match target {
+        BasesValue::Link { target, .. } => target.clone(),
+        other => other.to_display_string(),
+    };
     let Some(needle) = required_arg(args, 0, "contains")? else {
         return Ok(BasesValue::Null);
     };
@@ -1600,7 +1712,10 @@ fn m_link_contains(
             &linkish_path(needle).unwrap_or_default(),
         ))),
         BasesValue::Namespace(_) | BasesValue::List(_) => Ok(BasesValue::Bool(false)),
-        other => Ok(BasesValue::Bool(s.contains(&other.to_display_string()))),
+        other => Ok(BasesValue::Bool(str_contains(
+            &s,
+            &other.to_display_string(),
+        ))),
     }
 }
 
@@ -1623,13 +1738,17 @@ fn m_file_as_link(
     })
 }
 
+/// A value as a tag text, with the `#` Obsidian stores.
+///
+/// Obsidian's `MW` forces the leading `#`, so `project` and `#project` are the
+/// same tag. An empty tag has no text and is not a tag at all.
 fn normalise_tag(v: &BasesValue) -> Option<String> {
     let s = v.to_display_string();
-    let trimmed = s.trim().trim_start_matches('#');
-    if trimmed.is_empty() {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed == "#" {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(crate::value::ensure_hash(trimmed.to_string()))
     }
 }
 
@@ -1649,9 +1768,11 @@ fn m_file_has_tag(
         let Some(want) = normalise_tag(a) else {
             return false;
         };
-        // Nested tags match: hasTag("tag1") is true for #tag1/a.
-        tags.iter()
-            .any(|t| *t == want || t.starts_with(&format!("{want}/")))
+        // The tag match is case-insensitive and lands on a `/` boundary:
+        // `hasTag("project")` is true for `#project/alpha`, and
+        // `hasTag("PROJECT")` is true for `#project`. Measured against
+        // Obsidian 1.14.4.
+        tags.iter().any(|t| crate::value::tag_matches(t, &want))
     })))
 }
 
@@ -2006,7 +2127,7 @@ fn build() -> Registries {
     define_method(m, ReceiverType::Number, "round", m_num_round);
     define_method(m, ReceiverType::Number, "toFixed", m_num_to_fixed);
 
-    define_method(m, ReceiverType::List, "contains", m_list_contains);
+    define_method(m, ReceiverType::List, "contains", m_tag_list_contains);
     define_method(m, ReceiverType::List, "containsAll", m_list_contains_all);
     define_method(m, ReceiverType::List, "containsAny", m_list_contains_any);
     define_method(m, ReceiverType::List, "join", m_list_join);

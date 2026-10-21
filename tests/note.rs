@@ -244,11 +244,15 @@ fn frontmatter_becomes_properties_the_evaluator_can_read() {
     );
 
     assert!(!note.malformed_frontmatter);
+    // `tags` is a TAG LIST in Obsidian, not a list of plain strings, and each
+    // tag carries its `#`. The class is load-bearing: `tags == "a"` is false
+    // in Obsidian because a tag list is never loose-equal to a bare string.
+    // Measured against Obsidian 1.14.4.
     assert_eq!(
         note.frontmatter.get("tags"),
         Some(&BasesValue::List(vec![
-            BasesValue::String("a".into()),
-            BasesValue::String("b".into())
+            BasesValue::Tag("#a".into()),
+            BasesValue::Tag("#b".into())
         ]))
     );
     assert_eq!(note.frontmatter.get("done"), Some(&BasesValue::Bool(false)));
