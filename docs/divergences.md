@@ -419,6 +419,60 @@ its repair, and a `cfg`-gated rule never runs where it matters. The read side is
 unaffected: an existing Linux file named `NUL.md` stays readable; only *creating*
 one through `add_note_to_base` is refused.
 
+---
+
+## D10 — A method call on a null receiver answers null
+
+| | |
+|---|---|
+| **Construct** | A method call whose receiver is a property the note does not have, e.g. `type.contains("task")` against a note with no `type` |
+| **Ours** | The call answers **null**. A null filter expression is falsy, so the row is **dropped** and the query still answers. A non-null receiver with an unknown method still raises `Type error: "x" is not a method on <type>`. |
+| **Obsidian** | The same: the call answers null, the null filter is falsy, and the row is dropped. No error is reported. |
+| **Evidence** | Read out of Obsidian's own Bases evaluator, which ships in `resources/obsidian.asar` (installer 1.12.4 — the app `docs/divergences.md` records as 1.13.7). Its call site resolves the receiver, looks the method up on the receiver's type chain, and then: `if(s=r.getValue(e)||gW.value, !(t=KW.findForValue(s,i)) && s===gW.value) return gW.value`. `gW.value` is Obsidian's null singleton, so a null receiver with an unknown method answers the null value instead of raising. Obsidian's filter predicate is `this.getValue(e).isTruthy()`, and its null value answers `isTruthy()` false. Pinned by `tests/null_property.rs` (3 tests) and `tests/expr.rs` (`a_null_receiver_answers_null_whatever_the_method_is_called`, `the_universal_methods_answer_on_a_null_receiver`, `a_non_null_receiver_with_an_unknown_method_still_errors`). |
+| **verify-in-obsidian** | no — the rule is in Obsidian's shipped evaluator, not in the CLI's rendering of it |
+
+**Why this is a Divergence and not a bug.** Before this change the Rust
+implementation raised `Type error: "contains" is not a method on null`, which
+failed the WHOLE query rather than dropping one row. That was a divergence
+from Obsidian's behaviour, so it is recorded here rather than in the Bugs
+section below.
+
+**What the four universal methods do.** Obsidian registers exactly four
+methods that a null receiver resolves to — `isEmpty` on `Null` itself, and
+`toString`, `isTruthy` and `isType` on `Any`, which `Null` extends — and its
+lookup walks that prototype chain, so they are found before any fallback can
+answer for them. Ours registers the same four, and the null-receiver
+fallback sits behind them, so a null receiver reaches the same four methods
+and nothing else. Obsidian's null value also says `toString()` is the string
+`"null"` (not the empty string), which is why a null cell and a cell holding
+the text "null" are different things on the JSON surface.
+
+**The TypeScript tree has not been repaired.** `ts-implementation` still
+raises `Type error: "contains" is not a method on null` for the same
+construct, because its `getMethod` has no null-receiver fallback. Measured
+against `ts-implementation` at `9a86bd5`:
+
+```
+missingprop.contains("x")  -> ERROR Type error: "contains" is not a method on null
+missingprop.bogus()        -> ERROR Type error: "bogus" is not a method on null
+missingprop.toString()     -> ""          (Obsidian: "null")
+status.bogus()             -> ERROR Type error: "bogus" is not a method on String
+```
+
+So the two implementations no longer agree here, and this is the second
+recorded place where they differ on purpose — the first was line endings
+(D8). The TypeScript side is not touched by this change; it is a separate
+repair.
+
+**What is NOT settled by this entry.** Obsidian's rule for a null
+*argument* — as opposed to a null receiver — is a different question and is
+not recorded here. Obsidian's own evaluator distinguishes three cases (a
+null argument makes the whole call answer null; a null argument in an
+*optional* position is treated as absent; an argument that is simply
+**missing** from the call site is `Cannot call function "x", not enough
+arguments.`), and the Rust implementation does not yet model that
+distinction. It is tracked separately.
+
 ## Bugs found in this implementation
 
 Recorded separately from the divergences above, because these are defects we
@@ -754,6 +808,13 @@ normalises CRLF to LF on read (D8); `ts-implementation` preserves them. The elev
 cases above contain no CRLF note, so the measurement stands as measured — but a
 CRLF note would now round-trip through one tree and not the other, and that is a
 recorded Divergence rather than a bug in either.
+
+**A second case is no longer equivalent, also deliberately.** A method call on
+a **null receiver**. `develop` answers null and drops the row (D10); the
+TypeScript tree still raises `Type error: "contains" is not a method on null`.
+Both are now recorded rather than assumed equal, and the eleven cases above
+contain no null-receiver call, so the measurement stands as measured. The
+TypeScript repair is a separate piece of work.
 
 ## The Rust parity harness fails loudly rather than skipping
 

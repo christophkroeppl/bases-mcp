@@ -843,10 +843,15 @@ fn the_commit_is_single_use() {
 
 #[test]
 fn a_draft_missing_a_filtered_property_reports_a_mismatch_not_a_type_error() {
-    // Regression: `project.contains(link(this.file.name))` DEREFERENCES `project`,
-    // so a draft with no `project` at all makes the expression THROW instead of
-    // evaluating to false. That raw error buried the filter and the base YAML,
-    // which are the two things the agent needs to correct itself.
+    // `project.contains(link(this.file.name))` DEREFERENCES `project`, and a
+    // draft with no `project` at all makes the receiver null. A null receiver
+    // answers null rather than throwing, so the expression does not match and
+    // the report is a MISMATCH.
+    //
+    // It used to throw, and the report said "threw:". That was the right
+    // behaviour when a null receiver was an error; it is wrong now, because
+    // Obsidian's own answer for a null property is null. The two things the
+    // agent needs -- the filter and the base YAML -- are still inlined.
     let (_dir, resolver) = sandbox();
     let proposal = draft_for(&resolver, SCRATCH, Some(HOST), None);
 
@@ -863,12 +868,51 @@ fn a_draft_missing_a_filtered_property_reports_a_mismatch_not_a_type_error() {
         "{message}"
     );
     assert!(
-        message.contains("threw:"),
-        "the dereference is reported, not propagated: {message}"
+        !message.contains("threw:"),
+        "a null receiver is a mismatch, not a throw: {message}"
     );
     assert!(
         message.contains("filters:\n  and:"),
         "the base's own YAML is inlined: {message}"
+    );
+    assert!(!paths(&resolver).contains(&SCRATCH.to_string()));
+}
+
+/// The report still says "threw:" when the filter genuinely errors.
+///
+/// The null-receiver change means a missing property is a mismatch rather than
+/// a throw, so the "threw:" branch needs a filter that really does fail: a
+/// method that does not exist on the receiver's type. `Tickets.base` cannot
+/// supply one -- its only filter is a `contains` on a property -- so the
+/// throwing branch is pinned here, against a base of the test's own.
+#[test]
+fn a_draft_whose_filter_really_throws_is_reported_as_a_throw() {
+    let dir = TempDir::new().expect("a temp dir is writable");
+    std::fs::write(
+        dir.path().join("Throwing.base"),
+        "filters:\n  and:\n    - status.bogus()\nviews:\n  - type: table\n    name: All\n    order:\n      - file.name\n",
+    )
+    .expect("the base is written");
+    let resolver = Arc::new(
+        futures_block_on(Resolver::open_dir(dir.path())).expect("the sandbox vault opens"),
+    );
+
+    let proposal = draft(add(
+        &resolver,
+        vec![("base", "Throwing.base"), ("path", SCRATCH)],
+    ));
+    let message = message_of(|| {
+        commit(
+            &resolver,
+            &proposal.draft_id,
+            "---\ntags:\n  - ticket\nstatus: active\n---\n\n# Scratch\n",
+        )
+    });
+    assert!(message.contains("does not match"), "{message}");
+    assert!(message.contains("threw:"), "{message}");
+    assert!(
+        message.contains("bogus"),
+        "the failure names the method: {message}"
     );
     assert!(!paths(&resolver).contains(&SCRATCH.to_string()));
 }
