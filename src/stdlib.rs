@@ -228,8 +228,59 @@ fn m_null_receiver(
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/// The argument at `i`, reading an ABSENT one as null.
+///
+/// This is the erasure D12 is about: Obsidian tells a null argument from one
+/// that was never passed, so a method whose parameter table is modelled uses
+/// [`required_arg`] or [`optional_arg`] instead.
 fn arg(args: &[BasesValue], i: usize) -> BasesValue {
     args.get(i).cloned().unwrap_or(BasesValue::Null)
+}
+
+/// Obsidian's own wording, from `msgErrorNotEnoughArguments` in `i18n.js`.
+fn not_enough_arguments(fn_name: &str) -> BasesError {
+    BasesError::new(format!(
+        "Cannot call function \"{fn_name}\", not enough arguments."
+    ))
+    .with_construct(fn_name)
+}
+
+/// The argument in a REQUIRED position whose declared type rejects null.
+///
+/// `Ok(None)` is the call answering null: the argument was passed, and it was
+/// null, which Obsidian's argument checker turns into `return !1` at the call
+/// site. `Err` is the argument never having been passed at all (D12).
+fn required_arg<'a>(
+    args: &'a [BasesValue],
+    i: usize,
+    fn_name: &str,
+) -> Result<Option<&'a BasesValue>> {
+    match args.get(i) {
+        None => Err(not_enough_arguments(fn_name)),
+        Some(BasesValue::Null) => Ok(None),
+        Some(v) => Ok(Some(v)),
+    }
+}
+
+/// The argument in an OPTIONAL position: absent when it was left out, and
+/// absent when it was passed as null, which the parameter table treats alike
+/// (D12).
+fn optional_arg(args: &[BasesValue], i: usize) -> Option<&BasesValue> {
+    match args.get(i) {
+        None | Some(BasesValue::Null) => None,
+        Some(v) => Some(v),
+    }
+}
+
+/// A VARIADIC position is a sequence of required arguments, so a null anywhere
+/// in it answers the whole call null. `None` is that answer; `Some` is the
+/// arguments to iterate (D12).
+fn required_variadic(args: &[BasesValue]) -> Option<&[BasesValue]> {
+    if args.iter().any(|a| matches!(a, BasesValue::Null)) {
+        None
+    } else {
+        Some(args)
+    }
 }
 
 /// The text a String method operates on.
@@ -1167,11 +1218,13 @@ fn m_str_contains(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let haystack = as_str(target, "contains")?;
-    let needle = arg(args, 0);
-    let BasesValue::String(n) = &needle else {
+    let Some(needle) = required_arg(args, 0, "contains")? else {
+        return Ok(BasesValue::Null);
+    };
+    let BasesValue::String(n) = needle else {
         return Err(BasesError::new(format!(
             "Type error in \"contains\", parameter \"value\". Expected String not, given {}.",
-            describe(&needle)
+            describe(needle)
         ))
         .with_construct("contains"));
     };
@@ -1184,7 +1237,10 @@ fn m_str_contains_all(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let s = as_str(target, "containsAll")?;
-    Ok(BasesValue::Bool(args.iter().all(
+    let Some(values) = required_variadic(args) else {
+        return Ok(BasesValue::Null);
+    };
+    Ok(BasesValue::Bool(values.iter().all(
         |a| matches!(a, BasesValue::String(n) if str_contains_ci(&s, n.as_str())),
     )))
 }
@@ -1195,7 +1251,10 @@ fn m_str_contains_any(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let s = as_str(target, "containsAny")?;
-    Ok(BasesValue::Bool(args.iter().any(
+    let Some(values) = required_variadic(args) else {
+        return Ok(BasesValue::Null);
+    };
+    Ok(BasesValue::Bool(values.iter().any(
         |a| matches!(a, BasesValue::String(n) if str_contains_ci(&s, n.as_str())),
     )))
 }
@@ -1206,15 +1265,17 @@ fn m_str_starts_with(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let s = as_str(target, "startsWith")?;
-    let p = arg(args, 0);
-    let BasesValue::String(p) = &p else {
+    let Some(query) = required_arg(args, 0, "startsWith")? else {
+        return Ok(BasesValue::Null);
+    };
+    let BasesValue::String(query) = query else {
         return Err(BasesError::new(format!(
             "Type error in \"startsWith\", parameter expects String, given {}",
-            describe(&p)
+            describe(query)
         ))
         .with_construct("startsWith"));
     };
-    Ok(BasesValue::Bool(s.starts_with(p.as_str())))
+    Ok(BasesValue::Bool(s.starts_with(query.as_str())))
 }
 
 /// `endsWith` is CASE-SENSITIVE, unlike `contains`.
@@ -1227,15 +1288,17 @@ fn m_str_ends_with(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let s = as_str(target, "endsWith")?;
-    let p = arg(args, 0);
-    let BasesValue::String(p) = &p else {
+    let Some(query) = required_arg(args, 0, "endsWith")? else {
+        return Ok(BasesValue::Null);
+    };
+    let BasesValue::String(query) = query else {
         return Err(BasesError::new(format!(
             "Type error in \"endsWith\", parameter expects String, given {}",
-            describe(&p)
+            describe(query)
         ))
         .with_construct("endsWith"));
     };
-    Ok(BasesValue::Bool(s.ends_with(p.as_str())))
+    Ok(BasesValue::Bool(s.ends_with(query.as_str())))
 }
 
 fn m_str_lower(
@@ -1276,7 +1339,10 @@ fn m_str_repeat(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let s = as_str(target, "repeat")?;
-    let n = to_number_loose(&arg(args, 0)).unwrap_or(0.0);
+    let Some(count) = required_arg(args, 0, "repeat")? else {
+        return Ok(BasesValue::Null);
+    };
+    let n = to_number_loose(count).unwrap_or(0.0);
     let count = n.max(0.0).floor() as usize;
     // A runaway repeat would allocate without bound; clamp rather than abort.
     Ok(BasesValue::String(s.repeat(count.min(1024))))
@@ -1284,15 +1350,12 @@ fn m_str_repeat(
 
 fn m_str_slice(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
     let s: Vec<char> = as_str(target, "slice")?.chars().collect();
-    let start = clamp_index(to_number_loose(&arg(args, 0)).unwrap_or(0.0), s.len());
-    let end = if args.len() > 1 {
-        Some(clamp_index(
-            to_number_loose(&arg(args, 1)).unwrap_or(0.0),
-            s.len(),
-        ))
-    } else {
-        None
+    let Some(start) = required_arg(args, 0, "slice")? else {
+        return Ok(BasesValue::Null);
     };
+    let start = clamp_index(to_number_loose(start).unwrap_or(0.0), s.len());
+    let end =
+        optional_arg(args, 1).map(|e| clamp_index(to_number_loose(e).unwrap_or(0.0), s.len()));
     let slice: String = match end {
         Some(e) if e > start => s[start..e].iter().collect(),
         Some(_) => String::new(),
@@ -1322,13 +1385,11 @@ fn clamp_index(n: f64, len: usize) -> usize {
 
 fn m_str_split(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
     let s = as_str(target, "split")?;
-    let sep = arg(args, 0);
-    let limit = if args.len() > 1 {
-        to_number_loose(&arg(args, 1))
-    } else {
-        None
+    let Some(sep) = required_arg(args, 0, "split")? else {
+        return Ok(BasesValue::Null);
     };
-    let mut parts: Vec<BasesValue> = match &sep {
+    let limit = optional_arg(args, 1).and_then(to_number_loose);
+    let mut parts: Vec<BasesValue> = match sep {
         BasesValue::String(sep) if sep.is_empty() => s
             .chars()
             .map(|c| BasesValue::String(c.to_string()))
@@ -1359,19 +1420,21 @@ fn m_str_replace(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let s = as_str(target, "replace")?;
-    let pattern = arg(args, 0);
-    let replacement = match args.get(1) {
-        None | Some(BasesValue::Null) => String::new(),
-        Some(v) => v.to_display_string(),
+    let Some(pattern) = required_arg(args, 0, "replace")? else {
+        return Ok(BasesValue::Null);
     };
-    match &pattern {
+    let Some(replacement) = required_arg(args, 1, "replace")? else {
+        return Ok(BasesValue::Null);
+    };
+    let replacement = replacement.to_display_string();
+    match pattern {
         BasesValue::String(pat) => Ok(BasesValue::String(s.replace(pat.as_str(), &replacement))),
         BasesValue::Namespace(_) | BasesValue::List(_) => {
             // A regex literal is represented as a single-key namespace by the
             // caller, so `matches` and `replace` accept it here.
             Err(BasesError::new(format!(
                 "Type error in \"replace\", pattern expects String or RegExp, given {}",
-                describe(&pattern)
+                describe(pattern)
             ))
             .with_construct("replace"))
         }
@@ -1474,16 +1537,20 @@ fn m_list_contains(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let items = as_list(target, "contains")?;
-    let needle = arg(args, 0);
-    match &needle {
+    // The parameter is the `text` union, which accepts null, so a null needle is
+    // compared rather than answering the call null (D12).
+    let needle = args
+        .first()
+        .ok_or_else(|| not_enough_arguments("contains"))?;
+    match needle {
         BasesValue::Link { .. } | BasesValue::File(_) | BasesValue::List(_) => Ok(
-            BasesValue::Bool(items.iter().any(|item| values_equal_loose(item, &needle))),
+            BasesValue::Bool(items.iter().any(|item| values_equal_loose(item, needle))),
         ),
         BasesValue::Null => Ok(BasesValue::Bool(
             items.iter().any(|item| matches!(item, BasesValue::Null)),
         )),
         BasesValue::String(_) | BasesValue::Number(_) | BasesValue::Bool(_) => Ok(
-            BasesValue::Bool(items.iter().any(|item| values_equal_loose(item, &needle))),
+            BasesValue::Bool(items.iter().any(|item| values_equal_loose(item, needle))),
         ),
         other => Err(BasesError::new(format!(
             "Type error in \"contains\", parameter \"value\". Expected String not, given {}.",
@@ -1661,15 +1728,12 @@ fn m_list_slice(
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
     let items = as_list(target, "slice")?;
-    let start = clamp_index(to_number_loose(&arg(args, 0)).unwrap_or(0.0), items.len());
-    let end = if args.len() > 1 {
-        Some(clamp_index(
-            to_number_loose(&arg(args, 1)).unwrap_or(0.0),
-            items.len(),
-        ))
-    } else {
-        None
+    let Some(start) = required_arg(args, 0, "slice")? else {
+        return Ok(BasesValue::Null);
     };
+    let start = clamp_index(to_number_loose(start).unwrap_or(0.0), items.len());
+    let end =
+        optional_arg(args, 1).map(|e| clamp_index(to_number_loose(e).unwrap_or(0.0), items.len()));
     let slice = match end {
         Some(e) if e > start => &items[start..e],
         Some(_) => &[][..],
@@ -1886,18 +1950,17 @@ fn m_link_contains(
     args: &[BasesValue],
     _ctx: &EvalContext,
 ) -> Result<BasesValue> {
-    // The link's DATA: the raw target, not the `[[...]]` rendering and not
-    // the resolved path. Obsidian's LinkValue stores the target the author
-    // wrote; `resolve()` is a separate call.
     let s = match target {
         BasesValue::Link { target, .. } => target.clone(),
         other => other.to_display_string(),
     };
-    let needle = arg(args, 0);
-    match &needle {
+    let Some(needle) = required_arg(args, 0, "contains")? else {
+        return Ok(BasesValue::Null);
+    };
+    match needle {
         BasesValue::Link { .. } | BasesValue::File(_) => Ok(BasesValue::Bool(matches_link_text(
             &s,
-            &linkish_path(&needle).unwrap_or_default(),
+            &linkish_path(needle).unwrap_or_default(),
         ))),
         BasesValue::Namespace(_) | BasesValue::List(_) => Ok(BasesValue::Bool(false)),
         other => Ok(BasesValue::Bool(str_contains(

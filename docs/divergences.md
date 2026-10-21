@@ -665,6 +665,136 @@ one through `add_note_to_base` is refused.
 
 ---
 
+## D12 — A missing argument is an error, but a null argument answers null
+
+| | |
+|---|---|
+| **Construct** | An argument the call site never passes, next to one it passes as `null`: `status.replace("a")` against `status.replace("a", null)` |
+| **Ours** | Three outcomes, as Obsidian has them. A REQUIRED parameter the call never passed raises `Cannot call function "replace", not enough arguments.` A required parameter passed as **null** makes the whole call answer **null**. A parameter marked **optional** that is passed as null is treated as **absent** — so `status.slice(0, null)` is the whole string. |
+| **Obsidian** | The same three: absent is an error in a required position, null answers the call null, and null in an optional position is pushed as absent. |
+| **Evidence** | Read out of Obsidian's own Bases evaluator, which ships in `resources/obsidian.asar` (`version.json` in that archive says 1.12.4; this file's header records the app as 1.13.7). Its call site checks every argument against the function's parameter table before the body runs — the function is quoted in full below — and the message is Obsidian's own i18n string `msgErrorNotEnoughArguments` from `i18n.js`: `Cannot call function "{{ function }}", not enough arguments.` Pinned by `tests/expr.rs` (`a_missing_required_argument_is_not_enough_arguments`, `a_null_required_argument_answers_null`, `a_null_optional_argument_is_absent`, `a_null_variadic_argument_answers_null`, `a_null_needle_in_a_list_is_compared_rather_than_answering_null`). |
+| **verify-in-obsidian** | no — the rule is in Obsidian's shipped evaluator, not in the CLI's rendering of it |
+
+**The checker.** Every method and global is registered with a parameter
+table, and the call site runs this before the body:
+
+```js
+var S=t.params,x=0,T=[],D=function(e){
+  if(x===S.length){ if(!S[S.length-1].variadic) throw new Error(SK.msgErrorTooManyArguments({function:i})); x-- }
+  var t=S[x];
+  if(t.optional && e===gW.value) T.push(null);          // optional + null  -> absent
+  else {
+    if(!t.type.some(t=>e instanceof t)){
+      if(e===gW.value) return !1;                        // required + null  -> the CALL answers null
+      throw new Error(SK.msgErrorTypeError({function:i,parameter:t.name,expected:t.type[0].toString(),given:e.constructor.toString()}))
+    }
+    T.push(e)
+  }
+  return x++,!0
+};
+if(s && !D(s)) return gW.value;                          // the receiver's own argument
+for(h=0;h<o.length;h++) if(!D(o[h].getValue(e)||gW.value)) return gW.value;
+if(x<S.length) for(h=x;h<S.length;h++) if(!S[h].optional && !S[h].variadic) throw new Error(SK.msgErrorNotEnoughArguments({function:i}))
+```
+
+The three outcomes are therefore not stylistic. `e===gW.value` is "this
+argument IS the null value"; an argument the call site never wrote never
+reaches `D` at all, and the loop over the remaining parameters is what turns
+that into the error. `gW.value` is Obsidian's one null singleton, which its
+own `NullValue` exposes as `t.value`.
+
+**The bug this repaired.** The Rust implementation read every argument with
+`arg(args, i)`, which returned null for an absent argument as well as for a
+null one, so the two cases collapsed. Measured on the code this card started
+from — `develop` carrying D10's `ce5e764` — with `status` bound to the string
+`"active"`:
+
+```
+"active".contains()        ERROR Type error in "contains", parameter "value". Expected String not, given null.
+"active".slice(0, null)    ""
+"active".containsAll(null) false
+"active".replace("a")      "ctive"          <- the replacement is ABSENT, not null
+```
+
+`replace("a")` is the sharp one: the call is missing its required replacement
+and deleted the match instead. In the language Obsidian implements,
+`"active".replace("a")` yields `"undefinedctive"` while
+`.replace("a", null)` yields `"nullctive"` — the tell that absent and null are
+different things, and that neither is an empty string. After this change:
+
+```
+"active".contains()        ERROR Cannot call function "contains", not enough arguments.
+"active".contains(null)    null
+"active".slice(0, null)    "active"
+"active".replace("a")      ERROR Cannot call function "replace", not enough arguments.
+"active".replace("a", null) null
+"active".containsAll(null) null
+```
+
+**The parameter tables this models.** Straight out of the binary, where
+`zW(name, type...)` is a required parameter, `qW(...)` an optional one and
+`jW`/`k([...], jW(...), !0)` a variadic one:
+
+```
+contains    [self:String, value:String]
+containsAll [self:String, values:String...]            variadic
+containsAny [self:String, values:String...]            variadic
+startsWith  [self:String, query:String]
+endsWith    [self:String, query:String]
+repeat      [self:String, count:Number]
+slice       [self:String, start:Number, end:Number?]   end optional
+split       [self:String, separator:String|RegExp, n:Number?]   n optional
+replace     [value:String, pattern:String|RegExp, replacement:String]
+list.slice  [self:List, start:Number, end:Number?]     end optional
+list.contains [self:List, value (text union)]
+```
+
+`replace`'s first parameter is really named `value` in Obsidian (it is the
+receiver), which is why the type error for a bad pattern does not name
+`self`. Twelve methods read the rule today: the nine String methods above,
+`list.contains`, `link.contains` and `list.slice`. Every other built-in still
+reads an absent argument as null (`stdlib::arg`), because its parameter table
+is not modelled yet; that is the rest of the argument-level ticket, and it is
+why `stdlib::arg` still exists with D12 named in its doc comment.
+
+**A null needle in a LIST is compared; in a LINK it answers null.** The two
+look identical and are not:
+
+* `list.contains` declares `UW("value","text",mW)` — the `text` union, whose
+  type list is `Any`. A null passes the type check, so the call compares it
+  instead of answering null. Its body is `operate:function(e,t){return
+  e.includes(t)}`, and `EW.prototype.includes` is
+  `for(...) if(mW.looseEquals(e,this.get(n))) return!0`, where `get` returns
+  the null singleton for a null entry and `NullValue.prototype.equals`
+  returns true. So `list([1, 2]).contains(null)` is `false` and
+  `list([null]).contains(null)` is **true**.
+* a Link is a String in Obsidian — the Link value class is declared with
+  `String` as its base, `t}(wW)` — and it registers only `linksTo` and
+  `asFile`, so `link.contains` resolves to String's method, whose `value`
+  parameter is a plain `String`. Null does not satisfy it, and because the
+  null was passed the checker returns the null value:
+  `link("Note").contains(null)` is **null**.
+
+**What this corrects in the ticket.** The card had the link case right and the
+list case half right: `list.contains(null)` must not answer null, but "false"
+is only the answer for a list that does not hold a null — the comparison is
+the list's own, and it matches a null entry. Ours answers with `any(item is
+null)` for the null needle, which is that same answer, so only the missing
+argument had to change there.
+
+(That a Link IS a String also means every String method is callable on a link
+in Obsidian. Ours registers only `linksTo`, `asFile` and the null-receiver
+fallback on `Link`, so `link("x").slice(1)` is a "not a method on Link" error
+here and answers in Obsidian. That is a separate divergence, not this one; it
+is recorded here only because it is the reason `link.contains` is governed by
+String's parameter table.)
+
+**The TypeScript tree is not repaired.** `ts-implementation` reads arguments
+the same way the old Rust code did (`args[0] ?? null` throughout
+`src/expr/stdlib.ts`), so it does not model the distinction either. As with
+D10, this is the Rust tree's repair; the TypeScript tree is a separate piece
+of work.
+
 ## Bugs found in this implementation
 
 Recorded separately from the divergences above, because these are defects we

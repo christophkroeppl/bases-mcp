@@ -591,6 +591,122 @@ fn string_methods_match_the_documented_set() {
     assert!(b("\"abc\".containsAny(\"z\", \"b\")"));
 }
 
+/// The argument rule, read out of Obsidian's Bases evaluator in
+/// `resources/obsidian.asar` (installer 1.12.4). Before a function runs, its
+/// call site checks each argument against the parameter table:
+///
+///     if(t.optional&&e===gW.value) T.push(null);
+///     else { if(!t.type.some(t=>e instanceof t)){ if(e===gW.value) return !1; throw ... } T.push(e) }
+///     ...
+///     if(x<S.length)for(h=x;h<S.length;h++) if(!S[h].optional&&!S[h].variadic) throw new Error(SK.msgErrorNotEnoughArguments({function:i}))
+///
+/// An argument that was never passed is therefore an error in a required
+/// position, and the message is Obsidian's own i18n string
+/// (`msgErrorNotEnoughArguments` in `i18n.js`): `Cannot call function "x", not
+/// enough arguments.` A null that WAS passed is not an error: it answers the
+/// whole call null in a required position, and it is absent in an optional one.
+#[test]
+fn a_missing_required_argument_is_not_enough_arguments() {
+    for (expr, function) in [
+        ("\"active\".contains()", "contains"),
+        ("\"active\".startsWith()", "startsWith"),
+        ("\"active\".endsWith()", "endsWith"),
+        ("\"active\".repeat()", "repeat"),
+        ("\"active\".slice()", "slice"),
+        ("\"active\".split()", "split"),
+        ("\"active\".replace()", "replace"),
+        // `replace`'s replacement is required in Obsidian, so this is the case
+        // that used to delete the match instead of refusing.
+        ("\"active\".replace(\"a\")", "replace"),
+        ("list([1, 2]).contains()", "contains"),
+        ("list([1, 2, 3]).slice()", "slice"),
+        ("link(\"Note\").contains()", "contains"),
+    ] {
+        let err = ev(expr).expect_err("a missing required argument must be an error");
+        assert_eq!(
+            err.display_message(),
+            format!("Cannot call function \"{function}\", not enough arguments. (construct: {function})"),
+            "{expr}"
+        );
+    }
+}
+
+/// A null that was passed in a required position answers null -- it is not an
+/// error and not a coerced value.
+#[test]
+fn a_null_required_argument_answers_null() {
+    for expr in [
+        "\"active\".contains(null)",
+        "\"active\".startsWith(null)",
+        "\"active\".endsWith(null)",
+        "\"active\".repeat(null)",
+        "\"active\".slice(null, 2)",
+        "\"active\".split(null)",
+        "\"active\".replace(null, \"x\")",
+        "\"active\".replace(\"a\", null)",
+        "\"active\".containsAll(\"a\", null)",
+        "\"active\".containsAny(null)",
+        "list([1, 2, 3]).slice(null, 2)",
+        // Link extends String in Obsidian, so this resolves to String's
+        // `contains` with its plain-String `value` parameter.
+        "link(\"Note\").contains(null)",
+    ] {
+        assert!(
+            matches!(
+                ev(expr).expect("a null argument is not an error"),
+                BasesValue::Null
+            ),
+            "{expr} answers null"
+        );
+    }
+}
+
+/// A null in an OPTIONAL position is absent, not null and not zero.
+///
+/// Obsidian's tables: `slice` is `[self, start, end]` with `end` optional, and
+/// `split` is `[self, separator, n]` with `n` optional.
+#[test]
+fn a_null_optional_argument_is_absent() {
+    assert_eq!(s("\"active\".slice(0, null)"), "active");
+    assert_eq!(n("\"a,b,c\".split(\",\", null).length"), 3.0);
+    assert_eq!(s("list([1, 2, 3]).slice(0, null).length"), "3");
+    // And the argument can be left out entirely, which is the same thing.
+    assert_eq!(s("\"active\".slice(0)"), "active");
+    assert_eq!(n("\"a,b,c\".split(\",\").length"), 3.0);
+}
+
+/// A variadic position is a sequence of required arguments, so a null anywhere
+/// in it answers the call null -- while zero arguments are allowed and mean
+/// `every`/`some` over an empty list.
+#[test]
+fn a_null_variadic_argument_answers_null() {
+    assert!(b("\"abc\".containsAll()"));
+    assert!(!b("\"abc\".containsAny()"));
+    for expr in [
+        "\"abc\".containsAll(null)",
+        "\"abc\".containsAll(\"a\", null)",
+        "\"abc\".containsAny(null)",
+        "\"abc\".containsAny(\"a\", null)",
+    ] {
+        assert!(
+            matches!(
+                ev(expr).expect("a null argument is not an error"),
+                BasesValue::Null
+            ),
+            "{expr} answers null"
+        );
+    }
+}
+
+/// `list.contains` takes the `text` union, which accepts null, so a null needle
+/// is compared like any other value rather than answering null. Its comparison
+/// is the list's own `includes`, which is why a list holding null matches.
+#[test]
+fn a_null_needle_in_a_list_is_compared_rather_than_answering_null() {
+    assert!(!b("list([1, 2]).contains(null)"));
+    assert!(b("list([null]).contains(null)"));
+}
+
 /// `contains` is CASE-INSENSITIVE, while `==`, `startsWith` and `endsWith`
 /// are case-SENSITIVE.
 ///
