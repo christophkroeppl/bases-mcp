@@ -306,7 +306,9 @@ protocol stream ends immediately.
 
 ## Obsidian CLI gates
 
-`just check` does not need Obsidian. `just parity` and `just check-all` do.
+`just check` does not need Obsidian. `just parity`, `just check-all` and
+`just record` do. `just corpus-check` and `just parity-recorded` do not: they
+read the recorded corpus, not the CLI.
 
 Parity is a **Cargo feature**, not a `--skip` filter:
 
@@ -421,6 +423,12 @@ construct and never registered in Obsidian.
 
 `.obsidian/` inside `test/vault` is Obsidian's own state and is gitignored.
 
+### The recorder
+
+`src/bin/parity-record.rs` (over `src/parity.rs`) records what the CLI answers
+for every view of every base, so a parity comparison can run where Obsidian
+cannot. Three verbs, and only the first needs the app:
+
 **The vault is pinned by a manifest, not only by a count.** `test/vault.manifest`
 records every file of the oracle with its SHA-256, and the gate compares the
 vault against it on every run:
@@ -441,18 +449,47 @@ bytes, so no line-ending normalisation can call a rewrite a match.
 The manifest changes only deliberately: `cargo test --test oracle_manifest --
 --ignored regenerate` rewrites it, and the diff is the review.
 
-**There is no recorded corpus yet.** `tests/parity.rs` calls the **live**
-Obsidian CLI and compares against it directly, so the parity oracle is the
-installed CLI on the machine running the tests — not a stored answer. The
-recipes that would manage a corpus are placeholders, and they say so instead of
-pretending:
-
 ```bash
-just record        # -> "parity-record is not built yet."   exit 1
-just corpus-check  # -> "There is no snapshot corpus ..."   exit 1
+just record          # record:  ask the LIVE CLI, store the answers
+just corpus-check    # check:   validate the store — no CLI, no vault
+just parity-recorded # compare: resolve the vault ourselves and compare with the store
 ```
 
-Neither refreshes anything. `test/parity/data/` does not exist. Recording a
-corpus — keyed by a digest of the results rather than by version, so several
-Obsidian versions that agree share one directory — is not built yet. Until it
-exists, the honest recipes are the ones above.
+`record` uses `vault=` plus the `path=`/`view=`/`format=json|md` spelling that
+`tests/parity.rs` also uses, and records every view of every base in the vault.
+`--vault`, `--vault-dir` and `--data-dir` override the defaults (`vault`,
+`test/vault`, `test/parity/data`).
+
+The store is `test/parity/data/<digest>/`, where the digest is a sha256 over
+every recorded answer. JSON is canonicalised (object keys sorted) before it is
+hashed, so two Obsidian versions that agree on values share one directory even
+if they spell key order differently; a version that answers differently gets its
+own. The CLI version goes in `manifest.json` for a human and is **not** the key.
+Each entry is stored twice — `<base>/<view>.json` for the rows and
+`<base>/<view>.md` for the rendering — and the manifest records a digest per
+file, so `check` can name the file that rotted rather than "the corpus".
+
+### Recording is the one step a script cannot do
+
+The CLI is a client to the running app: it answers for the vault the app has
+open, whichever checkout the command was issued from. `record` therefore reads
+the registered path for `vault=<name>` from Obsidian's own `obsidian.json`
+(`OBSIDIAN_CONFIG_DIR` overrides its location) and refuses unless that path is
+the `--vault-dir` it is enumerating. Otherwise the corpus would pair one vault's
+bases with another vault's answers and read as parity.
+
+It also hashes the vault before and after the run. Obsidian normalises `.base`
+YAML when it loads a vault, and `test/vault` is an oracle whose bytes are
+asserted; if a byte moved, `record` fails, names the files, and writes nothing.
+It cannot prevent the rewrite — only a human can decide to let Obsidian touch a
+vault — but it refuses to launder one into a corpus.
+
+### There is no recorded corpus yet
+
+`test/parity/data/` does not exist yet. Recording needs a human in the loop: the
+app must have *this checkout's* `test/vault` open, and opening a vault is a
+desktop act, not a command. Until someone records, `just corpus-check` exits 1
+and says so, and `just parity-recorded` has no corpus to compare against.
+`just check` does **not** chain `corpus-check`: a gate that cannot pass is not a
+gate. Once a corpus is committed, `corpus-check` and `parity-recorded` run in CI
+without Obsidian — that is the point of recording one.

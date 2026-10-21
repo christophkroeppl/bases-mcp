@@ -57,17 +57,13 @@ cli-vaults:
     @obsidian vaults
 
 record *ARGS:
-    @echo "parity-record is not built yet." >&2
-    @echo "This recipe needs a snapshot recorder that does not exist." >&2
-    @exit 1
+    cargo run --quiet --bin parity-record -- record {{ARGS}}
 
-parity-recorded:
-    cargo test --features parity --test parity
+parity-recorded *ARGS:
+    cargo run --quiet --bin parity-record -- compare {{ARGS}}
 
-corpus-check:
-    @echo "parity-record is not built yet." >&2
-    @echo "There is no snapshot corpus to check against test/parity/data/." >&2
-    @exit 1
+corpus-check *ARGS:
+    cargo run --quiet --bin parity-record -- check {{ARGS}}
 
 # -- housekeeping ------------------------------------------------------------
 
