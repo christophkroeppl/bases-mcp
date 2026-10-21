@@ -11,61 +11,129 @@
 //! are supported rather than picking a side. See `docs/divergences.md` in the
 //! TypeScript tree.
 
+use std::cmp::Ordering;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, FixedOffset};
 
 /// An instant, kept with its offset so `file.mtime` round-trips the way it was
 /// read rather than being silently normalised to UTC.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct BasesDate(pub DateTime<FixedOffset>);
+///
+/// `date_only` records that the source carried no time component. It is NOT
+/// part of the value's identity: `Eq`, `Ord` and `Hash` are written by hand over
+/// `at` alone, so a date-only value and a midnight datetime with the same
+/// instant sort together and compare equal as values, whatever the flag says.
+/// The flag is read where Obsidian's behaviour does depend on it — `values_equal`
+/// (a date-only value matches every datetime on its day) and `Display` (a
+/// date-only value renders `YYYY-MM-DD`). Deriving the traits would fold the
+/// flag into ordering, which the query pipeline's sort depends on staying
+/// instant-based.
+#[derive(Debug, Clone)]
+pub struct BasesDate {
+    /// The instant, in the offset it was read in.
+    pub at: DateTime<FixedOffset>,
+    /// Whether the source carried no time component.
+    pub date_only: bool,
+}
 
 impl BasesDate {
+    pub fn new(at: DateTime<FixedOffset>, date_only: bool) -> Self {
+        Self { at, date_only }
+    }
+
     pub fn year(&self) -> i32 {
         use chrono::Datelike;
-        self.0.year()
+        self.at.year()
     }
     pub fn month(&self) -> u32 {
         use chrono::Datelike;
-        self.0.month()
+        self.at.month()
     }
     pub fn day(&self) -> u32 {
         use chrono::Datelike;
-        self.0.day()
+        self.at.day()
     }
     pub fn hour(&self) -> u32 {
         use chrono::Timelike;
-        self.0.hour()
+        self.at.hour()
     }
     pub fn minute(&self) -> u32 {
         use chrono::Timelike;
-        self.0.minute()
+        self.at.minute()
     }
     pub fn second(&self) -> u32 {
         use chrono::Timelike;
-        self.0.second()
+        self.at.second()
     }
     pub fn millisecond(&self) -> u32 {
-        self.0.timestamp_subsec_millis()
+        self.at.timestamp_subsec_millis()
     }
 
     pub fn from_millis(millis: i64) -> Self {
         let dt = DateTime::from_timestamp_millis(millis)
             .unwrap_or_else(|| DateTime::from_timestamp_millis(0).expect("epoch is representable"));
-        Self(dt.fixed_offset())
+        Self {
+            at: dt.fixed_offset(),
+            date_only: false,
+        }
     }
 
     pub fn millis(&self) -> i64 {
-        self.0.timestamp_millis()
+        self.at.timestamp_millis()
+    }
+}
+
+/// Equality and ordering are over the INSTANT alone. Two dates with one instant
+/// are the same value however they were spelled; the date-only flag is a
+/// property of the spelling, read by `values_equal` and `Display` instead.
+impl PartialEq for BasesDate {
+    fn eq(&self, other: &Self) -> bool {
+        self.at == other.at
+    }
+}
+impl Eq for BasesDate {}
+impl PartialOrd for BasesDate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for BasesDate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.at.cmp(&other.at)
+    }
+}
+impl Hash for BasesDate {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.at.hash(state);
     }
 }
 
 impl fmt::Display for BasesDate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use chrono::Datelike;
+        use chrono::Timelike;
+        if self.date_only {
+            return write!(
+                f,
+                "{:04}-{:02}-{:02}",
+                self.at.year(),
+                self.at.month(),
+                self.at.day()
+            );
+        }
+        // The stored offset's own fields, with no suffix: Obsidian renders a
+        // datetime in the offset it was read in (`2026-01-05T17:30:00`, not
+        // `…+01:00`), and a coerced frontmatter datetime is read in local time.
         write!(
             f,
-            "{}",
-            self.0.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+            self.at.year(),
+            self.at.month(),
+            self.at.day(),
+            self.at.hour(),
+            self.at.minute(),
+            self.at.second()
         )
     }
 }
@@ -163,6 +231,16 @@ pub enum BasesValue {
         target: String,
         display: Option<String>,
         resolved: Option<String>,
+    },
+    /// An external URL.
+    ///
+    /// A distinct type from [`BasesValue::String`] because Obsidian's own
+    /// `isType` answers "url" for it, and because its method set is the
+    /// String one minus `asFile`. Measured against Obsidian 1.14.4 — see
+    /// `docs/divergences.md`.
+    Url {
+        /// The URL as written.
+        text: String,
     },
     /// A file, and the lazy accessors that need the vault. Only usable inside
     /// method calls.
@@ -328,6 +406,7 @@ impl BasesValue {
                 Some(d) => format!("[[{target}|{d}]]"),
                 None => format!("[[{target}]]"),
             },
+            BasesValue::Url { text } => text.clone(),
             BasesValue::File(f) => f.path.clone(),
             BasesValue::Namespace(map) => map
                 .iter()
@@ -418,6 +497,12 @@ pub fn compare(a: &BasesValue, b: &BasesValue) -> Option<std::cmp::Ordering> {
             _ => None,
         },
         (Link { .. }, Link { .. }) => Some(a.link_target().cmp(&b.link_target())),
+        // A URL compares as its own text, and against a STRING as that string:
+        // Obsidian's `url == "https://example.com"` is true, and the URL class
+        // inherits `String`'s equality. Measured against Obsidian 1.14.4.
+        (Url { text }, Url { text: other }) => Some(text.cmp(other)),
+        (Url { text }, String(s)) => Some(text.cmp(s)),
+        (String(s), Url { text }) => Some(s.cmp(text)),
         (File(x), File(y)) => Some(x.path.cmp(&y.path)),
         // Namespaces compare by rendered content: `BasesValue` is not `Ord`, and
         // a namespace only ever reaches here when a filter sorts on it.
@@ -467,6 +552,62 @@ pub fn values_equal(a: &BasesValue, b: &BasesValue) -> bool {
     match (a, b) {
         (BasesValue::Null, BasesValue::Null) => true,
         (BasesValue::Null, _) | (_, BasesValue::Null) => false,
+        // A Link equals a STRING when the string is its target or its
+        // `[[...]]` spelling: Obsidian's Link inherits String's equality and
+        // compares the text. Measured against Obsidian 1.14.4:
+        // `link == "Some Note"` and `link == "[[Some Note]]"` are both true.
+        (
+            BasesValue::Link {
+                target, display, ..
+            },
+            BasesValue::String(s),
+        )
+        | (
+            BasesValue::String(s),
+            BasesValue::Link {
+                target, display, ..
+            },
+        ) => {
+            s == target
+                || s == &format!("[[{target}]]")
+                || display
+                    .as_deref()
+                    .is_some_and(|alias| s == &format!("[[{target}|{alias}]]"))
+        }
+        // A Date equals a STRING that spells it, in any form Obsidian accepts.
+        // Measured against Obsidian 1.14.4: `d == "2026-01-05"` is true for a
+        // date-only `d`, and `d == "2026-01-05T17:30:00"` is true for a
+        // datetime `d` on the same day.
+        (BasesValue::Date(x), BasesValue::String(s))
+        | (BasesValue::String(s), BasesValue::Date(x)) => {
+            match crate::stdlib::parse_date_loose(s) {
+                Some(other) => dates_equal(x, &other),
+                None => false,
+            }
+        }
+        // Two dates, and a date against a datetime. See `dates_equal`.
+        (BasesValue::Date(x), BasesValue::Date(y)) => dates_equal(x, y),
         _ => compare(a, b) == Some(std::cmp::Ordering::Equal),
     }
+}
+
+/// Whether two dates are equal as Obsidian's `==` sees them.
+///
+/// A date-only value on EITHER side compares by LOCAL CALENDAR DAY, so a
+/// date-only `2026-01-05` equals every datetime on the 5th:
+/// `d_only == "2026-01-05T17:30:00"`, `d_only == d_dt` and
+/// `d_only == "2026-01-04T23:00:00Z"` (midnight local on the 5th) are all true.
+///
+/// Two datetimes compare by INSTANT, so the same local time at a different
+/// offset is not equal: `d_dt == "2026-01-05T16:30:00Z"` is true while
+/// `d_dt == "2026-01-05T16:30:00"` is false.
+///
+/// All measured against Obsidian 1.14.4. Note this is deliberately NOT
+/// [`compare`]: `==` and the sort operators are different questions here, and
+/// the sort has to stay instant-based.
+fn dates_equal(x: &BasesDate, y: &BasesDate) -> bool {
+    if x.date_only || y.date_only {
+        return (x.year(), x.month(), x.day()) == (y.year(), y.month(), y.day());
+    }
+    x.millis() == y.millis()
 }

@@ -210,6 +210,114 @@ fn grouped<'a>(result: &'a QueryResult, group_key: &str, path: &str, id: &str) -
 }
 
 // ---------------------------------------------------------------------------
+// The frontmatter coercion chain
+// ---------------------------------------------------------------------------
+//
+// Obsidian coerces a frontmatter STRING before it types anything, and the
+// order is Link -> URL -> Date. Every assertion below was measured against
+// Obsidian 1.14.4 with a live `base:query` probe; the observations are
+// recorded in `docs/divergences.md`.
+//
+// The fixture asks each value what it IS rather than asserting a value we
+// hard-coded, so the fixture answers the question instead of restating it.
+
+/// The coercion fixture, queried.
+fn coercion() -> QueryResult {
+    let vault = fixture_vault("coercion");
+    query(&vault, "Coercion.base", None, None)
+}
+
+/// The cell the coercion fixture holds for one formula.
+fn coerced(result: &QueryResult, formula: &str) -> String {
+    cell(result, "Notes/Values.md", &format!("formula.{formula}")).to_display_string()
+}
+
+#[test]
+fn a_quoted_date_becomes_a_date_and_a_datetime_becomes_a_date_too() {
+    let result = coercion();
+    assert_eq!(coerced(&result, "quoted_date_is_date"), "true");
+    assert_eq!(coerced(&result, "quoted_date_is_string"), "false");
+    // A date-only string is NOT a string: Obsidian types it as a Date.
+    assert_eq!(coerced(&result, "quoted_datetime_is_date"), "true");
+    // The space-separated form is a datetime too.
+    assert_eq!(coerced(&result, "datetime_space_is_date"), "true");
+}
+
+#[test]
+fn a_date_needs_two_digits_for_its_month_and_day_and_is_not_trimmed() {
+    let result = coercion();
+    // `"2026-1-5"` is not a date: Obsidian's matcher wants two digits.
+    assert_eq!(coerced(&result, "one_digit_is_date"), "false");
+    assert_eq!(coerced(&result, "one_digit_is_string"), "true");
+    // Nothing is trimmed, so a padded value is a plain string.
+    assert_eq!(coerced(&result, "padded_is_date"), "false");
+    assert_eq!(coerced(&result, "padded_is_string"), "true");
+}
+
+#[test]
+fn a_wikilink_becomes_a_link_and_a_markdown_link_does_not() {
+    let result = coercion();
+    assert_eq!(coerced(&result, "wikilink_is_link"), "true");
+    assert_eq!(coerced(&result, "wikilink_alias_is_link"), "true");
+    assert_eq!(coerced(&result, "wikilink_heading_is_link"), "true");
+    // A markdown link is NOT coerced, even when it names a note in the vault.
+    assert_eq!(coerced(&result, "markdown_link_is_link"), "false");
+    assert_eq!(coerced(&result, "markdown_link_is_string"), "true");
+}
+
+#[test]
+fn a_url_becomes_a_url_and_only_a_real_url_does() {
+    let result = coercion();
+    assert_eq!(coerced(&result, "url_is_url"), "true");
+    // A URL is a String too: Obsidian's `isType` walks the prototype chain.
+    assert_eq!(coerced(&result, "url_is_string"), "true");
+    // The scheme is case-insensitive.
+    assert_eq!(coerced(&result, "url_upper_is_url"), "true");
+    // No scheme is not a URL.
+    assert_eq!(coerced(&result, "url_no_scheme_is_url"), "false");
+    // A space disqualifies it.
+    assert_eq!(coerced(&result, "url_with_space_is_url"), "false");
+    // An empty host is not a URL.
+    assert_eq!(coerced(&result, "url_empty_host_is_url"), "false");
+    // Any scheme parses, `mailto:` included.
+    assert_eq!(coerced(&result, "mailto_is_url"), "true");
+}
+
+#[test]
+fn a_tag_is_never_a_link_even_when_it_is_spelled_like_one() {
+    let result = coercion();
+    // `tags` is exempt from the coercion chain, so a tag spelled `[[x]]` stays
+    // a string and never becomes a link.
+    assert_eq!(coerced(&result, "tags_are_strings"), "true");
+    assert_eq!(coerced(&result, "tags_are_not_links"), "false");
+}
+
+#[test]
+fn a_link_and_a_url_inherit_the_string_methods_and_work_on_their_own_text() {
+    let result = coercion();
+    // The link's methods operate on the TARGET, not on the `[[...]]` spelling:
+    // `[[Some Note]]` has a target of nine characters.
+    assert_eq!(coerced(&result, "wikilink_length"), "9");
+    assert_eq!(coerced(&result, "wikilink_contains"), "true");
+    assert_eq!(coerced(&result, "wikilink_slice"), "Some");
+    // A link compares equal to its target, and to its `[[...]]` spelling.
+    assert_eq!(coerced(&result, "wikilink_equals_target"), "true");
+    // ... and to its `[[...|alias]]` spelling, which is how it renders.
+    assert_eq!(coerced(&result, "wikilink_alias_equals_spelling"), "true");
+    // A URL's methods operate on the URL.
+    assert_eq!(coerced(&result, "url_contains"), "true");
+    assert_eq!(coerced(&result, "url_length"), "19");
+    assert_eq!(coerced(&result, "url_equals_text"), "true");
+}
+
+#[test]
+fn a_date_only_value_equals_the_datetime_on_the_same_day() {
+    let result = coercion();
+    assert_eq!(coerced(&result, "date_equals_day"), "true");
+    assert_eq!(coerced(&result, "datetime_equals_day"), "true");
+}
+
+// ---------------------------------------------------------------------------
 // The corpus itself
 // ---------------------------------------------------------------------------
 

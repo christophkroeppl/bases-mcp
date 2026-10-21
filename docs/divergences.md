@@ -300,6 +300,101 @@ server should be reachable at all.
 
 ---
 
+## D11 — The frontmatter coercion chain is Link → URL → Date
+
+| | |
+|---|---|
+| **Construct** | A frontmatter value written as a quoted date, a URL, or a wikilink |
+| **Ours** | A frontmatter STRING is coerced before it is typed, in the order **Link → URL → Date**: `[[Some Note]]` is a Link, `https://example.com` is a URL, `2026-01-05` is a Date. A markdown link (`[Business](Projects/Business)`) is **not** coerced and stays a String. The `tags` key is exempt, so a tag spelled `[[x]]` stays a String. |
+| **Obsidian** | The same, and this entry used to be a **divergence in our favour**: we coerced markdown links (Obsidian does not) and we coerced nothing else (Obsidian coerces dates and URLs). |
+| **Evidence** | `base:query` against Obsidian 1.14.4 (installer 1.12.4), with `isType` formulas asking each value what it is. Recorded in the table below. |
+| **verify-in-obsidian** | no — the CLI evidence is decisive, and it was taken against a live app |
+
+**What the CLI answered.** Every row was measured with
+`obsidian base:query path=… format=json` against a probe vault, asking each
+value `isType("…")`:
+
+| frontmatter | typed as | note |
+|---|---|---|
+| `"2026-01-05"` | **Date** | local midnight; `isType("string")` is **false** |
+| `2026-01-05` (unquoted) | **Date** | YAML parses it as a timestamp |
+| `"2026-01-05T17:30:00"` | **Date** | `.hour` → 17, local time |
+| `"2026-01-05 17:30"` | **Date** | the space separator is accepted |
+| `"2026-01-05T17:30:00+02:00"` | **Date** | rendered in LOCAL time → 16:30 here |
+| `"2026-01-05T17:30:00Z"` | **Date** | → 18:30 local |
+| `"2026-1-5"` | **String** | the month and the day must be two digits |
+| `"2026-13-45"` | **Date**, invalid | `.year` → NaN; it is not null |
+| `" 2026-01-05 "` | **String** | **nothing is trimmed** |
+| `"[[Some Note]]"` | **Link** | |
+| `"[[Some Note\|Alias]]"` | **Link** | split at the FIRST `\|` — the same split `extract_links` makes for a body link |
+| `"[[Some Note#Section]]"` | **Link** | the `#heading` stays IN the target |
+| `" [[Some Note]] "` | **String** | a leading space defeats the match |
+| `"https://example.com"` | **URL** | also `ftp:`, `mailto:`, `foo:bar`, `a:b` |
+| `"HTTPS://EXAMPLE.COM"` | **URL** | the scheme is case-insensitive |
+| `"example.com"` | **String** | no scheme |
+| `"//example.com"` | **String** | |
+| `"https://"` | **String** | an empty host is not a URL |
+| `"https://example.com/a b"` | **String** | **a space disqualifies it** |
+| `"file:///etc/passwd"` | **URL** | a `file:` URL is a URL |
+| `"C:/path"` | **URL** | a Windows path parses as a URL |
+| `"[Business](Projects/Business)"` | **String** | **a markdown link is never coerced** |
+| `"[Home](https://example.com)"` | **String** | |
+| `tags: ["[[Some Note]]"]` | **String** | the `tags` key is exempt |
+
+The URL test is exactly Obsidian's: **the string must contain no space, and
+`new URL(text)` must not throw.** The WHATWG parser decides the rest, so
+`https://` fails on an empty host while `mailto:a@b.com`, `foo:bar` and
+`file:///etc/passwd` all pass. Rust's `url` crate implements the same parser,
+and it agrees with the CLI on every row in the table above.
+
+The exemption is on the KEY NAME, at any depth and case-insensitively:
+`nested.tags` is exempt too, while `aliases: ["[[Some Note]]"]` is **coerced**
+to a Link. A SCALAR under `tags` is a one-element tag list rather than a plain
+String: `tags: "[[Some Note]]"` answers `isType("list")` and its `toString()`
+is `#[[Some Note]]`.
+
+**One deliberate difference.** Obsidian recognises an out-of-range date field
+(`"2026-13-45"`) and produces an INVALID Date whose `.year` is `NaN`. A
+`BasesDate` holds a real instant and cannot carry `NaN`, so we leave such a
+string a **String**. It is the only row in the table we do not match, and it is
+narrower than it sounds: every date Obsidian can represent, we coerce.
+
+**`isType` walks a prototype chain.** It does not compare one type name
+against one type name, so a value answers for every type it inherits from:
+
+| value | answers |
+|---|---|
+| URL | `url`, `string`, `any` |
+| Link | `link`, `string`, `any` |
+| Date | `date`, `any` — **not** `string` |
+| Number | `number`, `any` — **not** `string` |
+| everything else | its own type, and `any` |
+
+**A URL and a Link inherit the String method set**, and what they inherit
+operates on their own text: `link.length` is the length of the TARGET (9 for
+`[[Some Note]]`), not of the `[[…]]` spelling, and `link.contains("Some")`
+matches the target. A URL has **no** `asFile`, and a Date has **no** `asFile`
+either. Obsidian's Link class has no `target`, `display` or `path` member at
+all — asking for one is a hard error there, and ours keeps them, which is
+recorded below rather than here.
+
+**Dates are LOCAL, and a date-only value is local midnight.** Measured on a
+host at UTC+01:00, `number("2026-01-05")` is `1767567600000`, which is
+2026-01-05T00:00:00+01:00 — not UTC. The `date()` GLOBAL is read the same way,
+so `date("2026-01-05")` and a frontmatter `"2026-01-05"` are the same instant.
+
+**Equality follows from the types.** A Link equals its target, its `[[…]]`
+spelling and its `[[…|alias]]` spelling; a URL equals its text; a date-only
+value equals a datetime on the same day (`d == dt` is true).
+
+**Why the chain is in this order.** A `[[…]]` is checked first because it is
+the only form with brackets, and a URL before a date because `2026-01-05` is
+not a URL while `https://…` is not a date. The two are disjoint, so the order
+between them is unobservable — but the Link check must come first, because a
+URL may contain a `[[` in its path.
+
+---
+
 ## Behaviour probes that are NOT divergences
 
 Recorded because they were non-obvious and cost real probing time. We match
@@ -549,18 +644,19 @@ replaced the live fence with nothing.
 Fixed in the Rust port by pairing two inline regions on their pinned view alone.
 The TypeScript tree still has this bug; it is not yet repaired there.
 
-### Date cells lost their `dateOnly` flag
+### Date cells lost their `dateOnly` flag (fixed)
 
 `DateValue` carried a `dateOnly` flag, and `file.mtime` was built with it set, so
-`toString()` truncated to `YYYY-MM-DD`. `BasesDate` keeps a fixed offset and
-renders full RFC 3339.
+`toString()` truncated to `YYYY-MM-DD`. `BasesDate` had no flag at all and
+rendered full RFC 3339, so a date-only value lost its shape between the two
+trees.
 
-This is a deliberate consequence of the value type rather than a defect: a
-`dateOnly` flag on `BasesDate` would change its derived `Ord`, which the query
-pipeline's sort depends on. The effect is that a rendered date cell in the Rust
-port carries a time component the TypeScript dropped, which **will** show up in
-`format=md` byte parity once Obsidian is reachable. Recorded here so it is not
-discovered as a mystery later.
+`BasesDate` now carries the flag, and `Display` renders a date-only value as
+`YYYY-MM-DD` and a datetime as `YYYY-MM-DDTHH:mm:ss` — local, with no offset
+suffix, which is what Obsidian's `toString()` does (D11). The flag is
+deliberately **not** part of `Eq`/`Ord`/`Hash`: those are written by hand over
+the instant, so the query pipeline's sort still compares instants and a
+date-only value and a midnight datetime still sort together.
 
 ### `project` appended a stray newline (fixed in both)
 

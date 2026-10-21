@@ -1825,7 +1825,8 @@ fn stringified_renders_the_shapes_obsidian_stringifies() {
     let date = BasesValue::Date(BasesDate::from_millis(0));
     assert_eq!(
         stringified(Some(&date)).as_deref(),
-        Some("1970-01-01T00:00:00Z")
+        Some("1970-01-01T00:00:00"),
+        "a datetime renders local with no offset suffix, as Obsidian does"
     );
 
     let duration = BasesValue::Duration(Duration::from_millis(86_400_000));

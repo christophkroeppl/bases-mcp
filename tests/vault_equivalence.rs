@@ -1381,9 +1381,14 @@ fn links_to_is_false_because_backlinks_answers_the_same_question() {
 }
 
 #[test]
-fn a_markdown_link_property_becomes_a_link_and_a_url_property_does_not() {
-    // `[Business](Projects/Business)` is a note; `[Home](https://example.com)` is
-    // not, and coercing it would put a link object in a property that is a URL.
+fn a_markdown_link_property_stays_a_string_and_a_url_property_becomes_a_url() {
+    // Obsidian coerces a frontmatter STRING into a Link, a URL or a Date — in
+    // that order — and a MARKDOWN link is not among them. Measured against
+    // Obsidian 1.14.4: `[Business](Projects/Business)` stays a String, even
+    // though it names a note in the vault.
+    //
+    // The `[[...]]` form is the one that becomes a Link, and that is what
+    // makes `project.contains(link(this.file.name))` work at all.
     let vault = loaded();
     let mut data = BTreeMap::new();
     data.insert(
@@ -1406,15 +1411,18 @@ fn a_markdown_link_property_becomes_a_link_and_a_url_property_does_not() {
         "nested".to_string(),
         BasesValue::String("[[Tickets/Fix login redirect|Fix]]".to_string()),
     );
+    data.insert(
+        "url".to_string(),
+        BasesValue::String("https://example.com".to_string()),
+    );
 
     let coerced = coerce_frontmatter(&data, &vault);
+    // A markdown link is NOT coerced, whichever way it is written.
     assert_eq!(
         coerced.get("relative"),
-        Some(&BasesValue::Link {
-            target: "Projects/Business".to_string(),
-            display: Some("Business".to_string()),
-            resolved: None,
-        })
+        Some(&BasesValue::String(
+            "[Business](Projects/Business)".to_string()
+        ))
     );
     assert_eq!(
         coerced.get("absolute"),
@@ -1430,9 +1438,17 @@ fn a_markdown_link_property_becomes_a_link_and_a_url_property_does_not() {
         coerced.get("plain"),
         Some(&BasesValue::String("Just text".to_string()))
     );
-    // Resolved, because the index is already built. Coercion DURING a rebuild
-    // happens before the index exists and resolves nothing -- see
-    // `file_properties_are_the_coerced_frontmatter` for that half.
+    // A bare URL IS a URL — a distinct type, not a plain string.
+    assert_eq!(
+        coerced.get("url"),
+        Some(&BasesValue::Url {
+            text: "https://example.com".to_string()
+        })
+    );
+    // The `[[...]]` form is a Link. Resolved, because the index is already
+    // built. Coercion DURING a rebuild happens before the index exists and
+    // resolves nothing -- see `file_properties_are_the_coerced_frontmatter` for
+    // that half.
     assert_eq!(
         coerced.get("nested"),
         Some(&BasesValue::Link {

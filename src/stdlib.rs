@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{
-    DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveTime, TimeZone,
-    Timelike,
+    DateTime, Datelike, Days, Duration as ChronoDuration, FixedOffset, Local, NaiveDate, NaiveTime,
+    TimeZone, Timelike,
 };
 
 use crate::error::{BasesError, Result};
@@ -34,6 +34,8 @@ pub enum ReceiverType {
     Number,
     Boolean,
     Object,
+    /// An external URL.
+    Url,
 }
 
 impl ReceiverType {
@@ -51,6 +53,7 @@ impl ReceiverType {
             ReceiverType::Number => "Number",
             ReceiverType::Boolean => "Boolean",
             ReceiverType::Object => "Object",
+            ReceiverType::Url => "URL",
         }
     }
 
@@ -66,6 +69,43 @@ impl ReceiverType {
             ReceiverType::Number => "number",
             ReceiverType::Boolean => "boolean",
             ReceiverType::Object => "object",
+            ReceiverType::Url => "url",
+        }
+    }
+
+    /// The type chain `isType` walks.
+    ///
+    /// Obsidian's `isType` does not compare one type name against one type
+    /// name: it walks the value's prototype chain, so a URL answers "url",
+    /// "string" and "any", and a Link answers "link", "string" and "any".
+    /// Measured against Obsidian 1.14.4 — see `docs/divergences.md`.
+    ///
+    /// A Date answers "date" and "any" but NOT "string": the Date class does not
+    /// inherit from String.
+    pub fn is_type(&self, want: &str) -> bool {
+        let want = want.to_lowercase();
+        for candidate in self.type_chain() {
+            if candidate.to_lowercase() == want {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The types this one answers to, most specific first.
+    fn type_chain(&self) -> Vec<&'static str> {
+        match self {
+            ReceiverType::Url => vec!["url", "string", "any"],
+            ReceiverType::Link => vec!["link", "string", "any"],
+            ReceiverType::Date => vec!["date", "any"],
+            ReceiverType::Duration => vec!["duration", "any"],
+            ReceiverType::File => vec!["file", "any"],
+            ReceiverType::List => vec!["list", "any"],
+            ReceiverType::Number => vec!["number", "any"],
+            ReceiverType::Boolean => vec!["boolean", "any"],
+            ReceiverType::Object => vec!["object", "any"],
+            ReceiverType::String => vec!["string", "any"],
+            ReceiverType::Null => vec!["null", "any"],
         }
     }
 }
@@ -84,6 +124,7 @@ pub fn receiver_type(v: &BasesValue) -> ReceiverType {
         // A namespace is `note`, `formula` and `file.properties`. Those read as
         // an object, which is what makes `.keys()` and `.values()` work on them.
         BasesValue::Namespace(_) => ReceiverType::Object,
+        BasesValue::Url { .. } => ReceiverType::Url,
     }
 }
 
@@ -138,6 +179,22 @@ pub fn get_method(target: &BasesValue, name: &str) -> Option<&'static MethodDef>
         .get(receiver_type(target).key())
         .and_then(|by_name| by_name.get(name))
         .or_else(|| {
+            // A URL and a Link both INHERIT the String method set in Obsidian,
+            // so `url.contains(…)` and `link.slice(…)` are the String methods
+            // applied to the URL's text and to the LINK'S TARGET respectively.
+            // Measured against Obsidian 1.14.4.
+            let inherited = match target {
+                BasesValue::Url { text } => Some(text.as_str()),
+                BasesValue::Link { target, .. } => Some(target.as_str()),
+                _ => None,
+            };
+            inherited.and_then(|_| {
+                r.methods
+                    .get(ReceiverType::String.key())
+                    .and_then(|by_name| by_name.get(name))
+            })
+        })
+        .or_else(|| {
             r.methods
                 .get(ReceiverType::Null.key())
                 .and_then(|by_name| by_name.get(name))
@@ -152,9 +209,16 @@ fn arg(args: &[BasesValue], i: usize) -> BasesValue {
     args.get(i).cloned().unwrap_or(BasesValue::Null)
 }
 
+/// The text a String method operates on.
+///
+/// A URL's text is the URL, and a Link's is its TARGET — Obsidian inherits the
+/// String method set into both, and `link.contains("Some")` matches the target
+/// rather than the `[[…]]` spelling. Measured against Obsidian 1.14.4.
 fn as_str(v: &BasesValue, fn_name: &str) -> Result<String> {
     match v {
         BasesValue::String(s) => Ok(s.clone()),
+        BasesValue::Url { text } => Ok(text.clone()),
+        BasesValue::Link { target, .. } => Ok(target.clone()),
         other => Err(BasesError::new(format!(
             "Type error in \"{fn_name}\", parameter expects String, given {}",
             describe(other)
@@ -421,38 +485,202 @@ pub fn parse_duration_literal(input: &str) -> Result<Duration> {
 }
 
 /// Parse a date from the forms Obsidian accepts: `YYYY-MM-DD`,
-/// `YYYY-MM-DDTHH:mm:ss`, and the documented formula input `YYYY-MM-DD HH:mm:ss`.
+/// `YYYY-MM-DDTHH:mm[:ss[.fff]]`, and the documented `YYYY-MM-DD HH:mm:ss`.
 ///
-/// A date-only string has no time component, which matters because
-/// `today()` produces one and a filter comparing the two must not compare a
-/// midnight against an afternoon.
+/// This is the ONE parser behind both the frontmatter coercion chain and the
+/// `date()` global, because they are the same reader. Measured against Obsidian
+/// 1.14.4: `date("2026-01-05T24:00:00")` is `2026-01-06T00:00:00` and
+/// `number(date("2026-01-05"))` equals `number("2026-01-05")`.
+///
+/// The string is read **as written**. Nothing is trimmed, so `" 2026-01-05 "` is
+/// not a date; the month and the day must both be TWO digits, so `"2026-1-5"`
+/// is not a date either; and the separator is an uppercase `T` or a single
+/// space, so `2026-01-05t17:30:00` is not a date.
+///
+/// The instant is **LOCAL**. `number("2026-01-05")` is `1767567600000`, which is
+/// `2026-01-05T00:00:00+01:00` — local midnight, not UTC. The offset is resolved
+/// for the parsed date rather than for now, so a January date is not read with
+/// a summer offset. An explicit offset in the string decides the INSTANT, and
+/// the instant is then read back in local time — `"2026-01-05T17:30:00+02:00"`
+/// is 16:30 on a host at UTC+01:00, which is how Obsidian renders it.
+///
+/// The grammar is narrower than ISO 8601 and the failures are silent. Obsidian
+/// answers `isType("date")` true and then renders `0NaN-NaN-NaNTNaN:NaN:NaN`
+/// for an out-of-range field, which is a value this type cannot hold, so those
+/// strings stay Strings here instead. See `docs/divergences.md` D11.
 pub fn parse_date_loose(text: &str) -> Option<BasesDate> {
-    let trimmed = text.trim();
-    let (date_part, time_part) = match trimmed.split_once(['T', ' ']) {
+    let (date_part, time_part) = match text.split_once(['T', ' ']) {
         Some((d, t)) => (d, Some(t)),
-        None => (trimmed, None),
+        None => (text, None),
     };
-    let mut date_iter = date_part.split('-');
-    let year: i32 = date_iter.next()?.parse().ok()?;
-    let month: u32 = date_iter.next()?.parse().ok()?;
-    let day: u32 = date_iter.next()?.parse().ok()?;
-    if date_iter.next().is_some() {
+    let (year, month, day) = parse_ymd(date_part)?;
+    // The first of the month plus (day - 1) days is how a day past the end of
+    // the month lands: `"2026-02-30"` is 2026-03-02 and `"2026-06-31"` is
+    // 2026-07-01. Same arithmetic Obsidian performs; it is also why a month's
+    // own last day survives untouched (`"2026-01-31"` stays 31).
+    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1)?;
+    let date = first_of_month.checked_add_days(Days::new((day - 1) as u64))?;
+
+    let Some(time_part) = time_part else {
+        // A date-only value is LOCAL midnight, which is what `today()` makes
+        // too, and it is flagged so `==` compares it by calendar day.
+        return Local
+            .from_local_datetime(&date.and_time(NaiveTime::MIN))
+            .single()
+            .map(|at| BasesDate::new(at.fixed_offset(), true));
+    };
+
+    let (time_part, offset) = split_offset(time_part)?;
+    let (hour, minute, second, nanos) = parse_hms(time_part)?;
+    // Hour 24 is the one value that rolls over rather than failing: Obsidian
+    // accepts `T24:00:00` (as the next day at midnight) but not `T24:30:00`,
+    // and not a minute or a second past 59.
+    if hour == 24 {
+        if minute != 0 || second != 0 || nanos != 0 {
+            return None;
+        }
+    } else if hour > 24 || minute > 59 || second > 59 {
         return None;
     }
-    let naive_date = NaiveDate::from_ymd_opt(year, month, day)?;
-    let naive_time = match time_part {
-        None => NaiveTime::MIN,
-        Some(t) => {
-            let mut parts = t.split(':');
-            let h: u32 = parts.next()?.parse().ok()?;
-            let m: u32 = parts.next().unwrap_or("0").parse().ok()?;
-            let s: u32 = parts.next().unwrap_or("0").parse().ok()?;
-            NaiveTime::from_hms_opt(h, m, s)?
+    let naive = date
+        .and_time(NaiveTime::from_hms_nano_opt(0, minute, second, nanos)?)
+        .checked_add_signed(ChronoDuration::hours(i64::from(hour)))?;
+
+    match offset {
+        // An explicit offset decides the instant, and the instant is then read
+        // in LOCAL time — which is what Obsidian does, because its Date is a
+        // JavaScript `Date` with no offset of its own. Measured against 1.14.4:
+        // `"2026-01-05T17:30:00+02:00"` renders as 16:30 on a host at UTC+01:00.
+        Some(offset) => offset
+            .from_local_datetime(&naive)
+            .single()
+            .map(|at| BasesDate::new(at.with_timezone(&Local).fixed_offset(), false)),
+        None => Local
+            .from_local_datetime(&naive)
+            .single()
+            .map(|at| BasesDate::new(at.fixed_offset(), false)),
+    }
+}
+
+/// A `YYYY-MM-DD` date, or `None` when it is not one.
+///
+/// The year must be exactly FOUR digits — `"0000-01-05"` is a date, `"10000-01-05"`
+/// is not — and the month and the day must both be exactly TWO digits:
+/// Obsidian's own matcher insists on it, so `"2026-1-5"` and `"2026-01-5"` are
+/// plain strings rather than dates. Measured against Obsidian 1.14.4.
+fn parse_ymd(text: &str) -> Option<(i32, u32, u32)> {
+    let mut parts = text.split('-');
+    let year_text = parts.next()?;
+    if year_text.len() != 4 || !year_text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let month_text = parts.next()?;
+    let day_text = parts.next()?;
+    if parts.next().is_some() || month_text.len() != 2 || day_text.len() != 2 {
+        return None;
+    }
+    let year: i32 = year_text.parse().ok()?;
+    let month: u32 = month_text.parse().ok()?;
+    let day: u32 = day_text.parse().ok()?;
+    // A month past 12 or a day past 31 is not a date at all here. Obsidian
+    // recognises it and then produces an invalid one (see [`parse_date_loose`]).
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some((year, month, day))
+}
+
+/// A `HH:mm[:ss[.f…]]` time as `(hour, minute, second, nanos)`.
+///
+/// The minutes are MANDATORY — `"2026-01-05T17"` is not a date — and the hour,
+/// the minute and the second are all exactly TWO digits: `"T7:30"`, `"T17:5"`
+/// and `"T17:30:5"` are plain strings. A fractional second is kept because
+/// Obsidian keeps it (`"…T17:30:00.500"` is 500 ms later) but it is truncated to
+/// milliseconds, which is all a date carries.
+fn parse_hms(text: &str) -> Option<(u32, u32, u32, u32)> {
+    let (hour_text, rest) = text.split_once(':')?;
+    if hour_text.len() != 2 {
+        return None;
+    }
+    let (minute_text, seconds_text) = match rest.split_once(':') {
+        Some((m, s)) => (m, Some(s)),
+        None => (rest, None),
+    };
+    if minute_text.len() != 2 {
+        return None;
+    }
+    let (seconds_text, nanos) = match seconds_text {
+        None => ("0", 0),
+        Some(text) => {
+            // The seconds are two digits, and an optional fraction follows a
+            // dot. A plain `"00"` has no dot at all, so the fraction is only
+            // looked for when there is one.
+            match text.split_once('.') {
+                None => {
+                    if text.len() != 2 {
+                        return None;
+                    }
+                    (text, 0)
+                }
+                Some((s, frac)) => {
+                    if s.len() != 2 {
+                        return None;
+                    }
+                    let digits: String = frac.chars().take_while(char::is_ascii_digit).collect();
+                    if digits.is_empty() {
+                        return None;
+                    }
+                    // The fraction is scaled to NANOSECONDS: `.5` is half a
+                    // second, so the digits are padded out to nine. A date
+                    // exposes milliseconds, so the rest is not observable.
+                    let scaled = format!("{:0<9}", digits);
+                    (s, scaled.parse().ok()?)
+                }
+            }
         }
     };
-    let dt = naive_date.and_time(naive_time);
-    let offset = FixedOffset::east_opt(0)?;
-    Some(BasesDate(offset.from_local_datetime(&dt).single()?))
+    Some((
+        hour_text.parse().ok()?,
+        minute_text.parse().ok()?,
+        seconds_text.parse().ok()?,
+        nanos,
+    ))
+}
+
+/// Split a trailing UTC offset off a time, if it carries one.
+///
+/// The offset is `Z` or `±HH`, `±HH:MM` and `±HHMM`. Anything else fails the
+/// whole parse rather than being read as a local time, because Obsidian's own
+/// matcher accepts the shapes and rejects the values: `"…T17:30:00+2"` is not a
+/// date, while `"…T17:30:00+05:99"` is one and invalid.
+fn split_offset(time_part: &str) -> Option<(&str, Option<FixedOffset>)> {
+    if let Some(stripped) = time_part.strip_suffix('Z') {
+        return Some((stripped, FixedOffset::east_opt(0)));
+    }
+    // The offset starts at the sign, which cannot appear in a time otherwise.
+    // A time with NO sign carries no offset and is read as local time.
+    let Some(sign_at) = time_part.rfind(['+', '-']) else {
+        return Some((time_part, None));
+    };
+    let (time, offset_text) = time_part.split_at(sign_at);
+    let sign: i32 = if offset_text.starts_with('-') { -1 } else { 1 };
+    let digits = &offset_text[1..];
+    let (hours_text, minutes_text) = match digits.split_once(':') {
+        Some((h, m)) if h.len() == 2 && m.len() == 2 => (h, m),
+        _ if digits.len() == 4 => (&digits[..2], &digits[2..]),
+        // A bare `±HH` is accepted; a single digit, or three, is not a date.
+        _ if digits.len() == 2 => (digits, "0"),
+        _ => return None,
+    };
+    let hours: i32 = hours_text.parse().ok()?;
+    let minutes: i32 = minutes_text.parse().ok()?;
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+    Some((
+        time,
+        FixedOffset::east_opt(sign * (hours * 3600 + minutes * 60)),
+    ))
 }
 
 fn relative_time(d: &BasesDate, now_millis: i64) -> String {
@@ -502,7 +730,7 @@ pub fn format_date(d: &BasesDate, pattern: &str) -> String {
         "Saturday",
     ];
 
-    let dt = d.0;
+    let dt = d.at;
     let pad2 = |n: i64| -> String {
         if n < 10 {
             format!("0{n}")
@@ -692,14 +920,14 @@ fn g_date(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
         BasesValue::Date(d) => BasesValue::Date(d),
         BasesValue::String(s) => match parse_date_loose(&s) {
             Some(d) => BasesValue::Date(d),
-            None => {
-                return Err(BasesError::new(format!(
-                    "Invalid date format for left side of function \"date\": {s}"
-                ))
-                .with_construct("date"))
-            }
+            // An unparseable string is NULL, not an error. Measured against
+            // Obsidian 1.14.4: `date("hello")`, `date(" 2026-01-05 ")` and
+            // `date("2026-1-5")` all answer `isType("null")` true, while a
+            // genuinely wrong receiver still errors.
+            None => BasesValue::Null,
         },
         BasesValue::Number(n) => BasesValue::Date(BasesDate::from_millis(n as i64)),
+        BasesValue::Null => BasesValue::Null,
         other => {
             return Err(
                 BasesError::new(format!("date() cannot convert {}", describe(&other)))
@@ -827,13 +1055,15 @@ fn now_millis(ctx: &EvalContext) -> Result<i64> {
 
 fn start_of_day(now: i64) -> BasesDate {
     // Local midnight, matching the `dateOnly` semantics of a parsed date-only
-    // string. The offset comes from the snapshot's own timestamp.
+    // string: `today()` IS a date-only value, which is why it compares equal to
+    // every datetime on the same day. The offset comes from the snapshot's own
+    // timestamp, so the whole query agrees on one clock.
     let now_dt = DateTime::from_timestamp_millis(now).expect("snapshot mtime is representable");
     let offset = *now_dt.offset();
     let local_midnight = now_dt.naive_local().date().and_time(NaiveTime::MIN);
     match offset.from_local_datetime(&local_midnight).single() {
-        Some(midnight) => BasesDate(midnight.fixed_offset()),
-        None => BasesDate(now_dt.fixed_offset()),
+        Some(midnight) => BasesDate::new(midnight.fixed_offset(), true),
+        None => BasesDate::new(now_dt.fixed_offset(), true),
     }
 }
 
@@ -858,10 +1088,12 @@ fn m_is_truthy(
 }
 
 fn m_is_type(target: &BasesValue, args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
-    // Obsidian's `isType` takes a lowercase type name: "string", "number",
-    // "boolean", "list", "date", "duration", "link", "file", "object", "null".
+    // Obsidian's `isType` takes a type name and walks the value's prototype
+    // chain, so a URL answers "url", "string" and "any" alike. The names are
+    // "string", "number", "boolean", "list", "date", "duration", "link",
+    // "file", "object", "null", "url" and "any".
     let want = arg(args, 0).to_display_string();
-    Ok(BasesValue::Bool(receiver_type(target).key() == want))
+    Ok(BasesValue::Bool(receiver_type(target).is_type(&want)))
 }
 
 fn m_is_empty(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
@@ -876,6 +1108,8 @@ fn m_is_empty(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> 
         BasesValue::Date(_) | BasesValue::Link { .. } | BasesValue::File(_) => false,
         BasesValue::Duration(d) => d.millis == 0 && d.months == 0 && d.years == 0,
         BasesValue::Namespace(m) => m.is_empty(),
+        // A URL is never "empty": it has a scheme and a host by construction.
+        BasesValue::Url { text } => text.is_empty(),
     }))
 }
 
@@ -1106,8 +1340,17 @@ fn m_str_as_file(
     _args: &[BasesValue],
     ctx: &EvalContext,
 ) -> Result<BasesValue> {
-    let s = as_str(target, "asFile")?;
-    Ok(match (ctx.file.accessors.resolve)(&s) {
+    // Only a plain String has `asFile`. A URL has no such method at all
+    // (measured against Obsidian 1.14.4: `url.asFile()` is a hard error), and
+    // a Link has its own `asFile`, which resolves the link's target.
+    let BasesValue::String(s) = target else {
+        return Err(BasesError::new(format!(
+            "Type error in \"asFile\", parameter expects String, given {}",
+            describe(target)
+        ))
+        .with_construct("asFile"));
+    };
+    Ok(match (ctx.file.accessors.resolve)(s) {
         Some(f) => BasesValue::File(Arc::new(f)),
         None => BasesValue::Null,
     })
@@ -1402,9 +1645,9 @@ fn m_date_date(
     let d = as_date(target, "date")?;
     Ok(BasesValue::String(format!(
         "{:04}-{:02}-{:02}",
-        d.0.year(),
-        d.0.month(),
-        d.0.day()
+        d.year(),
+        d.month(),
+        d.day()
     )))
 }
 
@@ -1416,9 +1659,9 @@ fn m_date_time(
     let d = as_date(target, "time")?;
     Ok(BasesValue::String(format!(
         "{:02}:{:02}:{:02}",
-        d.0.hour(),
-        d.0.minute(),
-        d.0.second()
+        d.hour(),
+        d.minute(),
+        d.second()
     )))
 }
 
@@ -1463,8 +1706,16 @@ fn m_link_as_file(
     else {
         return Ok(BasesValue::Null);
     };
-    let path = resolved.as_deref().unwrap_or(target);
-    Ok(match (ctx.file.accessors.resolve)(path) {
+    // A link's target may carry a `#heading` or a `#^block` suffix, and
+    // Obsidian resolves the note the heading is IN: measured against 1.14.4,
+    // `[[Some Note#Section]].asFile().path` is `Notes/Some Note.md`. The suffix
+    // is stripped before resolution and kept in the target, so the link's own
+    // text still spells the heading.
+    let path = resolved.as_deref().map_or_else(
+        || target.split('#').next().unwrap_or(target).to_string(),
+        str::to_string,
+    );
+    Ok(match (ctx.file.accessors.resolve)(&path) {
         Some(f) => BasesValue::File(Arc::new(f)),
         None => BasesValue::Null,
     })
@@ -1982,16 +2233,17 @@ pub use crate::value::BasesDate as Date;
 
 /// Month arithmetic, exposed for the `+ "1M"` path in the evaluator.
 pub fn add_months(d: &BasesDate, months: i64) -> Result<BasesDate> {
-    let naive = d.0.naive_local();
+    let naive = d.at.naive_local();
     let Some(shifted) = naive.checked_add_months(chrono::Months::new(months as u32)) else {
         return Err(BasesError::new("Date arithmetic overflowed"));
     };
-    let Some(dt) = d.0.offset().from_local_datetime(&shifted).single() else {
+    let Some(dt) = d.at.offset().from_local_datetime(&shifted).single() else {
         return Err(BasesError::new(
             "Date arithmetic landed on an ambiguous local time",
         ));
     };
-    Ok(BasesDate(dt))
+    // Shifting months does not give the value a time it did not have.
+    Ok(BasesDate::new(dt, d.date_only))
 }
 
 /// Unused today, kept because a `relative` filter on a fixed clock is the one
