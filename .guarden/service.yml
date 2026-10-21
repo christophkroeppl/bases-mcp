@@ -6,8 +6,8 @@
 # `.guarden/.env.schema`.
 #
 # Security: the listener is network-accessible and unauthenticated, and the
-# network is assumed safe. That is a recorded, accepted gap — see
-# docs/BACKLOG-network-security.md and docs/divergences.md.
+# network is assumed safe. That is a recorded, accepted gap — see D9 in
+# docs/divergences.md.
 
 project: bases-mcp
 

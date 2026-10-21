@@ -262,11 +262,11 @@ link has an unauthenticated, network-reachable server that can read and write
 the vault it is scoped to, and no record of who called what.
 
 This is a **recorded, accepted gap**, not a claim that the work below is done.
-`docs/BACKLOG-network-security.md` carries the
-hardening list: authentication, authorization, rate limiting, TLS, input
-validation at the resolver boundary, and audit logging. It should be re-opened
-before this server is ever exposed beyond the network it is currently trusted
-on.
+The hardening list — authentication, authorization, rate limiting, TLS, input
+validation at the resolver boundary, and audit logging — is kept outside the
+branch, at the repository root, because working docs are not branch content.
+It should be re-opened before this server is ever exposed beyond the network
+it is currently trusted on.
 
 ### What is enforced anyway
 

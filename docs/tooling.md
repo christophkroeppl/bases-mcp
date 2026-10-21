@@ -402,5 +402,5 @@ just corpus-check  # -> "There is no snapshot corpus ..."   exit 1
 
 Neither refreshes anything. `test/parity/data/` does not exist. Recording a
 corpus — keyed by a digest of the results rather than by version, so several
-Obsidian versions that agree share one directory — is tracked as
-**STATUS.md item 2**. Until it exists, the honest recipes are the ones above.
+Obsidian versions that agree share one directory — is not built yet. Until it
+exists, the honest recipes are the ones above.
