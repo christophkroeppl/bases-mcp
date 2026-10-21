@@ -1,0 +1,93 @@
+# The frontmatter coercion chain, measured against Obsidian 1.14.4.
+#
+# Obsidian coerces a frontmatter STRING before it types anything, and the
+# order is Link -> URL -> Date. The formulas here ask each value what it IS,
+# so the fixture answers the question rather than asserting a value we
+# hard-coded.
+#
+# The filter keeps the query to the ONE note that carries the properties: a
+# formula that calls a method on a missing property is an error here, and an
+# error in one row must not hide the answers in another.
+#
+# `tags` is exempt: a tag is never a link, even when it is spelled `[[x]]`.
+filters:
+  and:
+    - file.name == "Values"
+formulas:
+  quoted_date_is_date: 'quoted_date.isType("date")'
+  quoted_date_is_string: 'quoted_date.isType("string")'
+  quoted_datetime_is_date: 'quoted_datetime.isType("date")'
+  datetime_space_is_date: 'datetime_space.isType("date")'
+  one_digit_is_date: 'one_digit.isType("date")'
+  one_digit_is_string: 'one_digit.isType("string")'
+  padded_is_date: 'padded.isType("date")'
+  padded_is_string: 'padded.isType("string")'
+  wikilink_is_link: 'wikilink.isType("link")'
+  wikilink_is_string: 'wikilink.isType("string")'
+  wikilink_alias_is_link: 'wikilink_alias.isType("link")'
+  wikilink_heading_is_link: 'wikilink_heading.isType("link")'
+  markdown_link_is_link: 'markdown_link.isType("link")'
+  markdown_link_is_string: 'markdown_link.isType("string")'
+  url_is_url: 'url.isType("url")'
+  url_is_string: 'url.isType("string")'
+  url_upper_is_url: 'url_upper.isType("url")'
+  url_no_scheme_is_url: 'url_no_scheme.isType("url")'
+  url_with_space_is_url: 'url_with_space.isType("url")'
+  url_empty_host_is_url: 'url_empty_host.isType("url")'
+  mailto_is_url: 'mailto.isType("url")'
+  plain_is_string: 'plain.isType("string")'
+  number_is_number: 'number.isType("number")'
+  tags_are_strings: 'tags[0].isType("string")'
+  tags_are_not_links: 'tags[0].isType("link")'
+  # The link's String methods operate on the TARGET, not on the `[[...]]`.
+  wikilink_length: 'wikilink.length'
+  wikilink_contains: 'wikilink.contains("Some")'
+  wikilink_slice: 'wikilink.slice(0, 4)'
+  wikilink_equals_target: 'wikilink == "Some Note"'
+  wikilink_alias_equals_spelling: 'wikilink_alias == "[[Some Note|Alias]]"'
+  url_contains: 'url.contains("example")'
+  url_length: 'url.length'
+  url_equals_text: 'url == "https://example.com"'
+  # A date-only value and a datetime on the same day are equal.
+  date_equals_day: 'quoted_date == "2026-01-05"'
+  datetime_equals_day: 'quoted_datetime == "2026-01-05"'
+views:
+  - type: table
+    name: Coercion
+    order:
+      - file.name
+      - formula.quoted_date_is_date
+      - formula.quoted_date_is_string
+      - formula.quoted_datetime_is_date
+      - formula.datetime_space_is_date
+      - formula.one_digit_is_date
+      - formula.one_digit_is_string
+      - formula.padded_is_date
+      - formula.padded_is_string
+      - formula.wikilink_is_link
+      - formula.wikilink_is_string
+      - formula.wikilink_alias_is_link
+      - formula.wikilink_heading_is_link
+      - formula.markdown_link_is_link
+      - formula.markdown_link_is_string
+      - formula.url_is_url
+      - formula.url_is_string
+      - formula.url_upper_is_url
+      - formula.url_no_scheme_is_url
+      - formula.url_with_space_is_url
+      - formula.url_empty_host_is_url
+      - formula.mailto_is_url
+      - formula.plain_is_string
+      - formula.number_is_number
+      - formula.tags_are_strings
+      - formula.tags_are_not_links
+      - formula.wikilink_length
+      - formula.wikilink_contains
+      - formula.wikilink_slice
+      - formula.wikilink_equals_target
+      - formula.wikilink_alias_equals_spelling
+      - formula.url_contains
+      - formula.url_length
+      - formula.url_equals_text
+      - formula.date_equals_day
+      - formula.datetime_equals_day

@@ -673,10 +673,13 @@ pub fn to_json_value(value: &BasesValue) -> Json {
                 resolved.clone().map_or(Json::Null, Json::String),
             ),
         ])),
-        // `dateOnly` is a TypeScript-only field; `BasesDate` deliberately has
-        // no such flag, which changes its derived `Ord` and so the query
-        // pipeline's sort. Recorded in `docs/divergences.md`.
+        // A date carries its instant; `dateOnly` is a property of the SPELLING
+        // and is not serialised, because the TypeScript's `dateOnly` field was
+        // never part of the JSON surface either. See `docs/divergences.md` D11.
         BasesValue::Date(date) => json!({ "ms": date.millis() }),
+        // A URL is a string-shaped value: its identity IS its text, so it
+        // serialises as the URL itself rather than as an object.
+        BasesValue::Url { text } => Json::String(text.clone()),
         BasesValue::Duration(duration) => {
             json!({ "ms": duration.millis, "months": duration.months, "years": duration.years })
         }

@@ -300,6 +300,155 @@ server should be reachable at all.
 
 ---
 
+## D10 — A method call on a null receiver answers null
+
+| | |
+|---|---|
+| **Construct** | A method call whose receiver is a property the note does not have, e.g. `type.contains("task")` against a note with no `type` |
+| **Ours** | The call answers **null**. A null filter expression is falsy, so the row is **dropped** and the query still answers. A non-null receiver with an unknown method still raises `Type error: "x" is not a method on <type>`. |
+| **Obsidian** | The same: the call answers null, the null filter is falsy, and the row is dropped. No error is reported. |
+| **Evidence** | Read out of Obsidian's own Bases evaluator, which ships in `resources/obsidian.asar` (installer 1.12.4 — the app `docs/divergences.md` records as 1.13.7). Its call site resolves the receiver, looks the method up on the receiver's type chain, and then: `if(s=r.getValue(e)||gW.value, !(t=KW.findForValue(s,i)) && s===gW.value) return gW.value`. `gW.value` is Obsidian's null singleton, so a null receiver with an unknown method answers the null value instead of raising. Obsidian's filter predicate is `this.getValue(e).isTruthy()`, and its null value answers `isTruthy()` false. Pinned by `tests/null_property.rs` (3 tests) and `tests/expr.rs` (`a_null_receiver_answers_null_whatever_the_method_is_called`, `the_universal_methods_answer_on_a_null_receiver`, `a_non_null_receiver_with_an_unknown_method_still_errors`). |
+| **verify-in-obsidian** | no — the rule is in Obsidian's shipped evaluator, not in the CLI's rendering of it |
+
+**Why this is a Divergence and not a bug.** Before this change the Rust
+implementation raised `Type error: "contains" is not a method on null`, which
+failed the WHOLE query rather than dropping one row. That was a divergence
+from Obsidian's behaviour, so it is recorded here rather than in the Bugs
+section below.
+
+**What the four universal methods do.** Obsidian registers exactly four
+methods that a null receiver resolves to — `isEmpty` on `Null` itself, and
+`toString`, `isTruthy` and `isType` on `Any`, which `Null` extends — and its
+lookup walks that prototype chain, so they are found before any fallback can
+answer for them. Ours registers the same four, and the null-receiver
+fallback sits behind them, so a null receiver reaches the same four methods
+and nothing else. Obsidian's null value also says `toString()` is the string
+`"null"` (not the empty string), which is why a null cell and a cell holding
+the text "null" are different things on the JSON surface.
+
+**The TypeScript tree has not been repaired.** `ts-implementation` still
+raises `Type error: "contains" is not a method on null` for the same
+construct, because its `getMethod` has no null-receiver fallback. Measured
+against `ts-implementation` at `9a86bd5`:
+
+```
+missingprop.contains("x")  -> ERROR Type error: "contains" is not a method on null
+missingprop.bogus()        -> ERROR Type error: "bogus" is not a method on null
+missingprop.toString()     -> ""          (Obsidian: "null")
+status.bogus()             -> ERROR Type error: "bogus" is not a method on String
+```
+
+So the two implementations no longer agree here, and this is the second
+recorded place where they differ on purpose — the first was line endings
+(D8). The TypeScript side is not touched by this change; it is a separate
+repair.
+
+**What is NOT settled by this entry.** Obsidian's rule for a null
+*argument* — as opposed to a null receiver — is a different question and is
+not recorded here. Obsidian's own evaluator distinguishes three cases (a
+null argument makes the whole call answer null; a null argument in an
+*optional* position is treated as absent; an argument that is simply
+**missing** from the call site is `Cannot call function "x", not enough
+arguments.`), and the Rust implementation does not yet model that
+distinction. It is tracked separately.
+
+
+## D11 — The frontmatter coercion chain is Link → URL → Date
+
+| | |
+|---|---|
+| **Construct** | A frontmatter value written as a quoted date, a URL, or a wikilink |
+| **Ours** | A frontmatter STRING is coerced before it is typed, in the order **Link → URL → Date**: `[[Some Note]]` is a Link, `https://example.com` is a URL, `2026-01-05` is a Date. A markdown link (`[Business](Projects/Business)`) is **not** coerced and stays a String. The `tags` key never reaches the chain: a tag is typed as a `Tag` when the frontmatter is read, which is why a tag spelled `[[x]]` stays a tag. |
+| **Obsidian** | The same, and this entry used to be a **divergence in our favour**: we coerced markdown links (Obsidian does not) and we coerced nothing else (Obsidian coerces dates and URLs). |
+| **Evidence** | `base:query` against Obsidian 1.14.4 (installer 1.12.4), with `isType` formulas asking each value what it is. Recorded in the table below. |
+| **verify-in-obsidian** | no — the CLI evidence is decisive, and it was taken against a live app |
+
+**What the CLI answered.** Every row was measured with
+`obsidian base:query path=… format=json` against a probe vault, asking each
+value `isType("…")`:
+
+| frontmatter | typed as | note |
+|---|---|---|
+| `"2026-01-05"` | **Date** | local midnight; `isType("string")` is **false** |
+| `2026-01-05` (unquoted) | **Date** | YAML parses it as a timestamp |
+| `"2026-01-05T17:30:00"` | **Date** | `.hour` → 17, local time |
+| `"2026-01-05 17:30"` | **Date** | the space separator is accepted |
+| `"2026-01-05T17:30:00+02:00"` | **Date** | rendered in LOCAL time → 16:30 here |
+| `"2026-01-05T17:30:00Z"` | **Date** | → 18:30 local |
+| `"2026-1-5"` | **String** | the month and the day must be two digits |
+| `"2026-13-45"` | **Date**, invalid | `.year` → NaN; it is not null |
+| `" 2026-01-05 "` | **String** | **nothing is trimmed** |
+| `"[[Some Note]]"` | **Link** | |
+| `"[[Some Note\|Alias]]"` | **Link** | split at the FIRST `\|` — the same split `extract_links` makes for a body link |
+| `"[[Some Note#Section]]"` | **Link** | the `#heading` stays IN the target |
+| `" [[Some Note]] "` | **String** | a leading space defeats the match |
+| `"https://example.com"` | **URL** | also `ftp:`, `mailto:`, `foo:bar`, `a:b` |
+| `"HTTPS://EXAMPLE.COM"` | **URL** | the scheme is case-insensitive |
+| `"example.com"` | **String** | no scheme |
+| `"//example.com"` | **String** | |
+| `"https://"` | **String** | an empty host is not a URL |
+| `"https://example.com/a b"` | **String** | **a space disqualifies it** |
+| `"file:///etc/passwd"` | **URL** | a `file:` URL is a URL |
+| `"C:/path"` | **URL** | a Windows path parses as a URL |
+| `"[Business](Projects/Business)"` | **String** | **a markdown link is never coerced** |
+| `"[Home](https://example.com)"` | **String** | |
+| `tags: ["[[Some Note]]"]` | **Tag** | `tags` is typed before the chain; a tag is string-like, never a Link |
+
+The URL test is exactly Obsidian's: **the string must contain no space, and
+`new URL(text)` must not throw.** The WHATWG parser decides the rest, so
+`https://` fails on an empty host while `mailto:a@b.com`, `foo:bar` and
+`file:///etc/passwd` all pass. Rust's `url` crate implements the same parser,
+and it agrees with the CLI on every row in the table above.
+
+`tags` never reaches the chain: the YAML reader types it first. A `tags`
+property that is a string, or a list of strings, becomes a **tag list** — a
+`Tag`, which is string-like and carries a forced `#` — at any depth and
+case-insensitively (the rule is on the key name). A mixed list is left exactly
+as written, so its strings stay Strings. `aliases: ["[[Some Note]]"]` is not
+`tags`, so it IS coerced, to a Link.
+
+**One deliberate difference.** Obsidian recognises an out-of-range date field
+(`"2026-13-45"`) and produces an INVALID Date whose `.year` is `NaN`. A
+`BasesDate` holds a real instant and cannot carry `NaN`, so we leave such a
+string a **String**. It is the only row in the table we do not match, and it is
+narrower than it sounds: every date Obsidian can represent, we coerce.
+
+**`isType` walks a prototype chain.** It does not compare one type name
+against one type name, so a value answers for every type it inherits from:
+
+| value | answers |
+|---|---|
+| URL | `url`, `string`, `any` |
+| Link | `link`, `string`, `any` |
+| Date | `date`, `any` — **not** `string` |
+| Number | `number`, `any` — **not** `string` |
+| everything else | its own type, and `any` |
+
+**A URL and a Link inherit the String method set**, and what they inherit
+operates on their own text: `link.length` is the length of the TARGET (9 for
+`[[Some Note]]`), not of the `[[…]]` spelling, and `link.contains("Some")`
+matches the target. A URL has **no** `asFile`, and a Date has **no** `asFile`
+either. Obsidian's Link class has no `target`, `display` or `path` member at
+all — asking for one is a hard error there, and ours keeps them, which is
+recorded below rather than here.
+
+**Dates are LOCAL, and a date-only value is local midnight.** Measured on a
+host at UTC+01:00, `number("2026-01-05")` is `1767567600000`, which is
+2026-01-05T00:00:00+01:00 — not UTC. The `date()` GLOBAL is read the same way,
+so `date("2026-01-05")` and a frontmatter `"2026-01-05"` are the same instant.
+
+**Equality follows from the types.** A Link equals its target, its `[[…]]`
+spelling and its `[[…|alias]]` spelling; a URL equals its text; a date-only
+value equals a datetime on the same day (`d == dt` is true).
+
+**Why the chain is in this order.** A `[[…]]` is checked first because it is
+the only form with brackets, and a URL before a date because `2026-01-05` is
+not a URL while `https://…` is not a date. The two are disjoint, so the order
+between them is unobservable — but the Link check must come first, because a
+URL may contain a `[[` in its path.
+
+---
+
 ## Behaviour probes that are NOT divergences
 
 Recorded because they were non-obvious and cost real probing time. We match
@@ -516,57 +665,7 @@ one through `add_note_to_base` is refused.
 
 ---
 
-## D10 — A method call on a null receiver answers null
-
-| | |
-|---|---|
-| **Construct** | A method call whose receiver is a property the note does not have, e.g. `type.contains("task")` against a note with no `type` |
-| **Ours** | The call answers **null**. A null filter expression is falsy, so the row is **dropped** and the query still answers. A non-null receiver with an unknown method still raises `Type error: "x" is not a method on <type>`. |
-| **Obsidian** | The same: the call answers null, the null filter is falsy, and the row is dropped. No error is reported. |
-| **Evidence** | Read out of Obsidian's own Bases evaluator, which ships in `resources/obsidian.asar` (installer 1.12.4 — the app `docs/divergences.md` records as 1.13.7). Its call site resolves the receiver, looks the method up on the receiver's type chain, and then: `if(s=r.getValue(e)||gW.value, !(t=KW.findForValue(s,i)) && s===gW.value) return gW.value`. `gW.value` is Obsidian's null singleton, so a null receiver with an unknown method answers the null value instead of raising. Obsidian's filter predicate is `this.getValue(e).isTruthy()`, and its null value answers `isTruthy()` false. Pinned by `tests/null_property.rs` (3 tests) and `tests/expr.rs` (`a_null_receiver_answers_null_whatever_the_method_is_called`, `the_universal_methods_answer_on_a_null_receiver`, `a_non_null_receiver_with_an_unknown_method_still_errors`). |
-| **verify-in-obsidian** | no — the rule is in Obsidian's shipped evaluator, not in the CLI's rendering of it |
-
-**Why this is a Divergence and not a bug.** Before this change the Rust
-implementation raised `Type error: "contains" is not a method on null`, which
-failed the WHOLE query rather than dropping one row. That was a divergence
-from Obsidian's behaviour, so it is recorded here rather than in the Bugs
-section below.
-
-**What the four universal methods do.** Obsidian registers exactly four
-methods that a null receiver resolves to — `isEmpty` on `Null` itself, and
-`toString`, `isTruthy` and `isType` on `Any`, which `Null` extends — and its
-lookup walks that prototype chain, so they are found before any fallback can
-answer for them. Ours registers the same four, and the null-receiver
-fallback sits behind them, so a null receiver reaches the same four methods
-and nothing else. Obsidian's null value also says `toString()` is the string
-`"null"` (not the empty string), which is why a null cell and a cell holding
-the text "null" are different things on the JSON surface.
-
-**The TypeScript tree has not been repaired.** `ts-implementation` still
-raises `Type error: "contains" is not a method on null` for the same
-construct, because its `getMethod` has no null-receiver fallback. Measured
-against `ts-implementation` at `9a86bd5`:
-
-```
-missingprop.contains("x")  -> ERROR Type error: "contains" is not a method on null
-missingprop.bogus()        -> ERROR Type error: "bogus" is not a method on null
-missingprop.toString()     -> ""          (Obsidian: "null")
-status.bogus()             -> ERROR Type error: "bogus" is not a method on String
-```
-
-So the two implementations no longer agree here, and this is the second
-recorded place where they differ on purpose — the first was line endings
-(D8). The TypeScript side is not touched by this change; it is a separate
-repair.
-
-**What is NOT settled by this entry.** Obsidian's rule for a null
-*argument* — as opposed to a null receiver — is a different question, and it
-is recorded separately as **D11**. That entry now holds: a null argument in a
-required position makes the call answer null, a null in an optional position
-is absent, and an argument that is simply **missing** from the call site is
-`Cannot call function "x", not enough arguments.`
-
-## D11 — A missing argument is an error, but a null argument answers null
+## D12 — A missing argument is an error, but a null argument answers null
 
 | | |
 |---|---|
@@ -656,7 +755,7 @@ receiver), which is why the type error for a bad pattern does not name
 `list.contains`, `link.contains` and `list.slice`. Every other built-in still
 reads an absent argument as null (`stdlib::arg`), because its parameter table
 is not modelled yet; that is the rest of the argument-level ticket, and it is
-why `stdlib::arg` still exists with D11 named in its doc comment.
+why `stdlib::arg` still exists with D12 named in its doc comment.
 
 **A null needle in a LIST is compared; in a LINK it answers null.** The two
 look identical and are not:
@@ -826,18 +925,19 @@ replaced the live fence with nothing.
 Fixed in the Rust port by pairing two inline regions on their pinned view alone.
 The TypeScript tree still has this bug; it is not yet repaired there.
 
-### Date cells lost their `dateOnly` flag
+### Date cells lost their `dateOnly` flag (fixed)
 
 `DateValue` carried a `dateOnly` flag, and `file.mtime` was built with it set, so
-`toString()` truncated to `YYYY-MM-DD`. `BasesDate` keeps a fixed offset and
-renders full RFC 3339.
+`toString()` truncated to `YYYY-MM-DD`. `BasesDate` had no flag at all and
+rendered full RFC 3339, so a date-only value lost its shape between the two
+trees.
 
-This is a deliberate consequence of the value type rather than a defect: a
-`dateOnly` flag on `BasesDate` would change its derived `Ord`, which the query
-pipeline's sort depends on. The effect is that a rendered date cell in the Rust
-port carries a time component the TypeScript dropped, which **will** show up in
-`format=md` byte parity once Obsidian is reachable. Recorded here so it is not
-discovered as a mystery later.
+`BasesDate` now carries the flag, and `Display` renders a date-only value as
+`YYYY-MM-DD` and a datetime as `YYYY-MM-DDTHH:mm:ss` — local, with no offset
+suffix, which is what Obsidian's `toString()` does (D11). The flag is
+deliberately **not** part of `Eq`/`Ord`/`Hash`: those are written by hand over
+the instant, so the query pipeline's sort still compares instants and a
+date-only value and a midnight datetime still sort together.
 
 ### `project` appended a stray newline (fixed in both)
 
