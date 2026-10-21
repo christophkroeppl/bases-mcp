@@ -380,6 +380,38 @@ file and confirm it is reformatted on disk. To prove an LSP is attached,
 introduce a real type error and confirm it is reported — `[]` reads as clean
 whether or not the server is working.
 
+## Adding a test file
+
+A new file under `tests/` is its own crate, and `tests/common/mod.rs` is
+compiled into every crate that declares `mod common;`. Each of those crates
+uses a different subset of the shared helpers, so a helper used by one is
+dead code in the others — and clippy runs with `-D warnings`.
+
+That used to mean the global gate broke the moment a new file declared
+`mod common;` and used only part of it: 33 dead-code errors, over helpers the
+new file never touched. The `dead_code` allow now lives **inside**
+`tests/common/mod.rs`, so it travels with the module into every crate that
+includes it, and a new file can use whatever subset it likes:
+
+```rust
+mod common;
+
+use common::vault_dir;   // the only helper this file needs
+```
+
+Two things the allow deliberately does NOT do:
+
+- It does not reach the crate that *includes* the module. A suite's own dead
+  function is still reported, because that is a fault in the suite.
+- It does not hide a helper that **no** suite uses. That is real dead code,
+  and `tests/common_subset.rs` fails the gate over it. The rule is blunt on
+  purpose: a helper counts as used when a suite mentions it or a sibling in
+  the module mentions it, and it under-reports rather than over-reports, so
+  it never fails the gate over a helper that is alive.
+
+So: a new test file may use any subset of the shared helpers, and a new
+helper in `tests/common/` must be used by some suite.
+
 ## Corpus
 
 `test/vault` is the Testing vault: the parity oracle, identical on every branch,

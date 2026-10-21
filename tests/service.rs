@@ -18,8 +18,9 @@
 //! filter inversion are read-only by construction, since nothing in these tests
 //! commits a note into them.
 
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::path::{Path, PathBuf};

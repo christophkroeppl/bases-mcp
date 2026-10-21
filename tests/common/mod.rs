@@ -26,6 +26,23 @@
 // suite wants the fake server. What one of them does not touch would otherwise be
 // a dead-code warning in that crate, which is how people learn to ignore
 // dead-code warnings.
+//
+// The `allow` therefore lives HERE, in the module's own file, and not on each
+// `mod common;` declaration. The declaration is in the CALLER's file, so an
+// `allow` written there is a thing every caller has to remember: the caller
+// that forgot it made the whole gate fail for everybody, over a helper it never
+// used and never would. An attribute inside the module cannot be forgotten,
+// because the module carries it with it into every crate that includes it.
+//
+// Its scope is this module and its children, and nothing else. Dead code in
+// the crate that INCLUDES this one is still reported: a helper nobody calls is
+// a fact about this file, and a suite's own unused function is still a fault in
+// that suite. `tests/common_subset.rs` is the canary that keeps both true --
+// it includes this module and uses one helper out of the whole surface, so
+// removing the `allow` fails the gate, and it would also fail if the `allow`
+// ever widened past this module.
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 
 use bases_mcp::vault::{FsVaultSource, VaultSource};
