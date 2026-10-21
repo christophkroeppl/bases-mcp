@@ -46,7 +46,6 @@
 //! never touched; the oracle stays at exactly [`CORPUS_SIZE`] files.
 
 // Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
 mod common;
 
 use std::path::Path;
