@@ -1032,16 +1032,14 @@ fn g_duration(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
 fn g_today(_args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
     // Taken from the same clock as `now()` so a single query cannot straddle
     // midnight and produce a `today` later than a `now`.
-    Ok(BasesValue::Date(
-        start_of_day(&(ctx.file.accessors.mtime)()),
-    ))
+    Ok(BasesValue::Date(start_of_day(&ctx.clock)))
 }
 
 fn g_now(_args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
-    // The accessor's own value, not a rebuild from millis: rebuilding
+    // The context's own instant, not a rebuild from millis: rebuilding
     // re-bodies the instant to UTC, and then `now()`'s calendar fields and
     // `today()`'s disagree for the hours where the local and UTC dates differ.
-    Ok(BasesValue::Date((ctx.file.accessors.mtime)()))
+    Ok(BasesValue::Date(ctx.clock.clone()))
 }
 
 fn g_random(_args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
@@ -1127,13 +1125,14 @@ fn g_file(args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
     }
 }
 
-/// The clock, taken once per query.
+/// The clock, taken once per query and carried on the context.
 ///
-/// A query must be a pure function of the vault snapshot; reading the wall clock
-/// per row would let two rows of the same view disagree about `now()`. The
-/// snapshot's mtime is used as the reference so the whole query is reproducible.
+/// NOT `file.mtime`: a note's modification time is a property of the note. Using
+/// it here made `today()` the day the CURRENT ROW was last edited, so two rows
+/// could disagree about the day and `file.mtime == today()` was true by
+/// construction. [`EvalContext::clock`] is the one instant the whole query sees.
 fn now_millis(ctx: &EvalContext) -> Result<i64> {
-    Ok((ctx.file.accessors.mtime)().millis())
+    Ok(ctx.clock.millis())
 }
 
 fn start_of_day(clock: &BasesDate) -> BasesDate {

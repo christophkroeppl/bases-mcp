@@ -40,7 +40,7 @@ use crate::ast::{Literal, Node, NodeKind};
 use crate::base::{order_formulas, resolve_host_note, select_view, BaseFile, BaseView, FilterNode};
 use crate::depth::{Depth, FILTER};
 use crate::error::{BasesError, Result};
-use crate::evaluator::{evaluate, EvalContext, RESERVED};
+use crate::evaluator::{evaluate, query_clock, EvalContext, RESERVED};
 use crate::note::parse_note_with_embeds;
 use crate::parser::{parse, try_parse};
 use crate::service::Resolver;
@@ -720,7 +720,7 @@ fn draft_eval_context(
         ))
         .with_note(path));
     };
-    let mut ctx = EvalContext::new(vault.file_value(path));
+    let mut ctx = EvalContext::new(vault.file_value(path), query_clock());
     ctx.note = (*record.frontmatter).clone();
     // The same resolver the query pipeline uses, so a bad host note is refused
     // in one voice here and in `resolve_base` rather than two.
