@@ -276,6 +276,10 @@ pub fn read_member(target: &BasesValue, name: &str) -> BasesValue {
             display,
             resolved,
         } => match name {
+            // These three are OURS, not Obsidian's: Obsidian's Link class has
+            // no `target`, `display` or `path` member, and asking for one is a
+            // hard error there. They are kept because they are what the JSON
+            // surface exposes and what the equality rule needs.
             "target" => BasesValue::String(t.clone()),
             "display" => match display {
                 Some(d) => BasesValue::String(d.clone()),
@@ -285,6 +289,10 @@ pub fn read_member(target: &BasesValue, name: &str) -> BasesValue {
                 Some(p) => BasesValue::String(p.clone()),
                 None => BasesValue::Null,
             },
+            // `length` is inherited from String, and counts the TARGET's code
+            // units rather than the `[[…]]` spelling. Measured against
+            // Obsidian 1.14.4: `link.length` is 9 for `[[Some Note]]`.
+            "length" => BasesValue::Number(t.encode_utf16().count() as f64),
             _ => BasesValue::Null,
         },
         BasesValue::Date(d) => match name {
@@ -319,6 +327,15 @@ pub fn read_member(target: &BasesValue, name: &str) -> BasesValue {
                 // Obsidian counts UTF-16 code units here, so an emoji counts as
                 // two. Probed against 1.13.7.
                 BasesValue::Number(s.encode_utf16().count() as f64)
+            } else {
+                BasesValue::Null
+            }
+        }
+        // A URL inherits the String members, so `url.length` is the length of
+        // the URL. Measured against Obsidian 1.14.4.
+        BasesValue::Url { text } => {
+            if name == "length" {
+                BasesValue::Number(text.encode_utf16().count() as f64)
             } else {
                 BasesValue::Null
             }
@@ -749,6 +766,17 @@ fn evaluate_index(
     Ok(index_into(&target, &idx))
 }
 
+/// A link's target, for the places that index or slice it.
+///
+/// Obsidian inherits the String behaviour into a Link, and what it inherits
+/// operates on the TARGET rather than on the `[[…]]` spelling.
+fn link_text(value: &BasesValue) -> String {
+    match value {
+        BasesValue::Link { target, .. } => target.clone(),
+        other => other.to_display_string(),
+    }
+}
+
 fn index_into(target: &BasesValue, index: &BasesValue) -> BasesValue {
     match target {
         BasesValue::List(items) => {
@@ -770,8 +798,18 @@ fn index_into(target: &BasesValue, index: &BasesValue) -> BasesValue {
                 None => BasesValue::Null,
             }
         }
+        // A URL indexes like the string it is. Measured against Obsidian
+        // 1.14.4: `url[0]` is the URL's first character.
+        BasesValue::Url { text } => index_into(&BasesValue::String(text.clone()), index),
+        // A Link indexes like its TARGET by number, and by member by name.
+        // Measured against Obsidian 1.14.4: `link[0]` is the target's first
+        // character, while `link["target"]` is a member read.
+        BasesValue::Link { .. } => match index {
+            BasesValue::String(name) => read_member(target, name),
+            other => index_into(&BasesValue::String(link_text(target)), other),
+        },
         // `file["name"]` is a documented spelling of `file.name`.
-        BasesValue::File(_) | BasesValue::Link { .. } | BasesValue::Namespace(_) => match index {
+        BasesValue::File(_) | BasesValue::Namespace(_) => match index {
             BasesValue::String(name) => read_member(target, name),
             _ => BasesValue::Null,
         },
