@@ -48,6 +48,30 @@ the bytes the WebDAV server actually stored. A write that reports success
 without landing anywhere fails that suite, which is the failure a read-only
 matrix cannot see.
 
+The other axis is **deployment**: the same binary, native or in the image.
+`tests/container_matrix.rs` covers the four container cells the same way — the
+real image, the real binary inside it, the real transports, and a far-end
+check on every write. It needs a built image, so it is opt-in:
+
+```bash
+podman --runtime /path/to/crun build -f Containerfile -t localhost/bases-mcp:latest .
+BASES_MCP_CONTAINER_IMAGE=localhost/bases-mcp:latest \
+BASES_MCP_CONTAINER_RUNTIME=/path/to/crun \
+  cargo test --test container_matrix -- --test-threads=1
+```
+
+Without `BASES_MCP_CONTAINER_IMAGE` the suite **skips**, and it reports the
+skip as a skip — never as a pass. `BASES_MCP_CONTAINER_RUNTIME` names the OCI
+runtime for hosts whose system `crun` predates their kernel.
+
+Two things that suite needs and that a hand-run does not: the container
+reaches a host-side WebDAV server through `--add-host
+host.containers.internal:host-gateway` (inside a container, `127.0.0.1` is the
+container's own loopback), and it sets **either** `BASES_MCP_VAULT` **or**
+`BASES_MCP_WEBDAV_URL` but never both, because `BASES_MCP_VAULT` wins over
+the WebDAV variables and a container with both is a filesystem server
+pointed at an empty mount.
+
 ### The vault
 
 Exactly one backend, and it must be named:
@@ -84,9 +108,17 @@ which address a connection arrived on:
 
 | Bind | Served `Host` |
 |---|---|
-| `127.0.0.1` (default) | `localhost`, `127.0.0.1`, `::1` |
+| `127.0.0.1` (default) | `localhost`, `127.0.0.1` |
 | a specific address | that address, plus `localhost` |
+| `::1` | `localhost`, `::1` |
 | `0.0.0.0` / `::` | **any** — every interface, so no address is knowable |
+
+The list is the **loopback of the bound family only**. A `127.0.0.1` listener
+serves `127.0.0.1`, not `::1`: a client on the other stack could not have
+reached it, so granting that loopback would grant nothing. Measured against
+the built binary with `MCP_HTTP_HOST=127.0.0.1`: `Host: 127.0.0.1` and
+`Host: localhost` answer `200`; `Host: [::1]` and `Host: example.com` answer
+`403`. `src/transport.rs` carries the unit test that pins this.
 
 Binding `0.0.0.0` therefore opens the server to every `Host` header, which is
 the operator's explicit choice, is printed on stderr at startup, and is recorded
@@ -186,27 +218,50 @@ rather than left to `useradd --system`, which picks 999 on Debian. With
 by the person who owns it — no `chown`, no group, no ACL.
 
 **The failure without it is quiet, and it is worth knowing what it looks
-like.** A vault directory the container cannot read is indexed as an EMPTY
-vault, so every Base comes back with zero rows and every note reads as "not
-found" — which looks exactly like an empty vault rather than like a
-permissions problem. And a vault it can read but not write answers reads
-normally and fails every write with `Permission denied (os error 13)`. Neither
-says "the uid is wrong".
+like.** Measured on this host, a vault the container can read but not write
+**reads normally** — every Base comes back with its rows, because the notes
+are world-readable — and fails every WRITE with `Permission denied (os error
+13)`. That error names the file and the syscall, and says nothing about the
+uid, so the obvious reading is that the file is immutable or the mount is
+read-only. It is neither: the mode bits are 644, the mount is `rw`, and the
+server simply is not the owner.
 
-#### A file the container CREATES is owned by a subuid
+A vault the container cannot READ at all is indexed as an EMPTY vault, so
+every Base comes back with zero rows and every note reads as "not found" —
+which looks exactly like an empty vault rather than like a permissions
+problem. Neither shape says "the uid is wrong".
 
-`--userns=keep-id` maps the invoking user to the same uid, but a file the
-container **creates** is owned by a uid from the *subuid range* — `100999` on
-this host — not by your own uid. The file is yours to read and to delete, and
-the server can keep editing it because it runs under the same mapping that
-created it. But a *different* process, running as your ordinary uid, cannot
-write it, and a `chown` is needed to hand it back:
+Both shapes are covered by `tests/container_matrix.rs`, which asserts the
+read that must succeed and the write that must fail.
+
+#### A file the container CREATES is yours — including the group
+
+`--userns=keep-id` maps the invoking user to the same uid, and a file the
+container **creates** is owned by that uid: `uid=1000` on this host, your own.
+Measured, not assumed:
 
 ```bash
-sudo chown -R $(id -u):$(id -g) /path/to/vault
+podman run --rm --userns=keep-id \
+  -v /path/to/vault:/vault -e BASES_MCP_VAULT=/vault \
+  --entrypoint /bin/sh localhost/bases-mcp:latest -c 'touch /vault/created.md'
+stat -c '%n uid=%u gid=%g mode=%a' /path/to/vault/created.md
+#   /path/to/vault/created.md uid=1000 gid=100999 mode=644
 ```
 
+The **owner** is your uid, so you can read, write, and delete the file, and a
+process running as your ordinary uid can write it. The `100999` in the *group*
+slot is a subuid, and it does not stand in your way: the mode bits are 644,
+the owner's write bit is set, and the owner is you. **No `chown` is needed.**
+
+The subuid lands in the group slot, not the owner slot, because `keep-id`
+maps *your* uid to itself and falls back to the subuid range for the group.
 This is a property of rootless containers generally, not of this image.
+
+The group is worth noticing for one reason: a file the container creates is
+`644` while a file you create in that directory may be `664`, and the
+directory itself is `755`. Neither stops you. It only means the container's
+files are not group-writable, so a *second* user who shares the group cannot
+write them — which is the behaviour you would want anyway.
 
 #### On a guarden host, the namespace is already handled
 
@@ -334,7 +389,18 @@ construct and never registered in Obsidian.
 
 `.obsidian/` inside `test/vault` is Obsidian's own state and is gitignored.
 
-Recorded CLI answers live under `test/parity/data/`, keyed by a digest of the
-results rather than by version, so several Obsidian versions that agree share one
-directory. `just record` refreshes them; `just corpus-check` reports whether the
-Testing vault still matches the recording.
+**There is no recorded corpus yet.** `tests/parity.rs` calls the **live**
+Obsidian CLI and compares against it directly, so the parity oracle is the
+installed CLI on the machine running the tests — not a stored answer. The
+recipes that would manage a corpus are placeholders, and they say so instead of
+pretending:
+
+```bash
+just record        # -> "parity-record is not built yet (STATUS.md item 2)."  exit 1
+just corpus-check  # -> "There is no snapshot corpus to check against ..."     exit 1
+```
+
+Neither refreshes anything. `test/parity/data/` does not exist. Recording a
+corpus — keyed by a digest of the results rather than by version, so several
+Obsidian versions that agree share one directory — is tracked as
+**STATUS.md item 2**. Until it exists, the honest recipes are the ones above.

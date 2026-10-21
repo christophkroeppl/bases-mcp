@@ -215,6 +215,29 @@ impl DavServer {
         let target = parts.next().unwrap_or_default().to_string();
         let path = vault_path_of(&target);
 
+        // A collection URL ends in `/` and a file URL does not, and a server
+        // that is handed the wrong one answers 404. Stated as a rule here so a
+        // backend that dropped the slash is refused the way a real server
+        // refuses it, rather than quietly served -- this is the one part of the
+        // fake a backend can be wrong about without the wire noticing. The
+        // shared fake (`tests/common/fake_dav.rs`) enforces the same rule; the
+        // two must agree, or a defect one of them can name is invisible to the
+        // other.
+        let is_collection = self.dirs.lock().unwrap().contains(&path);
+        let names_a_collection = url_names_a_collection(&target);
+        // `Depth: 0` is exempt: a properties request for a collection is
+        // answered by plenty of servers whichever way the URL is written, and
+        // refusing it here would mean the backend never got to say "that is a
+        // collection, not a note".
+        let properties = method == "PROPFIND" && header_value(&head, "depth") == Some("0".into());
+        // PUT and MKCOL NAME a collection; the trailing slash is how they say
+        // so, and neither is asking to read one.
+        let creating = matches!(method.as_str(), "PUT" | "MKCOL");
+        if !creating && !properties && names_a_collection != is_collection {
+            let _ = stream.write_all(ok_response(404, "Not Found", "not found").as_bytes());
+            return;
+        }
+
         self.trace.lock().unwrap().push(format!(
             "{method} {target} -> vault path {path:?}, body {content_length} bytes"
         ));
@@ -429,6 +452,11 @@ fn vault_path_of(target: &str) -> String {
         .trim_matches('/');
     let decoded: Vec<String> = path.split('/').map(percent_decode).collect();
     decoded.join("/")
+}
+
+/// Whether the request URL named a collection, i.e. ended in `/`.
+fn url_names_a_collection(target: &str) -> bool {
+    target.split('?').next().unwrap_or(target).ends_with('/')
 }
 
 /// Decode `%XX` escapes in a path segment.
@@ -1223,9 +1251,14 @@ async fn http_serves_a_webdav_vault_and_writes_to_it() {
         written_ok(&committed),
         "add_note_to_base over HTTP against WebDAV failed to commit: {committed}"
     );
+    // A READ, not a peek at the server's map. `stored()` proves the bytes
+    // reached the server's store; only a GET proves the server will SERVE
+    // them back, which is what the client checks when it re-reads a note it
+    // has just written. The fixture's own rule says so, and the sibling
+    // stdio cell follows it.
     let created = server
-        .stored("Created Over Http Webdav.md")
-        .expect("the created note reached the WebDAV server");
+        .read_back("Created Over Http Webdav.md")
+        .expect("the created note is readable back from the WebDAV server");
     assert!(
         created.contains("Created through the HTTP transport."),
         "the created note is not what was written: {created}"

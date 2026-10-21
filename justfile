@@ -88,7 +88,9 @@ record *ARGS:
     @echo "This recipe needs a snapshot recorder that does not exist." >&2
     @exit 1
 
-# Compare against the recorded snapshot, using the real CLI.
+# Run the live-CLI parity suite: compare the rendered output against the
+# installed Obsidian CLI, directly. There is no recorded snapshot to compare
+# against yet -- see STATUS.md item 2 and the `record` recipe above.
 parity-recorded:
     cargo test --features parity --test parity
 
