@@ -486,9 +486,7 @@ fn add(a: &BasesValue, b: &BasesValue) -> Result<BasesValue> {
     // Date arithmetic wins over string concatenation, so `date + "1d"` is a date
     // rather than the literal text of a date followed by "1d".
     if matches!(a, BasesValue::Date(_)) || matches!(b, BasesValue::Date(_)) {
-        return apply_duration_or_number(a, b, |d, n| {
-            BasesValue::Date(BasesDate::from_millis(d.millis() + n))
-        });
+        return apply_duration_or_number(a, b, |d, n| BasesValue::Date(d.shifted_by_millis(n)));
     }
     if matches!(a, BasesValue::String(_)) || matches!(b, BasesValue::String(_)) {
         return Ok(BasesValue::String(format!(
@@ -519,9 +517,7 @@ fn subtract(a: &BasesValue, b: &BasesValue) -> Result<BasesValue> {
         )));
     }
     if matches!(a, BasesValue::Date(_)) {
-        return apply_duration_or_number(a, b, |d, n| {
-            BasesValue::Date(BasesDate::from_millis(d.millis() - n))
-        });
+        return apply_duration_or_number(a, b, |d, n| BasesValue::Date(d.shifted_by_millis(-n)));
     }
     if matches!(a, BasesValue::Duration(_)) {
         return Ok(combine_durations(a, b, |x, y| x - y));

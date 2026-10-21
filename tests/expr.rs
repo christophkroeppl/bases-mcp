@@ -924,3 +924,75 @@ fn a_list_equals_a_scalar_only_when_it_has_one_element() {
     assert!(b_in("empty != 0", &ctx));
     assert!(!b_in("one == 1", &ctx));
 }
+
+// ---------------------------------------------------------------------------
+// Date equality: a DAY on either side compares by calendar day
+//
+// `make_ctx` pins the note's mtime to 2026-01-01T00:00Z, and `today()` reads the
+// clock from that mtime, so these assertions are about the rule rather than
+// about the day the suite runs on.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_date_time_equals_today_on_the_day_it_falls_on() {
+    let ctx = make_ctx(None);
+    assert!(b_in("date(\"2026-01-01T17:30\") == today()", &ctx));
+    assert!(b_in("today() == date(\"2026-01-01T17:30\")", &ctx));
+}
+
+#[test]
+fn a_date_only_value_equals_today() {
+    let ctx = make_ctx(None);
+    assert!(b_in("date(\"2026-01-01\") == today()", &ctx));
+}
+
+#[test]
+fn a_date_on_another_day_does_not_equal_today() {
+    let ctx = make_ctx(None);
+    assert!(!b_in("date(\"2026-01-02T09:00\") == today()", &ctx));
+    assert!(!b_in("date(\"2025-12-31\") == today()", &ctx));
+}
+
+#[test]
+fn two_moments_on_the_same_day_are_not_equal() {
+    let ctx = make_ctx(None);
+    assert!(!b_in(
+        "date(\"2026-01-01T17:30\") == date(\"2026-01-01T18:30\")",
+        &ctx
+    ));
+    assert!(b_in(
+        "date(\"2026-01-01T17:30\") == date(\"2026-01-01T17:30\")",
+        &ctx
+    ));
+}
+
+#[test]
+fn a_day_equals_any_moment_inside_it() {
+    let ctx = make_ctx(None);
+    assert!(b_in(
+        "date(\"2026-01-01\") == date(\"2026-01-01T00:00:00\")",
+        &ctx
+    ));
+    assert!(b_in(
+        "date(\"2026-01-01T23:59:59\") == date(\"2026-01-01\")",
+        &ctx
+    ));
+}
+
+#[test]
+fn a_date_on_another_day_is_not_equal() {
+    let ctx = make_ctx(None);
+    assert!(b_in("date(\"2026-01-02T09:00\") != today()", &ctx));
+    assert!(!b_in("date(\"2026-01-01T09:00\") != today()", &ctx));
+}
+
+#[test]
+fn tomorrow_is_a_day_and_equals_that_day() {
+    let ctx = make_ctx(None);
+    assert!(b_in("date(\"2026-01-02T09:00\") == today() + \"1d\"", &ctx));
+    assert!(b_in("date(\"2026-01-02\") == today() + \"1d\"", &ctx));
+    assert!(!b_in(
+        "date(\"2026-01-03T09:00\") == today() + \"1d\"",
+        &ctx
+    ));
+}

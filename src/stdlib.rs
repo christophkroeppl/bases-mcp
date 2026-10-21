@@ -1032,11 +1032,16 @@ fn g_duration(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
 fn g_today(_args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
     // Taken from the same clock as `now()` so a single query cannot straddle
     // midnight and produce a `today` later than a `now`.
-    Ok(BasesValue::Date(start_of_day(now_millis(ctx)?)))
+    Ok(BasesValue::Date(
+        start_of_day(&(ctx.file.accessors.mtime)()),
+    ))
 }
 
 fn g_now(_args: &[BasesValue], ctx: &EvalContext) -> Result<BasesValue> {
-    Ok(BasesValue::Date(BasesDate::from_millis(now_millis(ctx)?)))
+    // The accessor's own value, not a rebuild from millis: rebuilding
+    // re-bodies the instant to UTC, and then `now()`'s calendar fields and
+    // `today()`'s disagree for the hours where the local and UTC dates differ.
+    Ok(BasesValue::Date((ctx.file.accessors.mtime)()))
 }
 
 fn g_random(_args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
@@ -1131,17 +1136,20 @@ fn now_millis(ctx: &EvalContext) -> Result<i64> {
     Ok((ctx.file.accessors.mtime)().millis())
 }
 
-fn start_of_day(now: i64) -> BasesDate {
+fn start_of_day(clock: &BasesDate) -> BasesDate {
     // Local midnight, matching the `dateOnly` semantics of a parsed date-only
     // string: `today()` IS a date-only value, which is why it compares equal to
-    // every datetime on the same day. The offset comes from the snapshot's own
-    // timestamp, so the whole query agrees on one clock.
-    let now_dt = DateTime::from_timestamp_millis(now).expect("snapshot mtime is representable");
-    let offset = *now_dt.offset();
-    let local_midnight = now_dt.naive_local().date().and_time(NaiveTime::MIN);
+    // every datetime on the same day.
+    //
+    // The OFFSET comes from the clock value, not from a rebuild: `DateTime::
+    // from_timestamp_millis` is always UTC, so rebuilding a local mtime would
+    // reinterpret it in UTC and `today()` would name the neighbouring day
+    // whenever the local and UTC dates differ.
+    let offset = *clock.at.offset();
+    let local_midnight = clock.at.naive_local().date().and_time(NaiveTime::MIN);
     match offset.from_local_datetime(&local_midnight).single() {
         Some(midnight) => BasesDate::new(midnight.fixed_offset(), true),
-        None => BasesDate::new(now_dt.fixed_offset(), true),
+        None => BasesDate::new(clock.at.fixed_offset(), true),
     }
 }
 

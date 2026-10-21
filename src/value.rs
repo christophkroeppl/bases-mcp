@@ -82,6 +82,19 @@ impl BasesDate {
     pub fn millis(&self) -> i64 {
         self.at.timestamp_millis()
     }
+
+    /// The same value moved by `millis`, keeping its offset and its day flag.
+    ///
+    /// [`Self::from_millis`] cannot do this: it rebuilds from a timestamp, and
+    /// `DateTime::from_timestamp_millis` is always UTC, so a local date shifts
+    /// into another frame and `today() + "1d"` stays "today" for part of every
+    /// day outside UTC. Adding to `at` keeps the offset the backend reported.
+    pub fn shifted_by_millis(&self, millis: i64) -> Self {
+        Self {
+            at: self.at + chrono::Duration::milliseconds(millis),
+            date_only: self.date_only,
+        }
+    }
 }
 
 /// Equality and ordering are over the INSTANT alone. Two dates with one instant
