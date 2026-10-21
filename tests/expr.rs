@@ -306,6 +306,84 @@ fn contains_is_type_strict_and_says_so() {
     );
 }
 
+/// A null RECEIVER answers null, whatever the method is called.
+///
+/// Obsidian's rule, read out of the Bases evaluator Obsidian ships in
+/// `resources/obsidian.asar`: its call site resolves the receiver and then
+///
+///     if(s=r.getValue(e)||gW.value, !(t=KW.findForValue(s,i)) && s===gW.value) return gW.value
+///
+/// so a null receiver with an unknown method answers the null value instead
+/// of raising "no such method". This is what makes a null property DROP a row
+/// instead of failing the whole query -- Obsidian's filter predicate is
+/// `this.getValue(e).isTruthy()`, and its null value is falsy.
+///
+/// The four universal methods are the exception, and they are defined on null.
+#[test]
+fn a_null_receiver_answers_null_whatever_the_method_is_called() {
+    let ctx = make_ctx(Some(AccessorsOptions::default().prop("status", "active")));
+    for expr in [
+        "missingprop.contains(\"x\")",
+        "missingprop.containsAll(\"a\")",
+        "missingprop.containsAny(\"a\")",
+        "missingprop.startsWith(\"x\")",
+        "missingprop.endsWith(\"x\")",
+        "missingprop.lower()",
+        "missingprop.abs()",
+        "missingprop.bogus()",
+        "missingprop.count()",
+        "missingprop.filter(value == \"active\")",
+    ] {
+        assert!(
+            matches!(ev_in(expr, &ctx), Ok(BasesValue::Null)),
+            "{expr} on a null receiver is null, not an error"
+        );
+    }
+}
+
+/// The universal methods are defined ON null and answer normally.
+///
+/// Obsidian registers exactly these four for a null receiver -- `isEmpty` on
+/// Null itself, and `toString`/`isTruthy`/`isType` on Any, which Null extends
+/// -- and looks them up by walking that prototype chain, so they are found
+/// before the null-receiver fallback can answer for them.
+#[test]
+fn the_universal_methods_answer_on_a_null_receiver() {
+    let ctx = make_ctx(Some(AccessorsOptions::default().prop("status", "active")));
+    assert_eq!(
+        ev_in("missingprop.toString()", &ctx)
+            .unwrap()
+            .to_display_string(),
+        "null"
+    );
+    assert!(!b_in("missingprop.isTruthy()", &ctx));
+    assert!(b_in("missingprop.isEmpty()", &ctx));
+    assert!(b_in("missingprop.isType(\"null\")", &ctx));
+}
+
+/// A receiver that is NOT null still errors on an unknown method.
+///
+/// The fallback is keyed on the receiver being null, so it cannot swallow the
+/// "no such method" error for a real receiver -- which is Obsidian's rule too:
+/// its null check is on the receiver itself, and a non-null receiver falls
+/// through to `Cannot find function "x" on type <type>`.
+#[test]
+fn a_non_null_receiver_with_an_unknown_method_still_errors() {
+    let ctx = make_ctx(Some(AccessorsOptions::props(&[
+        ("s", BasesValue::String("active".into())),
+        ("n", BasesValue::Number(42.0)),
+        ("b", BasesValue::Bool(true)),
+    ])));
+    for expr in ["s.bogus()", "n.bogus()", "b.bogus()", "list(s).bogus()"] {
+        let err = ev_in(expr, &ctx).expect_err("a non-null receiver still errors");
+        assert!(
+            err.display_message().contains("is not a method on"),
+            "{expr} names the type it failed on: {}",
+            err.display_message()
+        );
+    }
+}
+
 #[test]
 fn an_empty_list_is_falsy() {
     // Which is what makes `if(projects, projects.length, 0)` work as a null guard.
@@ -513,6 +591,205 @@ fn string_methods_match_the_documented_set() {
     assert!(b("\"abc\".containsAny(\"z\", \"b\")"));
 }
 
+/// The argument rule, read out of Obsidian's Bases evaluator in
+/// `resources/obsidian.asar` (installer 1.12.4). Before a function runs, its
+/// call site checks each argument against the parameter table:
+///
+///     if(t.optional&&e===gW.value) T.push(null);
+///     else { if(!t.type.some(t=>e instanceof t)){ if(e===gW.value) return !1; throw ... } T.push(e) }
+///     ...
+///     if(x<S.length)for(h=x;h<S.length;h++) if(!S[h].optional&&!S[h].variadic) throw new Error(SK.msgErrorNotEnoughArguments({function:i}))
+///
+/// An argument that was never passed is therefore an error in a required
+/// position, and the message is Obsidian's own i18n string
+/// (`msgErrorNotEnoughArguments` in `i18n.js`): `Cannot call function "x", not
+/// enough arguments.` A null that WAS passed is not an error: it answers the
+/// whole call null in a required position, and it is absent in an optional one.
+#[test]
+fn a_missing_required_argument_is_not_enough_arguments() {
+    for (expr, function) in [
+        ("\"active\".contains()", "contains"),
+        ("\"active\".startsWith()", "startsWith"),
+        ("\"active\".endsWith()", "endsWith"),
+        ("\"active\".repeat()", "repeat"),
+        ("\"active\".slice()", "slice"),
+        ("\"active\".split()", "split"),
+        ("\"active\".replace()", "replace"),
+        // `replace`'s replacement is required in Obsidian, so this is the case
+        // that used to delete the match instead of refusing.
+        ("\"active\".replace(\"a\")", "replace"),
+        ("list([1, 2]).contains()", "contains"),
+        ("list([1, 2, 3]).slice()", "slice"),
+        ("link(\"Note\").contains()", "contains"),
+    ] {
+        let err = ev(expr).expect_err("a missing required argument must be an error");
+        assert_eq!(
+            err.display_message(),
+            format!("Cannot call function \"{function}\", not enough arguments. (construct: {function})"),
+            "{expr}"
+        );
+    }
+}
+
+/// A null that was passed in a required position answers null -- it is not an
+/// error and not a coerced value.
+#[test]
+fn a_null_required_argument_answers_null() {
+    for expr in [
+        "\"active\".contains(null)",
+        "\"active\".startsWith(null)",
+        "\"active\".endsWith(null)",
+        "\"active\".repeat(null)",
+        "\"active\".slice(null, 2)",
+        "\"active\".split(null)",
+        "\"active\".replace(null, \"x\")",
+        "\"active\".replace(\"a\", null)",
+        "\"active\".containsAll(\"a\", null)",
+        "\"active\".containsAny(null)",
+        "list([1, 2, 3]).slice(null, 2)",
+        // Link extends String in Obsidian, so this resolves to String's
+        // `contains` with its plain-String `value` parameter.
+        "link(\"Note\").contains(null)",
+    ] {
+        assert!(
+            matches!(
+                ev(expr).expect("a null argument is not an error"),
+                BasesValue::Null
+            ),
+            "{expr} answers null"
+        );
+    }
+}
+
+/// A null in an OPTIONAL position is absent, not null and not zero.
+///
+/// Obsidian's tables: `slice` is `[self, start, end]` with `end` optional, and
+/// `split` is `[self, separator, n]` with `n` optional.
+#[test]
+fn a_null_optional_argument_is_absent() {
+    assert_eq!(s("\"active\".slice(0, null)"), "active");
+    assert_eq!(n("\"a,b,c\".split(\",\", null).length"), 3.0);
+    assert_eq!(s("list([1, 2, 3]).slice(0, null).length"), "3");
+    // And the argument can be left out entirely, which is the same thing.
+    assert_eq!(s("\"active\".slice(0)"), "active");
+    assert_eq!(n("\"a,b,c\".split(\",\").length"), 3.0);
+}
+
+/// A variadic position is a sequence of required arguments, so a null anywhere
+/// in it answers the call null -- while zero arguments are allowed and mean
+/// `every`/`some` over an empty list.
+#[test]
+fn a_null_variadic_argument_answers_null() {
+    assert!(b("\"abc\".containsAll()"));
+    assert!(!b("\"abc\".containsAny()"));
+    for expr in [
+        "\"abc\".containsAll(null)",
+        "\"abc\".containsAll(\"a\", null)",
+        "\"abc\".containsAny(null)",
+        "\"abc\".containsAny(\"a\", null)",
+    ] {
+        assert!(
+            matches!(
+                ev(expr).expect("a null argument is not an error"),
+                BasesValue::Null
+            ),
+            "{expr} answers null"
+        );
+    }
+}
+
+/// `list.contains` takes the `text` union, which accepts null, so a null needle
+/// is compared like any other value rather than answering null. Its comparison
+/// is the list's own `includes`, which is why a list holding null matches.
+#[test]
+fn a_null_needle_in_a_list_is_compared_rather_than_answering_null() {
+    assert!(!b("list([1, 2]).contains(null)"));
+    assert!(b("list([null]).contains(null)"));
+}
+
+/// `contains` is CASE-INSENSITIVE, while `==`, `startsWith` and `endsWith`
+/// are case-SENSITIVE.
+///
+/// Measured against the Obsidian CLI on 1.14.4, and the asymmetry is
+/// Obsidian's: `contains` folds the case of BOTH sides, while the other two
+/// are plain `startsWith`/`endsWith` with no folding.
+///
+/// The temptation is to "make all four agree" by folding `startsWith` and
+/// `endsWith` too — and that would introduce a divergence rather than remove
+/// one. `==` and `startsWith`/`endsWith` already agree with Obsidian, and
+/// `contains` is the one that did not.
+#[test]
+fn contains_folds_case_and_the_other_string_methods_do_not() {
+    // `contains` folds both sides.
+    assert!(b("\"Hello World\".contains(\"hello\")"));
+    assert!(b("\"Hello World\".contains(\"HELLO\")"));
+    assert!(b("\"Hello World\".contains(\"Hello World\")"));
+    assert!(!b("\"Hello World\".contains(\"goodbye\")"));
+
+    // `startsWith` and `endsWith` do NOT fold.
+    assert!(!b("\"Hello World\".startsWith(\"hello\")"));
+    assert!(!b("\"Hello World\".startsWith(\"HELLO\")"));
+    assert!(b("\"Hello World\".startsWith(\"Hello\")"));
+    assert!(!b("\"Hello World\".endsWith(\"world\")"));
+    assert!(!b("\"Hello World\".endsWith(\"WORLD\")"));
+    assert!(b("\"Hello World\".endsWith(\"World\")"));
+
+    // `==` does not fold either.
+    assert!(!b("\"Hello World\" == \"hello world\""));
+    assert!(b("\"Hello World\" == \"Hello World\""));
+}
+
+/// The variadic forms fold the case too, and have NO empty-needle guard.
+///
+/// The single-needle `contains("")` is false; `containsAll("")` and
+/// `containsAny("")` are true. That is not a subtlety of ours — Obsidian's
+/// `contains` carries a `"" !== needle` guard and the variadic forms do not.
+#[test]
+fn contains_all_and_any_fold_case_and_keep_the_empty_needle() {
+    assert!(b("\"Hello World\".containsAll(\"hello\", \"world\")"));
+    assert!(b("\"Hello World\".containsAll(\"HELLO\", \"WORLD\")"));
+    assert!(!b("\"Hello World\".containsAll(\"hello\", \"goodbye\")"));
+    assert!(b("\"Hello World\".containsAny(\"zzz\", \"hello\")"));
+    assert!(b("\"Hello World\".containsAny(\"zzz\", \"HELLO\")"));
+    assert!(!b("\"Hello World\".containsAny(\"zzz\", \"goodbye\")"));
+
+    // The empty needle: guarded on `contains` alone.
+    assert!(!b("\"Hello World\".contains(\"\")"));
+    assert!(b("\"Hello World\".containsAll(\"\")"));
+    assert!(b("\"Hello World\".containsAny(\"\")"));
+}
+
+/// A property whose value is a LINK inherits the string `contains` rules.
+///
+/// A Link in Obsidian is a subclass of String whose data is the RAW TARGET,
+/// so `linkish.contains("hello")` folds the case and `linkish.contains("")` is
+/// false — the string rules — while `linkish.contains("[")` is false, because
+/// the brackets belong to the rendering rather than to the data.
+///
+/// `startsWith` is NOT a Link method in Obsidian (a Link is a String
+/// subclass, so it inherits the String methods, and the Bases expression
+/// language dispatches on the DECLARED type) — our implementation refuses it
+/// too, and the CLI says the same: "Cannot find function startsWith on type
+/// List" for a list, and a Link answers on its own terms.
+#[test]
+fn a_link_receiver_inherits_the_string_contains_rules() {
+    let ctx = make_ctx(Some(AccessorsOptions::props(&[(
+        "linkish",
+        BasesValue::Link {
+            target: "Hello World".into(),
+            display: None,
+            resolved: Some("Hello World".into()),
+        },
+    )])));
+
+    assert!(b_in("linkish.contains(\"hello\")", &ctx));
+    assert!(b_in("linkish.contains(\"HELLO\")", &ctx));
+    assert!(b_in("linkish.contains(\"Hello World\")", &ctx));
+    // The raw target, not the `[[...]]` rendering.
+    assert!(!b_in("linkish.contains(\"[\")", &ctx));
+    assert!(!b_in("linkish.contains(\"\")", &ctx));
+}
+
 #[test]
 fn object_keys_and_values_work_on_a_namespace() {
     let ctx = make_ctx(Some(AccessorsOptions::default().prop("status", "active")));
@@ -646,4 +923,76 @@ fn a_list_equals_a_scalar_only_when_it_has_one_element() {
     assert!(!b_in("empty == 0", &ctx));
     assert!(b_in("empty != 0", &ctx));
     assert!(!b_in("one == 1", &ctx));
+}
+
+// ---------------------------------------------------------------------------
+// Date equality: a DAY on either side compares by calendar day
+//
+// `make_ctx` pins the note's mtime to 2026-01-01T00:00Z, and `today()` reads the
+// clock from that mtime, so these assertions are about the rule rather than
+// about the day the suite runs on.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_date_time_equals_today_on_the_day_it_falls_on() {
+    let ctx = make_ctx(None);
+    assert!(b_in("date(\"2026-01-01T17:30\") == today()", &ctx));
+    assert!(b_in("today() == date(\"2026-01-01T17:30\")", &ctx));
+}
+
+#[test]
+fn a_date_only_value_equals_today() {
+    let ctx = make_ctx(None);
+    assert!(b_in("date(\"2026-01-01\") == today()", &ctx));
+}
+
+#[test]
+fn a_date_on_another_day_does_not_equal_today() {
+    let ctx = make_ctx(None);
+    assert!(!b_in("date(\"2026-01-02T09:00\") == today()", &ctx));
+    assert!(!b_in("date(\"2025-12-31\") == today()", &ctx));
+}
+
+#[test]
+fn two_moments_on_the_same_day_are_not_equal() {
+    let ctx = make_ctx(None);
+    assert!(!b_in(
+        "date(\"2026-01-01T17:30\") == date(\"2026-01-01T18:30\")",
+        &ctx
+    ));
+    assert!(b_in(
+        "date(\"2026-01-01T17:30\") == date(\"2026-01-01T17:30\")",
+        &ctx
+    ));
+}
+
+#[test]
+fn a_day_equals_any_moment_inside_it() {
+    let ctx = make_ctx(None);
+    assert!(b_in(
+        "date(\"2026-01-01\") == date(\"2026-01-01T00:00:00\")",
+        &ctx
+    ));
+    assert!(b_in(
+        "date(\"2026-01-01T23:59:59\") == date(\"2026-01-01\")",
+        &ctx
+    ));
+}
+
+#[test]
+fn a_date_on_another_day_is_not_equal() {
+    let ctx = make_ctx(None);
+    assert!(b_in("date(\"2026-01-02T09:00\") != today()", &ctx));
+    assert!(!b_in("date(\"2026-01-01T09:00\") != today()", &ctx));
+}
+
+#[test]
+fn tomorrow_is_a_day_and_equals_that_day() {
+    let ctx = make_ctx(None);
+    assert!(b_in("date(\"2026-01-02T09:00\") == today() + \"1d\"", &ctx));
+    assert!(b_in("date(\"2026-01-02\") == today() + \"1d\"", &ctx));
+    assert!(!b_in(
+        "date(\"2026-01-03T09:00\") == today() + \"1d\"",
+        &ctx
+    ));
 }

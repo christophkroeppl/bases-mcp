@@ -143,18 +143,23 @@ pub fn query_base(
     // Sort. `sort` is authoritative; `groupBy` then applies within groups.
     sort_rows(&mut rows, &sort_spec(view));
 
+    // Limit. Obsidian's `limit` is a NUMBER and only a POSITIVE one counts:
+    // `limit: 0` is not "keep nothing", it is "no limit at all". And the
+    // truncation is applied to the SORTED list, BEFORE the grouping, so the
+    // budget is spent in sort order rather than in group order.
+    let budget = view
+        .limit
+        .filter(|limit| *limit > 0.0)
+        .map(|limit| limit as usize);
+    let rows = match budget {
+        Some(budget) => rows.into_iter().take(budget).collect(),
+        None => rows,
+    };
+
     let groups = view
         .group_by
         .as_ref()
         .map(|group| group_rows(&rows, &group.property, group.direction));
-
-    // Limit is a TOTAL across all groups, matching the UI, so groups are trimmed in
-    // order until the budget runs out rather than each getting the full limit.
-    let budget = view
-        .limit
-        .filter(|limit| *limit >= 0.0)
-        .map(|limit| limit as usize);
-    let (rows, groups) = apply_limit(rows, groups, budget);
 
     Ok(QueryResult {
         base_path: base_path.to_string(),
@@ -528,6 +533,16 @@ fn sort_spec(view: &BaseView) -> Vec<SortEntry> {
         })
 }
 
+/// A value as the boolean a sort folds it into.
+///
+/// Obsidian's comparator compares a boolean column with
+/// `(value.isTruthy() ? 1 : -1)`, so anything that is not truthy is `-1` --
+/// including a null, which is not truthy. This is what makes a missing
+/// checkbox sort with the unchecked ones.
+fn truthy(value: &BasesValue) -> bool {
+    value.is_truthy()
+}
+
 fn sort_rows(rows: &mut [ResolvedRow], sort: &[SortEntry]) {
     rows.sort_by(|a, b| {
         for entry in sort {
@@ -535,6 +550,44 @@ fn sort_rows(rows: &mut [ResolvedRow], sort: &[SortEntry]) {
             let (Some(av), Some(bv)) = (a.values.get(&id), b.values.get(&id)) else {
                 continue;
             };
+            // A null sorts AFTER every value, in BOTH directions.
+            //
+            // This is the one rule that is not "reverse the ascending order":
+            // Obsidian's comparator returns 1 when the LEFT value is null and
+            // -1 when the RIGHT one is, and the direction is applied to the
+            // result of the VALUE comparison only. So a row with no value
+            // stays at the bottom whichever way the sort runs.
+            //
+            // Getting this wrong is invisible in the ascending case (a null
+            // ranked lowest comes first there) and wrong in the descending
+            // case, where a naive reverse would put it FIRST.
+            //
+            // The ONE exception is a boolean column, and Obsidian's order of
+            // tests is what makes it an exception: the boolean branch is
+            // checked BEFORE the null one, so a null beside a boolean is
+            // compared as the boolean it folds into -- `false` -- and the
+            // direction applies to that comparison like any other. A missing
+            // checkbox therefore sorts with the unchecked ones, not at the
+            // bottom.
+            match (av, bv) {
+                (BasesValue::Null, BasesValue::Null) => continue,
+                (BasesValue::Bool(_), _) | (_, BasesValue::Bool(_)) => {
+                    let left = truthy(av);
+                    let right = truthy(bv);
+                    match left.cmp(&right) {
+                        Ordering::Equal => continue,
+                        ordering => {
+                            return match entry.direction {
+                                Direction::Desc => ordering.reverse(),
+                                Direction::Asc => ordering,
+                            };
+                        }
+                    }
+                }
+                (BasesValue::Null, _) => return Ordering::Greater,
+                (_, BasesValue::Null) => return Ordering::Less,
+                _ => {}
+            }
             // A value that cannot be compared at all is treated as a tie on this
             // key rather than as an error, so one odd cell cannot fail a whole
             // query; the next key, then the path, decides.
@@ -615,42 +668,3 @@ fn group_key(value: Option<&BasesValue>) -> String {
 // ---------------------------------------------------------------------------
 // Limit
 // ---------------------------------------------------------------------------
-
-/// Trim rows to `budget` and report the surviving groups.
-///
-/// A grouped limit spends ONE budget across every group, so a group that runs out
-/// mid-way is kept PARTIAL and the groups after it are dropped. Empty groups are
-/// dropped rather than kept as a header with nothing under it.
-fn apply_limit(
-    rows: Vec<ResolvedRow>,
-    groups: Option<Vec<QueryGroup>>,
-    budget: Option<usize>,
-) -> (Vec<ResolvedRow>, Option<Vec<QueryGroup>>) {
-    let Some(budget) = budget else {
-        return (rows, groups);
-    };
-    let Some(groups) = groups else {
-        return (rows.into_iter().take(budget).collect(), None);
-    };
-
-    let mut kept: Vec<QueryGroup> = Vec::new();
-    let mut used = 0usize;
-    for group in groups {
-        if used >= budget {
-            break;
-        }
-        let kept_rows: Vec<ResolvedRow> = group.rows.into_iter().take(budget - used).collect();
-        used += kept_rows.len();
-        if !kept_rows.is_empty() {
-            kept.push(QueryGroup {
-                key: group.key,
-                rows: kept_rows,
-            });
-        }
-    }
-    let flattened = kept
-        .iter()
-        .flat_map(|group| group.rows.iter().cloned())
-        .collect();
-    (flattened, Some(kept))
-}

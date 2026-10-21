@@ -22,8 +22,9 @@ use bases_mcp::parity::{compare_rows, Cli};
 use bases_mcp::render::markdown::RenderStyle;
 use bases_mcp::service::Resolver;
 
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use common::{futures_block_on, vault_dir};

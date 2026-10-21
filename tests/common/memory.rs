@@ -204,18 +204,6 @@ impl MemoryVaultSource {
         }
     }
 
-    pub fn from_paths(files: &[(&str, &str)]) -> Self {
-        Self::new(
-            files
-                .iter()
-                .map(|(path, content)| VaultFile {
-                    path: (*path).to_string(),
-                    content: (*content).to_string(),
-                })
-                .collect::<Vec<_>>(),
-        )
-    }
-
     /// Arm a fault. Faults are consulted in the order armed, so a later fault is
     /// only reached when the earlier ones decline to fire.
     ///

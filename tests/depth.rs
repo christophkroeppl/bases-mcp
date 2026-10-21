@@ -15,9 +15,11 @@
 //! it would be worse than the crash.
 //!
 //! Nothing here writes to `test/vault`. It is the parity oracle and stays at
-//! exactly [`CORPUS_SIZE`] files.
+//! exactly [`CORPUS_SIZE`] files — a set the manifest pins, byte for byte.
 
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::collections::BTreeMap;
@@ -31,7 +33,8 @@ use bases_mcp::evaluator::{evaluate, EvalContext};
 use bases_mcp::parser::parse;
 use bases_mcp::value::{BasesValue, FileValue};
 use bases_mcp::vault::{FsVaultSource, Vault};
-use common::{count_files, futures_block_on, vault_dir, CORPUS_SIZE};
+use common::manifest::assert_vault_matches_manifest;
+use common::{futures_block_on, vault_dir};
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -375,7 +378,10 @@ fn a_deeply_nested_regex_is_the_regex_crates_refusal_not_ours() {
 /// `tests/base.rs` because this suite is the one that writes the nastiest
 /// expressions, and a note that leaked into `test/vault` would change what
 /// `obsidian base:query` returns.
+///
+/// A MANIFEST, not a count: a file whose bytes changed is a changed oracle,
+/// and a count cannot see that.
 #[test]
 fn the_testing_vault_is_untouched() {
-    assert_eq!(count_files(&vault_dir()), CORPUS_SIZE);
+    assert_vault_matches_manifest();
 }

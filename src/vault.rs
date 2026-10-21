@@ -319,6 +319,13 @@ impl Vault {
     /// `file.tags` covers frontmatter and body, and every element keeps its `#`
     /// prefix -- confirmed against `base:query format=json` on Obsidian 1.13.7,
     /// which emits `"Tags": "#Contacts, #Kontakte"`.
+    ///
+    /// The elements are TAGS, not plain strings. Obsidian's `file.tags` is a
+    /// `TagListValue`, and the class is load-bearing: `file.tags == "project"`
+    /// is false because a tag list is never loose-equal to a bare string,
+    /// while `file.tags.contains("project")` is true because `contains` on a tag
+    /// list is a tag match rather than an equality. Measured against Obsidian
+    /// 1.14.4.
     pub fn tags_for(&self, path: &str) -> Vec<BasesValue> {
         let Some(note) = self.note(path) else {
             return Vec::new();
@@ -331,18 +338,18 @@ impl Vault {
             .map(BasesValue::to_list)
             .unwrap_or_default()
         {
-            let BasesValue::String(text) = &tag else {
+            // A frontmatter `tags` property is already a list of TAGS by the
+            // time it reaches here; a value that is not a tag is not a tag.
+            let BasesValue::Tag(text) = &tag else {
                 continue;
             };
-            // A frontmatter tag may itself be `business-idea` or `#x`; normalise to
-            // the `#`-prefixed display form.
-            let clean = text.trim().trim_start_matches('#');
-            if !clean.is_empty() {
-                out.push(BasesValue::String(format!("#{clean}")));
+            let clean = text.trim();
+            if clean.len() > 1 {
+                out.push(BasesValue::Tag(clean.to_string()));
             }
         }
         for tag in &note.parsed.inline_tags {
-            out.push(BasesValue::String(format!("#{tag}")));
+            out.push(BasesValue::Tag(format!("#{tag}")));
         }
         dedupe(out)
     }
@@ -419,7 +426,10 @@ impl Vault {
         BasesValue::Link {
             target: target.to_string(),
             display: display.map(str::to_string),
-            resolved: self.resolve(target),
+            // A `#heading` or `#^block` suffix names a place INSIDE the note, so
+            // resolution uses the part before it — measured against Obsidian
+            // 1.14.4, `[[Some Note#Section]].asFile().path` is the note's path.
+            resolved: self.resolve(target.split('#').next().unwrap_or(target)),
         }
     }
 
@@ -434,7 +444,7 @@ impl Vault {
     /// note that is not indexed.
     fn instant_for(&self, path: &str) -> BasesDate {
         let mtime = self.note(path).map(|note| note.mtime).unwrap_or_else(epoch);
-        BasesDate(mtime)
+        BasesDate::new(mtime, false)
     }
 
     fn size_for(&self, path: &str) -> u64 {
@@ -473,12 +483,30 @@ fn dedupe(values: Vec<BasesValue>) -> Vec<BasesValue> {
     out
 }
 
-/// Convert frontmatter values that Obsidian treats as links.
+/// Convert frontmatter values into the types Obsidian's Bases reads them as.
 ///
-/// A property value written as `[[Some Note]]` or `[[Some Note|Alias]]` is a Link
-/// object in Bases, compared by resolved target rather than by text. Without this
-/// coercion `project.contains(link(this.file.name))` silently fails, because one
-/// side would be a link and the other a plain string.
+/// Obsidian coerces a frontmatter STRING before it types anything, and the
+/// order is **Link → URL → Date**. Measured against Obsidian 1.14.4 (the
+/// installer reports 1.12.4) with a live `base:query` probe; the observations
+/// are recorded in `docs/divergences.md`.
+///
+/// - `[[Some Note]]` is a **Link**, compared by resolved target rather than by
+///   text. Without this `project.contains(link(this.file.name))` silently fails,
+///   because one side would be a link and the other a plain string.
+/// - `https://example.com` is a **URL**, a distinct type whose `isType` answers
+///   "url".
+/// - `2026-01-05` is a **Date**, at LOCAL midnight. A date-only string and a
+///   datetime on the same day compare equal.
+///
+/// Two things Obsidian does NOT coerce, and neither does this:
+///
+/// - A **markdown link** (`[Business](Projects/Business)`) stays a String.
+///   Only the `[[...]]` form is a Link.
+/// - The `tags` key is typed **before** this runs: the YAML reader builds a
+///   tag list (`BasesValue::Tag`, `#` forced on) for a `tags` property that is
+///   a string or a list of strings, at any depth and case-insensitively. A tag
+///   is therefore never a Link, a URL or a Date, and a mixed list is left
+///   exactly as written. See `note::tag_list`.
 ///
 /// Called BEFORE the path index is populated, so `resolved` is always `None` for
 /// these links. That is the original's order and it is preserved: `file.links`
@@ -494,80 +522,102 @@ pub fn coerce_frontmatter(
         .collect()
 }
 
+/// Coerce one value, and the values inside it.
 fn coerce_value(value: &BasesValue, vault: &Vault) -> BasesValue {
     match value {
         BasesValue::List(items) => {
             BasesValue::List(items.iter().map(|item| coerce_value(item, vault)).collect())
         }
-        BasesValue::String(text) => {
-            let trimmed = text.trim();
-            if let Some((target, display)) = wikilink(trimmed) {
-                return vault.link_value(&target, display.as_deref());
-            }
-            if let Some((label, target)) = mdlink(trimmed) {
-                if !has_scheme(&target) && !target.starts_with('#') {
-                    let bare = target.strip_suffix(".md").unwrap_or(&target);
-                    // `mdlink[1] || null` in the original: an EMPTY label is no
-                    // label.
-                    let display = if label.is_empty() {
-                        None
-                    } else {
-                        Some(label.as_str())
-                    };
-                    return vault.link_value(bare, display);
-                }
-            }
-            value.clone()
-        }
+        BasesValue::Namespace(map) => BasesValue::Namespace(std::sync::Arc::new(
+            map.iter()
+                .map(|(k, v)| (k.clone(), coerce_value(v, vault)))
+                .collect(),
+        )),
+        BasesValue::String(text) => coerce_string(text, vault),
         other => other.clone(),
     }
 }
 
+/// Coerce a string into a Link, a URL or a Date, in that order.
+///
+/// Nothing is trimmed: Obsidian's own matchers run against the string as
+/// written, so `" [[Some Note]] "` and `" 2026-01-05 "` are plain strings.
+fn coerce_string(text: &str, vault: &Vault) -> BasesValue {
+    if let Some((target, display)) = wikilink(text) {
+        return vault.link_value(&target, display.as_deref());
+    }
+    if is_url(text) {
+        return BasesValue::Url {
+            text: text.to_string(),
+        };
+    }
+    if let Some(date) = crate::stdlib::parse_date_loose(text) {
+        return BasesValue::Date(date);
+    }
+    BasesValue::String(text.to_string())
+}
+
 /// `[[Target]]`, `[[Target|Display]]` and `[[Target#Subpath]]`.
+///
+/// The pipe splits at the **FIRST** `|`. That is Obsidian's wikilink grammar,
+/// and it is the split [`crate::note::extract_links`] makes for a link in a
+/// note's body: `[[a|b|c]]` has a target of `a` and a display of `b|c`.
+///
+/// The `#Subpath` stays **in the target**: `[[Some Note#Section]]` has a target
+/// of `Some Note#Section`, a length of 17, and `contains("#")` is true. The link
+/// still resolves, because resolution takes the part before the `#`.
 fn wikilink(text: &str) -> Option<(String, Option<String>)> {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
-    let captures = PATTERN
-        .get_or_init(|| {
-            Regex::new(r"^\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]$")
-                .expect("the wikilink pattern is valid")
-        })
-        .captures(text)?;
-    let target = captures.get(1)?.as_str().to_string();
-    let display = captures.get(2).map(|m| m.as_str().to_string());
-    Some((target, display))
+    let inner = PATTERN
+        .get_or_init(|| Regex::new(r"^\[\[([^\]]*)\]\]$").expect("the wikilink pattern is valid"))
+        .captures(text)?
+        .get(1)?
+        .as_str();
+    Some(match inner.split_once('|') {
+        Some((target, display)) => (target.to_string(), Some(display.to_string())),
+        None => (inner.to_string(), None),
+    })
 }
 
-/// `[Label](target)`.
-fn mdlink(text: &str) -> Option<(String, String)> {
-    static PATTERN: OnceLock<Regex> = OnceLock::new();
-    let captures = PATTERN
-        .get_or_init(|| {
-            Regex::new(r"^\[([^\]]*)\]\(([^)\s]+)\)$").expect("the mdlink pattern is valid")
-        })
-        .captures(text)?;
-    Some((
-        captures.get(1)?.as_str().to_string(),
-        captures.get(2)?.as_str().to_string(),
-    ))
-}
-
-/// Whether a markdown-link target is a URL, which is never a note in this vault.
+/// Whether a string is a URL, and so a URL rather than a plain string.
 ///
-/// One or more ASCII letters, then `://`, case-insensitively. A relative target
-/// with no `://` at all is not a scheme however word-like it is, which is why the
-/// separator has to be found rather than assumed.
-fn has_scheme(target: &str) -> bool {
-    let Some((scheme, _)) = target.split_once("://") else {
+/// Obsidian's rule, measured against 1.14.4: the string must contain no space
+/// and must parse as an absolute URL. The consequences are all measured:
+///
+/// | string | URL? | why |
+/// |---|---|---|
+/// | `https://example.com` | yes | |
+/// | `ftp://example.com` | yes | any scheme parses |
+/// | `mailto:a@b.com` | yes | |
+/// | `foo:bar`, `a:b` | yes | a scheme with an opaque body |
+/// | `HTTPS://EXAMPLE.COM` | yes | the scheme is case-insensitive |
+/// | `example.com` | no | no scheme |
+/// | `//example.com` | no | no scheme |
+/// | `https://` | no | no host |
+/// | `https://example.com/a b` | no | a space disqualifies it |
+///
+/// A URL with no host is rejected because the parser demands one, and a URL
+/// with a space is rejected before the parser is even reached.
+fn is_url(text: &str) -> bool {
+    if text.is_empty() || text.contains(' ') {
         return false;
-    };
-    !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphabetic())
+    }
+    // Obsidian's own test is exactly this: the string must contain no space,
+    // and `new URL(text)` must not throw. The WHATWG parser is what decides
+    // the rest, and it is the same parser Rust's `url` crate implements — so
+    // `https://` (an empty host) fails while `mailto:a@b.com` and
+    // `file:///etc/passwd` (an opaque or empty-host body) both pass.
+    url::Url::parse(text).is_ok()
 }
 
 /// `[[Target]]` reduced to the target, for a frontmatter list entry.
+///
+/// The `#subpath` is dropped here, unlike in the coercion chain: this produces a
+/// `file.links` entry, and a link's identity is the note it points at.
 fn strip_brackets(text: &str) -> String {
     let trimmed = text.trim();
     match wikilink(trimmed) {
-        Some((target, _)) => target,
+        Some((target, _)) => target.split('#').next().unwrap_or(&target).to_string(),
         None => trimmed.to_string(),
     }
 }

@@ -8,17 +8,19 @@
 //! ## Nothing here writes to `test/vault`
 //!
 //! `test/vault` is the parity oracle and stays at exactly [`CORPUS_SIZE`]
-//! files. Every test that writes works on a COPY seeded into a temp directory,
-//! so a test that dies mid-write can only ever leave a file in a temp dir that
-//! the OS reclaims. Read-only assertions still run against the real vault, so
-//! they are checking the same bytes the CLI compares against.
+//! files — a set the manifest pins, byte for byte. Every test that writes
+//! works on a COPY seeded into a temp directory, so a test that dies mid-write
+//! can only ever leave a file in a temp dir that the OS reclaims. Read-only
+//! assertions still run against the real vault, so they are checking the same
+//! bytes the CLI compares against.
 //!
 //! `test/fixtures/` is never written either: the fixtures that exercise
 //! filter inversion are read-only by construction, since nothing in these tests
 //! commits a note into them.
 
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -32,9 +34,8 @@ use bases_mcp::error::{BasesError, Result};
 use bases_mcp::note::parse_note;
 use bases_mcp::service::{NoteOptions, Resolver};
 use bases_mcp::vault::content_hash;
-use common::{
-    count_files, futures_block_on, load_corpus_from, seed_dir, vault_dir, VaultFile, CORPUS_SIZE,
-};
+use common::manifest::assert_vault_matches_manifest;
+use common::{futures_block_on, load_corpus_from, seed_dir, vault_dir, VaultFile};
 use tempfile::TempDir;
 
 /// The scratch note most of these tests use; the rest name their own.
@@ -224,11 +225,10 @@ fn delete(resolver: &Resolver, path: &str) {
 
 #[test]
 fn the_testing_vault_is_untouched() {
-    assert_eq!(
-        count_files(&vault_dir()),
-        CORPUS_SIZE,
-        "test/vault is the parity oracle and must stay at exactly {CORPUS_SIZE} files"
-    );
+    // A MANIFEST, not a count. The count could only see a file being added; a
+    // file whose bytes changed is a changed oracle, and the desktop app
+    // rewriting a `.base` file is exactly that.
+    assert_vault_matches_manifest();
 }
 
 /// Every fixture vault indexes, and every base in one parses.
@@ -651,9 +651,12 @@ fn nothing_is_written_on_the_first_call() {
 fn file_has_tag_becomes_a_tag() {
     let (_dir, resolver) = sandbox();
     let proposal = draft_for(&resolver, SCRATCH, Some(HOST), None);
+    // The draft spells the tag the way the filter did, and `- ticket` is what
+    // lands on the page -- Obsidian forces the `#` itself. Read back, `tags` is
+    // a TAG LIST, so the same value renders normalised, with its `#`.
     assert_eq!(
         frontmatter(SCRATCH, &proposal.content, "tags").as_deref(),
-        Some("ticket")
+        Some("#ticket")
     );
     assert!(
         proposal.content.contains("- ticket"),
@@ -843,10 +846,15 @@ fn the_commit_is_single_use() {
 
 #[test]
 fn a_draft_missing_a_filtered_property_reports_a_mismatch_not_a_type_error() {
-    // Regression: `project.contains(link(this.file.name))` DEREFERENCES `project`,
-    // so a draft with no `project` at all makes the expression THROW instead of
-    // evaluating to false. That raw error buried the filter and the base YAML,
-    // which are the two things the agent needs to correct itself.
+    // `project.contains(link(this.file.name))` DEREFERENCES `project`, and a
+    // draft with no `project` at all makes the receiver null. A null receiver
+    // answers null rather than throwing, so the expression does not match and
+    // the report is a MISMATCH.
+    //
+    // It used to throw, and the report said "threw:". That was the right
+    // behaviour when a null receiver was an error; it is wrong now, because
+    // Obsidian's own answer for a null property is null. The two things the
+    // agent needs -- the filter and the base YAML -- are still inlined.
     let (_dir, resolver) = sandbox();
     let proposal = draft_for(&resolver, SCRATCH, Some(HOST), None);
 
@@ -863,12 +871,51 @@ fn a_draft_missing_a_filtered_property_reports_a_mismatch_not_a_type_error() {
         "{message}"
     );
     assert!(
-        message.contains("threw:"),
-        "the dereference is reported, not propagated: {message}"
+        !message.contains("threw:"),
+        "a null receiver is a mismatch, not a throw: {message}"
     );
     assert!(
         message.contains("filters:\n  and:"),
         "the base's own YAML is inlined: {message}"
+    );
+    assert!(!paths(&resolver).contains(&SCRATCH.to_string()));
+}
+
+/// The report still says "threw:" when the filter genuinely errors.
+///
+/// The null-receiver change means a missing property is a mismatch rather than
+/// a throw, so the "threw:" branch needs a filter that really does fail: a
+/// method that does not exist on the receiver's type. `Tickets.base` cannot
+/// supply one -- its only filter is a `contains` on a property -- so the
+/// throwing branch is pinned here, against a base of the test's own.
+#[test]
+fn a_draft_whose_filter_really_throws_is_reported_as_a_throw() {
+    let dir = TempDir::new().expect("a temp dir is writable");
+    std::fs::write(
+        dir.path().join("Throwing.base"),
+        "filters:\n  and:\n    - status.bogus()\nviews:\n  - type: table\n    name: All\n    order:\n      - file.name\n",
+    )
+    .expect("the base is written");
+    let resolver = Arc::new(
+        futures_block_on(Resolver::open_dir(dir.path())).expect("the sandbox vault opens"),
+    );
+
+    let proposal = draft(add(
+        &resolver,
+        vec![("base", "Throwing.base"), ("path", SCRATCH)],
+    ));
+    let message = message_of(|| {
+        commit(
+            &resolver,
+            &proposal.draft_id,
+            "---\ntags:\n  - ticket\nstatus: active\n---\n\n# Scratch\n",
+        )
+    });
+    assert!(message.contains("does not match"), "{message}");
+    assert!(message.contains("threw:"), "{message}");
+    assert!(
+        message.contains("bogus"),
+        "the failure names the method: {message}"
     );
     assert!(!paths(&resolver).contains(&SCRATCH.to_string()));
 }
@@ -1608,6 +1655,93 @@ fn an_edit_that_changes_nothing_does_not_touch_the_file() {
     );
 }
 
+/// The CRLF spelling of the test above, and the reason the normaliser exists.
+///
+/// `an_edit_that_changes_nothing_does_not_touch_the_file` compares the file's
+/// LENGTH, which cannot tell a file that was left alone from one that was
+/// rewritten to the same size — and a rewrite that only changes the line endings
+/// is exactly that. This asserts the BYTES, on the shape where the corruption was
+/// actually found: a CRLF Host note put through a full Projection round trip.
+///
+/// With `VaultSource::read_note`/`read_fresh` normalising `\r\n` to `\n`, the
+/// reconciler is handed the same text the Projection was built from, produces it
+/// back unchanged, and `write_note` never writes, so the CRLF bytes on disk
+/// survive. Without the normaliser the round trip splices bare LFs into the note
+/// at the region joins — the reconciled text no longer equals the disk text, and
+/// a write that changed nothing rewrites the file. `docs/divergences.md` (D8)
+/// records that as the corruption reached through a path nobody was watching.
+#[test]
+fn a_crlf_edit_that_changes_nothing_does_not_touch_the_file() {
+    let host = "Root Project.md";
+    let dir = TempDir::new().expect("a temp dir is writable");
+    seed_dir(dir.path(), &load_corpus_from(&vault_dir()));
+
+    // A CRLF spelling of a real Host note, written BEFORE the vault is opened so
+    // the index and the fresh read agree about it. The note carries both region
+    // shapes — an embed and an inline base — so a splice has two places to show
+    // up, which is the arrangement the corruption was found in.
+    let lf = std::fs::read_to_string(dir.path().join(host)).expect("the host is on disk");
+    std::fs::write(dir.path().join(host), lf.replace('\n', "\r\n"))
+        .expect("the CRLF host is on disk");
+    let before = std::fs::read(dir.path().join(host)).expect("the bytes are readable");
+    let count = |haystack: &[u8], needle: &[u8]| {
+        haystack
+            .windows(needle.len())
+            .filter(|window| *window == needle)
+            .count()
+    };
+    assert_eq!(
+        count(&before, b"\r\n"),
+        count(&before, b"\n"),
+        "the fixture is not uniformly CRLF"
+    );
+
+    let resolver = Arc::new(
+        futures_block_on(Resolver::open_dir(dir.path()))
+            .unwrap_or_else(|error| panic!("the CRLF vault opens: {error}")),
+    );
+
+    // The agent reads a Projection and hands it straight back, as it would after
+    // deciding the note needs no change at all.
+    let projection = futures_block_on(resolver.read_note(host, NoteOptions::projection()))
+        .expect("the host projects");
+    let result = futures_block_on(resolver.write_note(host, &projection.content, None))
+        .expect("a no-op edit applies");
+
+    assert!(
+        result.refused.is_empty(),
+        "a clean round trip refused something: {:?}",
+        result.refused
+    );
+
+    // The pin: not a length, not a hash, the bytes an editor would see.
+    let after = std::fs::read(dir.path().join(host)).expect("the bytes are readable");
+    assert_eq!(
+        after,
+        before,
+        "a no-op write must leave the file alone: {} bytes became {}",
+        before.len(),
+        after.len()
+    );
+    assert_eq!(
+        count(&after, b"\r\n"),
+        count(&after, b"\n"),
+        "the file came back with a bare LF spliced into it"
+    );
+
+    // And the mechanism on both sides of the write: the read was normalised, and
+    // the reconciler handed back the note it was given rather than a rewrite.
+    assert!(
+        !projection.content.contains('\r'),
+        "a read hands back the normalised note: {:?}",
+        projection.content
+    );
+    assert_eq!(
+        result.text, lf,
+        "the round trip did not come back to the note it read"
+    );
+}
+
 #[test]
 fn editing_a_base_region_is_refused_and_the_rest_of_the_edit_still_lands() {
     let (dir, resolver) = sandbox();
@@ -1825,7 +1959,8 @@ fn stringified_renders_the_shapes_obsidian_stringifies() {
     let date = BasesValue::Date(BasesDate::from_millis(0));
     assert_eq!(
         stringified(Some(&date)).as_deref(),
-        Some("1970-01-01T00:00:00Z")
+        Some("1970-01-01T00:00:00"),
+        "a datetime renders local with no offset suffix, as Obsidian does"
     );
 
     let duration = BasesValue::Duration(Duration::from_millis(86_400_000));

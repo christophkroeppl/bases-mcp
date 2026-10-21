@@ -11,61 +11,142 @@
 //! are supported rather than picking a side. See `docs/divergences.md` in the
 //! TypeScript tree.
 
+use std::cmp::Ordering;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, FixedOffset};
 
 /// An instant, kept with its offset so `file.mtime` round-trips the way it was
 /// read rather than being silently normalised to UTC.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct BasesDate(pub DateTime<FixedOffset>);
+///
+/// `date_only` records that the source carried no time component. It is NOT
+/// part of the value's identity: `Eq`, `Ord` and `Hash` are written by hand over
+/// `at` alone, so a date-only value and a midnight datetime with the same
+/// instant sort together and compare equal as values, whatever the flag says.
+/// The flag is read where Obsidian's behaviour does depend on it — `values_equal`
+/// (a date-only value matches every datetime on its day) and `Display` (a
+/// date-only value renders `YYYY-MM-DD`). Deriving the traits would fold the
+/// flag into ordering, which the query pipeline's sort depends on staying
+/// instant-based.
+#[derive(Debug, Clone)]
+pub struct BasesDate {
+    /// The instant, in the offset it was read in.
+    pub at: DateTime<FixedOffset>,
+    /// Whether the source carried no time component.
+    pub date_only: bool,
+}
 
 impl BasesDate {
+    pub fn new(at: DateTime<FixedOffset>, date_only: bool) -> Self {
+        Self { at, date_only }
+    }
+
     pub fn year(&self) -> i32 {
         use chrono::Datelike;
-        self.0.year()
+        self.at.year()
     }
     pub fn month(&self) -> u32 {
         use chrono::Datelike;
-        self.0.month()
+        self.at.month()
     }
     pub fn day(&self) -> u32 {
         use chrono::Datelike;
-        self.0.day()
+        self.at.day()
     }
     pub fn hour(&self) -> u32 {
         use chrono::Timelike;
-        self.0.hour()
+        self.at.hour()
     }
     pub fn minute(&self) -> u32 {
         use chrono::Timelike;
-        self.0.minute()
+        self.at.minute()
     }
     pub fn second(&self) -> u32 {
         use chrono::Timelike;
-        self.0.second()
+        self.at.second()
     }
     pub fn millisecond(&self) -> u32 {
-        self.0.timestamp_subsec_millis()
+        self.at.timestamp_subsec_millis()
     }
 
     pub fn from_millis(millis: i64) -> Self {
         let dt = DateTime::from_timestamp_millis(millis)
             .unwrap_or_else(|| DateTime::from_timestamp_millis(0).expect("epoch is representable"));
-        Self(dt.fixed_offset())
+        Self {
+            at: dt.fixed_offset(),
+            date_only: false,
+        }
     }
 
     pub fn millis(&self) -> i64 {
-        self.0.timestamp_millis()
+        self.at.timestamp_millis()
+    }
+
+    /// The same value moved by `millis`, keeping its offset and its day flag.
+    ///
+    /// [`Self::from_millis`] cannot do this: it rebuilds from a timestamp, and
+    /// `DateTime::from_timestamp_millis` is always UTC, so a local date shifts
+    /// into another frame and `today() + "1d"` stays "today" for part of every
+    /// day outside UTC. Adding to `at` keeps the offset the backend reported.
+    pub fn shifted_by_millis(&self, millis: i64) -> Self {
+        Self {
+            at: self.at + chrono::Duration::milliseconds(millis),
+            date_only: self.date_only,
+        }
+    }
+}
+
+/// Equality and ordering are over the INSTANT alone. Two dates with one instant
+/// are the same value however they were spelled; the date-only flag is a
+/// property of the spelling, read by `values_equal` and `Display` instead.
+impl PartialEq for BasesDate {
+    fn eq(&self, other: &Self) -> bool {
+        self.at == other.at
+    }
+}
+impl Eq for BasesDate {}
+impl PartialOrd for BasesDate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for BasesDate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.at.cmp(&other.at)
+    }
+}
+impl Hash for BasesDate {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.at.hash(state);
     }
 }
 
 impl fmt::Display for BasesDate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use chrono::Datelike;
+        use chrono::Timelike;
+        if self.date_only {
+            return write!(
+                f,
+                "{:04}-{:02}-{:02}",
+                self.at.year(),
+                self.at.month(),
+                self.at.day()
+            );
+        }
+        // The stored offset's own fields, with no suffix: Obsidian renders a
+        // datetime in the offset it was read in (`2026-01-05T17:30:00`, not
+        // `…+01:00`), and a coerced frontmatter datetime is read in local time.
         write!(
             f,
-            "{}",
-            self.0.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+            self.at.year(),
+            self.at.month(),
+            self.at.day(),
+            self.at.hour(),
+            self.at.minute(),
+            self.at.second()
         )
     }
 }
@@ -151,6 +232,18 @@ pub enum BasesValue {
     Bool(bool),
     Number(f64),
     String(String),
+    /// A tag: a string that Obsidian treats as a type of its own.
+    ///
+    /// Obsidian has a `TagValue` class that extends `StringValue`, and a
+    /// `TagListValue` that extends `ListValue`. The class is load-bearing:
+    /// `looseEquals` compares `constructor`s, so a tag is NOT loose-equal to a
+    /// plain string. Measured against Obsidian 1.14.4: `tags == "project"` is
+    /// false for every tag shape, while `tags[0] == "#project"` is true.
+    ///
+    /// The text carries the `#`. Obsidian stores a tag as `#project` and
+    /// `tags[0].length` is 8, so the prefix is data rather than a display
+    /// convention.
+    Tag(String),
     Date(BasesDate),
     Duration(Duration),
     List(Vec<BasesValue>),
@@ -163,6 +256,16 @@ pub enum BasesValue {
         target: String,
         display: Option<String>,
         resolved: Option<String>,
+    },
+    /// An external URL.
+    ///
+    /// A distinct type from [`BasesValue::String`] because Obsidian's own
+    /// `isType` answers "url" for it, and because its method set is the
+    /// String one minus `asFile`. Measured against Obsidian 1.14.4 — see
+    /// `docs/divergences.md`.
+    Url {
+        /// The URL as written.
+        text: String,
     },
     /// A file, and the lazy accessors that need the vault. Only usable inside
     /// method calls.
@@ -298,6 +401,24 @@ impl BasesValue {
         }
     }
 
+    /// The tag text, if this value is a tag.
+    pub fn as_tag(&self) -> Option<&str> {
+        match self {
+            BasesValue::Tag(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// A tag, built from a frontmatter value.
+    ///
+    /// Obsidian forces the leading `#` on every tag (`MW`), so `project` and
+    /// `#project` are the same tag. A value that is not a string is NOT a tag:
+    /// Obsidian's frontmatter loader only builds a tag list when every element
+    /// is a string, and a mixed list keeps its elements as they are.
+    pub fn tag(text: impl Into<String>) -> Self {
+        BasesValue::Tag(ensure_hash(text.into()))
+    }
+
     pub fn as_number(&self) -> Option<f64> {
         match self {
             BasesValue::Number(n) => Some(*n),
@@ -315,6 +436,8 @@ impl BasesValue {
             BasesValue::Bool(b) => b.to_string(),
             BasesValue::Number(n) => format_number(*n),
             BasesValue::String(s) => s.clone(),
+            // A tag renders as its text, `#` and all.
+            BasesValue::Tag(s) => s.clone(),
             BasesValue::Date(d) => d.to_string(),
             BasesValue::Duration(d) => d.to_string(),
             BasesValue::List(items) => items
@@ -328,6 +451,7 @@ impl BasesValue {
                 Some(d) => format!("[[{target}|{d}]]"),
                 None => format!("[[{target}]]"),
             },
+            BasesValue::Url { text } => text.clone(),
             BasesValue::File(f) => f.path.clone(),
             BasesValue::Namespace(map) => map
                 .iter()
@@ -371,6 +495,44 @@ fn render_namespace(map: &std::collections::BTreeMap<String, BasesValue>) -> Str
         .join("\u{1}")
 }
 
+/// The tag text with a leading `#`, which is how Obsidian stores one.
+///
+/// Obsidian's `MW`: a tag is `#name`, and the `#` is part of the data rather
+/// than a display convention -- `tags[0].length` is 8 for `#project`.
+pub fn ensure_hash(text: String) -> String {
+    if text.starts_with('#') {
+        text
+    } else {
+        format!("#{text}")
+    }
+}
+
+/// Whether a tag matches a needle, the way Obsidian's `tagMatches` does.
+///
+/// The rule, measured against Obsidian 1.14.4:
+///   * both sides are lowercased, so the match is case-insensitive;
+///   * the needle is normalised to a `#`-prefixed tag, so `project` and
+///     `#project` are the same needle;
+///   * the match is a PREFIX match on the tag, not an equality: `project`
+///     matches `#project/alpha`, but `proj` matches nothing;
+///   * the prefix must land on a `/` boundary, so `project` does not match
+///     `#projectile`;
+///   * an empty needle never matches.
+///
+/// This is what `tags.contains(x)` and `file.hasTag(x)` do. It is NOT what
+/// `==` does, which compares the text exactly.
+pub fn tag_matches(tag: &str, needle: &str) -> bool {
+    let tag_lower = tag.to_lowercase();
+    let needle_lower = ensure_hash(needle.to_string()).to_lowercase();
+    if needle_lower.len() > tag_lower.len() {
+        return false;
+    }
+    if !tag_lower.starts_with(&needle_lower) {
+        return false;
+    }
+    tag_lower.len() == needle_lower.len() || tag_lower.as_bytes()[needle_lower.len()] == b'/'
+}
+
 /// A number as Obsidian spells it: integral values have no `.0`.
 pub fn format_number(n: f64) -> String {
     if n.is_finite() && n.fract() == 0.0 && n.abs() < 1e15 {
@@ -394,6 +556,16 @@ pub fn compare(a: &BasesValue, b: &BasesValue) -> Option<std::cmp::Ordering> {
         (Bool(x), Bool(y)) => Some(x.cmp(y)),
         (Number(x), Number(y)) => x.partial_cmp(y),
         (String(x), String(y)) => Some(x.cmp(y)),
+        // A TAG IS A STRING, AND THE `#` IS PART OF THE TEXT.
+        //
+        // Obsidian stores a tag as `#project`, so `tags[0] == "#project"` is
+        // true and `tags[0] == "project"` is false. The `#` is data, not a
+        // display convention: `tags[0].length` is 8 for `#project`.
+        (Tag(x), Tag(y)) => Some(x.cmp(y)),
+        // A tag against a plain string compares the TEXT, so `#project` and
+        // `#project` are equal but `#project` and `project` are not.
+        (Tag(x), String(y)) => Some(x.cmp(y)),
+        (String(x), Tag(y)) => Some(x.cmp(y)),
         (Date(x), Date(y)) => Some(x.cmp(y)),
         (Duration(x), Duration(y)) => Some(x.cmp(y)),
         (List(x), List(y)) => {
@@ -418,6 +590,12 @@ pub fn compare(a: &BasesValue, b: &BasesValue) -> Option<std::cmp::Ordering> {
             _ => None,
         },
         (Link { .. }, Link { .. }) => Some(a.link_target().cmp(&b.link_target())),
+        // A URL compares as its own text, and against a STRING as that string:
+        // Obsidian's `url == "https://example.com"` is true, and the URL class
+        // inherits `String`'s equality. Measured against Obsidian 1.14.4.
+        (Url { text }, Url { text: other }) => Some(text.cmp(other)),
+        (Url { text }, String(s)) => Some(text.cmp(s)),
+        (String(s), Url { text }) => Some(s.cmp(text)),
         (File(x), File(y)) => Some(x.path.cmp(&y.path)),
         // Namespaces compare by rendered content: `BasesValue` is not `Ord`, and
         // a namespace only ever reaches here when a filter sorts on it.
@@ -467,6 +645,62 @@ pub fn values_equal(a: &BasesValue, b: &BasesValue) -> bool {
     match (a, b) {
         (BasesValue::Null, BasesValue::Null) => true,
         (BasesValue::Null, _) | (_, BasesValue::Null) => false,
+        // A Link equals a STRING when the string is its target or its
+        // `[[...]]` spelling: Obsidian's Link inherits String's equality and
+        // compares the text. Measured against Obsidian 1.14.4:
+        // `link == "Some Note"` and `link == "[[Some Note]]"` are both true.
+        (
+            BasesValue::Link {
+                target, display, ..
+            },
+            BasesValue::String(s),
+        )
+        | (
+            BasesValue::String(s),
+            BasesValue::Link {
+                target, display, ..
+            },
+        ) => {
+            s == target
+                || s == &format!("[[{target}]]")
+                || display
+                    .as_deref()
+                    .is_some_and(|alias| s == &format!("[[{target}|{alias}]]"))
+        }
+        // A Date equals a STRING that spells it, in any form Obsidian accepts.
+        // Measured against Obsidian 1.14.4: `d == "2026-01-05"` is true for a
+        // date-only `d`, and `d == "2026-01-05T17:30:00"` is true for a
+        // datetime `d` on the same day.
+        (BasesValue::Date(x), BasesValue::String(s))
+        | (BasesValue::String(s), BasesValue::Date(x)) => {
+            match crate::stdlib::parse_date_loose(s) {
+                Some(other) => dates_equal(x, &other),
+                None => false,
+            }
+        }
+        // Two dates, and a date against a datetime. See `dates_equal`.
+        (BasesValue::Date(x), BasesValue::Date(y)) => dates_equal(x, y),
         _ => compare(a, b) == Some(std::cmp::Ordering::Equal),
     }
+}
+
+/// Whether two dates are equal as Obsidian's `==` sees them.
+///
+/// A date-only value on EITHER side compares by LOCAL CALENDAR DAY, so a
+/// date-only `2026-01-05` equals every datetime on the 5th:
+/// `d_only == "2026-01-05T17:30:00"`, `d_only == d_dt` and
+/// `d_only == "2026-01-04T23:00:00Z"` (midnight local on the 5th) are all true.
+///
+/// Two datetimes compare by INSTANT, so the same local time at a different
+/// offset is not equal: `d_dt == "2026-01-05T16:30:00Z"` is true while
+/// `d_dt == "2026-01-05T16:30:00"` is false.
+///
+/// All measured against Obsidian 1.14.4. Note this is deliberately NOT
+/// [`compare`]: `==` and the sort operators are different questions here, and
+/// the sort has to stay instant-based.
+fn dates_equal(x: &BasesDate, y: &BasesDate) -> bool {
+    if x.date_only || y.date_only {
+        return (x.year(), x.month(), x.day()) == (y.year(), y.month(), y.day());
+    }
+    x.millis() == y.millis()
 }

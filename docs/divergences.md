@@ -172,7 +172,7 @@ plugin, or a bad merge — which is exactly the shape a limit is for.
 | **Construct** | A note whose bytes on disk are CRLF, read through this server |
 | **Ours** | `VaultSource::read_note` and `read_fresh` replace `\r\n` with `\n` before anything above the backend sees the note. A lone `\r` is left alone. Every read, every cache entry and every `content_hash` taken above the backend is therefore over LF. |
 | **Obsidian** | Does not normalise at read time. It normalises on OPEN: opening a CRLF note converts it to LF in the app, and the conversion reaches disk the next time the note is saved. Until then the bytes stay CRLF, and so do any other reader's. |
-| **Evidence** | The five sources under "Obsidian writes LF on every platform", including the Obsidian staff reply that there is no way to change this. Our side is measured by `the_two_spellings_of_a_note_get_the_same_base_hash` and `a_base_hash_from_a_crlf_note_round_trips_through_an_obsidian_resave` in `tests/service.rs`. |
+| **Evidence** | The five sources under "Obsidian writes LF on every platform", including the Obsidian staff reply that there is no way to change this. Our side is measured by `the_two_spellings_of_a_note_get_the_same_base_hash` and `a_base_hash_from_a_crlf_note_round_trips_through_an_obsidian_resave`, and the no-op round trip is pinned by `a_crlf_edit_that_changes_nothing_does_not_touch_the_file`, all in `tests/service.rs`. |
 | **verify-in-obsidian** | no — the staff reply is decisive on the direction, and the open-time conversion is reported from three independent threads |
 
 **Where it is observable.** In `get_note`'s `raw`, and only there. An agent asking
@@ -215,10 +215,14 @@ its LF twin hash alike. Two classes of failure go with that:
   bytes after, still CRLF. Without normalisation the same round trip rewrites it —
   48 bytes to 49, a bare LF spliced in after the Base region and one extra blank
   line — which is the corruption recorded under "Bugs found in this implementation"
-  reached through a path nobody was watching. **Measured, not pinned by a test:** it
-  was observed with a throwaway harness rather than added as one, because the shape
-  tests this replaced are gone and a round-trip-no-op assertion for LF already
-  exists (`an_edit_that_changes_nothing_does_not_touch_the_file`).
+  reached through a path nobody was watching. **Pinned by a test.**
+  `a_crlf_edit_that_changes_nothing_does_not_touch_the_file` in `tests/service.rs`
+  takes a CRLF Host note through the same full Projection round trip and compares
+  the file's BYTES before and after rather than its length: the LF pin
+  (`an_edit_that_changes_nothing_does_not_touch_the_file`) compares `.len()`, which
+  would not see a same-size rewrite that changed the endings. Deleting the
+  normaliser makes the new test fail — the reconciled text no longer equals the
+  note that was read, so the no-op writes.
 
 **What it does not buy, and what must stay true elsewhere.** `content_hash` itself
 normalises nothing: it is a pure function of its argument, because the WebDAV
@@ -300,6 +304,155 @@ server should be reachable at all.
 
 ---
 
+## D10 — A method call on a null receiver answers null
+
+| | |
+|---|---|
+| **Construct** | A method call whose receiver is a property the note does not have, e.g. `type.contains("task")` against a note with no `type` |
+| **Ours** | The call answers **null**. A null filter expression is falsy, so the row is **dropped** and the query still answers. A non-null receiver with an unknown method still raises `Type error: "x" is not a method on <type>`. |
+| **Obsidian** | The same: the call answers null, the null filter is falsy, and the row is dropped. No error is reported. |
+| **Evidence** | Read out of Obsidian's own Bases evaluator, which ships in `resources/obsidian.asar` (installer 1.12.4 — the app `docs/divergences.md` records as 1.13.7). Its call site resolves the receiver, looks the method up on the receiver's type chain, and then: `if(s=r.getValue(e)||gW.value, !(t=KW.findForValue(s,i)) && s===gW.value) return gW.value`. `gW.value` is Obsidian's null singleton, so a null receiver with an unknown method answers the null value instead of raising. Obsidian's filter predicate is `this.getValue(e).isTruthy()`, and its null value answers `isTruthy()` false. Pinned by `tests/null_property.rs` (3 tests) and `tests/expr.rs` (`a_null_receiver_answers_null_whatever_the_method_is_called`, `the_universal_methods_answer_on_a_null_receiver`, `a_non_null_receiver_with_an_unknown_method_still_errors`). |
+| **verify-in-obsidian** | no — the rule is in Obsidian's shipped evaluator, not in the CLI's rendering of it |
+
+**Why this is a Divergence and not a bug.** Before this change the Rust
+implementation raised `Type error: "contains" is not a method on null`, which
+failed the WHOLE query rather than dropping one row. That was a divergence
+from Obsidian's behaviour, so it is recorded here rather than in the Bugs
+section below.
+
+**What the four universal methods do.** Obsidian registers exactly four
+methods that a null receiver resolves to — `isEmpty` on `Null` itself, and
+`toString`, `isTruthy` and `isType` on `Any`, which `Null` extends — and its
+lookup walks that prototype chain, so they are found before any fallback can
+answer for them. Ours registers the same four, and the null-receiver
+fallback sits behind them, so a null receiver reaches the same four methods
+and nothing else. Obsidian's null value also says `toString()` is the string
+`"null"` (not the empty string), which is why a null cell and a cell holding
+the text "null" are different things on the JSON surface.
+
+**The TypeScript tree has not been repaired.** `ts-implementation` still
+raises `Type error: "contains" is not a method on null` for the same
+construct, because its `getMethod` has no null-receiver fallback. Measured
+against `ts-implementation` at `9a86bd5`:
+
+```
+missingprop.contains("x")  -> ERROR Type error: "contains" is not a method on null
+missingprop.bogus()        -> ERROR Type error: "bogus" is not a method on null
+missingprop.toString()     -> ""          (Obsidian: "null")
+status.bogus()             -> ERROR Type error: "bogus" is not a method on String
+```
+
+So the two implementations no longer agree here, and this is the second
+recorded place where they differ on purpose — the first was line endings
+(D8). The TypeScript side is not touched by this change; it is a separate
+repair.
+
+**What is NOT settled by this entry.** Obsidian's rule for a null
+*argument* — as opposed to a null receiver — is a different question and is
+not recorded here. Obsidian's own evaluator distinguishes three cases (a
+null argument makes the whole call answer null; a null argument in an
+*optional* position is treated as absent; an argument that is simply
+**missing** from the call site is `Cannot call function "x", not enough
+arguments.`), and the Rust implementation does not yet model that
+distinction. It is tracked separately.
+
+
+## D11 — The frontmatter coercion chain is Link → URL → Date
+
+| | |
+|---|---|
+| **Construct** | A frontmatter value written as a quoted date, a URL, or a wikilink |
+| **Ours** | A frontmatter STRING is coerced before it is typed, in the order **Link → URL → Date**: `[[Some Note]]` is a Link, `https://example.com` is a URL, `2026-01-05` is a Date. A markdown link (`[Business](Projects/Business)`) is **not** coerced and stays a String. The `tags` key never reaches the chain: a tag is typed as a `Tag` when the frontmatter is read, which is why a tag spelled `[[x]]` stays a tag. |
+| **Obsidian** | The same, and this entry used to be a **divergence in our favour**: we coerced markdown links (Obsidian does not) and we coerced nothing else (Obsidian coerces dates and URLs). |
+| **Evidence** | `base:query` against Obsidian 1.14.4 (installer 1.12.4), with `isType` formulas asking each value what it is. Recorded in the table below. |
+| **verify-in-obsidian** | no — the CLI evidence is decisive, and it was taken against a live app |
+
+**What the CLI answered.** Every row was measured with
+`obsidian base:query path=… format=json` against a probe vault, asking each
+value `isType("…")`:
+
+| frontmatter | typed as | note |
+|---|---|---|
+| `"2026-01-05"` | **Date** | local midnight; `isType("string")` is **false** |
+| `2026-01-05` (unquoted) | **Date** | YAML parses it as a timestamp |
+| `"2026-01-05T17:30:00"` | **Date** | `.hour` → 17, local time |
+| `"2026-01-05 17:30"` | **Date** | the space separator is accepted |
+| `"2026-01-05T17:30:00+02:00"` | **Date** | rendered in LOCAL time → 16:30 here |
+| `"2026-01-05T17:30:00Z"` | **Date** | → 18:30 local |
+| `"2026-1-5"` | **String** | the month and the day must be two digits |
+| `"2026-13-45"` | **Date**, invalid | `.year` → NaN; it is not null |
+| `" 2026-01-05 "` | **String** | **nothing is trimmed** |
+| `"[[Some Note]]"` | **Link** | |
+| `"[[Some Note\|Alias]]"` | **Link** | split at the FIRST `\|` — the same split `extract_links` makes for a body link |
+| `"[[Some Note#Section]]"` | **Link** | the `#heading` stays IN the target |
+| `" [[Some Note]] "` | **String** | a leading space defeats the match |
+| `"https://example.com"` | **URL** | also `ftp:`, `mailto:`, `foo:bar`, `a:b` |
+| `"HTTPS://EXAMPLE.COM"` | **URL** | the scheme is case-insensitive |
+| `"example.com"` | **String** | no scheme |
+| `"//example.com"` | **String** | |
+| `"https://"` | **String** | an empty host is not a URL |
+| `"https://example.com/a b"` | **String** | **a space disqualifies it** |
+| `"file:///etc/passwd"` | **URL** | a `file:` URL is a URL |
+| `"C:/path"` | **URL** | a Windows path parses as a URL |
+| `"[Business](Projects/Business)"` | **String** | **a markdown link is never coerced** |
+| `"[Home](https://example.com)"` | **String** | |
+| `tags: ["[[Some Note]]"]` | **Tag** | `tags` is typed before the chain; a tag is string-like, never a Link |
+
+The URL test is exactly Obsidian's: **the string must contain no space, and
+`new URL(text)` must not throw.** The WHATWG parser decides the rest, so
+`https://` fails on an empty host while `mailto:a@b.com`, `foo:bar` and
+`file:///etc/passwd` all pass. Rust's `url` crate implements the same parser,
+and it agrees with the CLI on every row in the table above.
+
+`tags` never reaches the chain: the YAML reader types it first. A `tags`
+property that is a string, or a list of strings, becomes a **tag list** — a
+`Tag`, which is string-like and carries a forced `#` — at any depth and
+case-insensitively (the rule is on the key name). A mixed list is left exactly
+as written, so its strings stay Strings. `aliases: ["[[Some Note]]"]` is not
+`tags`, so it IS coerced, to a Link.
+
+**One deliberate difference.** Obsidian recognises an out-of-range date field
+(`"2026-13-45"`) and produces an INVALID Date whose `.year` is `NaN`. A
+`BasesDate` holds a real instant and cannot carry `NaN`, so we leave such a
+string a **String**. It is the only row in the table we do not match, and it is
+narrower than it sounds: every date Obsidian can represent, we coerce.
+
+**`isType` walks a prototype chain.** It does not compare one type name
+against one type name, so a value answers for every type it inherits from:
+
+| value | answers |
+|---|---|
+| URL | `url`, `string`, `any` |
+| Link | `link`, `string`, `any` |
+| Date | `date`, `any` — **not** `string` |
+| Number | `number`, `any` — **not** `string` |
+| everything else | its own type, and `any` |
+
+**A URL and a Link inherit the String method set**, and what they inherit
+operates on their own text: `link.length` is the length of the TARGET (9 for
+`[[Some Note]]`), not of the `[[…]]` spelling, and `link.contains("Some")`
+matches the target. A URL has **no** `asFile`, and a Date has **no** `asFile`
+either. Obsidian's Link class has no `target`, `display` or `path` member at
+all — asking for one is a hard error there, and ours keeps them, which is
+recorded below rather than here.
+
+**Dates are LOCAL, and a date-only value is local midnight.** Measured on a
+host at UTC+01:00, `number("2026-01-05")` is `1767567600000`, which is
+2026-01-05T00:00:00+01:00 — not UTC. The `date()` GLOBAL is read the same way,
+so `date("2026-01-05")` and a frontmatter `"2026-01-05"` are the same instant.
+
+**Equality follows from the types.** A Link equals its target, its `[[…]]`
+spelling and its `[[…|alias]]` spelling; a URL equals its text; a date-only
+value equals a datetime on the same day (`d == dt` is true).
+
+**Why the chain is in this order.** A `[[…]]` is checked first because it is
+the only form with brackets, and a URL before a date because `2026-01-05` is
+not a URL while `https://…` is not a date. The two are disjoint, so the order
+between them is unobservable — but the Link check must come first, because a
+URL may contain a `[[` in its path.
+
+---
+
 ## Behaviour probes that are NOT divergences
 
 Recorded because they were non-obvious and cost real probing time. We match
@@ -318,6 +471,101 @@ Obsidian on all of these; each is pinned by a test so it cannot regress.
 | Ambiguous link resolution | Resolves to the **shortest path**, not a same-folder sibling | `[[Root Project]]` resolves to `Root Project.md`, not anything under `Projects/`. |
 | `format=md` cell alignment | Every cell is **centred**, short values padded with spaces on both sides | Centred text is harder to scan than left-aligned, so it is tempting to "fix" — but `flat` is byte-compared against the CLI, so the centring is load-bearing. Only `structured` left-aligns. See D2. |
 | **Notes are always LF** | Obsidian writes `\n` on every platform, and converts a note's CRLF back to LF when it opens it | It looks like a bug when a Windows vault is full of CRLF and Obsidian "changed" every file on open. It is Obsidian doing the normalising, not the server. |
+| **The string methods do NOT share one case rule** | `contains` is **case-insensitive**; `==`, `startsWith` and `endsWith` are **case-sensitive** | The obvious expectation is that a family of search methods behaves uniformly. It does not, and it is Obsidian's asymmetry. See the table below. |
+| **`contains("")` is false, but `containsAll("")` and `containsAny("")` are true** | The empty-needle guard is on `contains` alone | Every other string contains the empty string, and the variadic forms do behave that way. See the table below. |
+| **A link's `contains` compares the RAW TARGET, not the `[[...]]` rendering** | `linkish.contains("[")` is **false** | The brackets look like part of the value. They are not — they are the rendering. See the table below. |
+
+### The case rules of the string methods
+
+Measured against the live Obsidian CLI on **1.14.4**, over a throwaway vault
+holding one note with `title: Hello World` and `mixed: Hello World`. Every
+cell below is a CLI answer, and every one of them is pinned by
+`contains_folds_case_and_the_other_three_do_not` in `tests/base.rs` over the
+`string-case` fixture, so the four cannot drift apart again.
+
+| Construct | Obsidian | Why it looks wrong |
+|---|---|---|
+| `"Hello World".contains("hello")` | **true** — case-insensitive | A case-insensitive search in a case-sensitive language. |
+| `"Hello World".contains("HELLO")` | **true** | Same rule, other direction. |
+| `"Hello World".contains("")` | **false** | Every other string contains the empty string. |
+| `"Hello World".containsAll("")` | **true** | The variadic forms have no empty-needle guard. |
+| `"Hello World".containsAny("")` | **true** | Same. |
+| `"Hello World".startsWith("hello")` | **false** — case-sensitive | `contains` folds and this does not. |
+| `"Hello World".endsWith("world")` | **false** | Same. |
+| `"Hello World" == "hello world"` | **false** | Equality is case-sensitive, as everywhere. |
+| `"Hello World".startsWith("")` | **true** | The empty-needle guard belongs to `contains` alone. |
+
+**Why this is not a Divergence.** We match Obsidian on all of it. It is
+recorded here because the ASYMMETRY is the kind of thing that gets "fixed" by
+someone reading the method list and assuming uniformity: folding
+`startsWith`/`endsWith` to match `contains` would make the family uniform and
+would **introduce** a divergence from Obsidian. The entry is a warning
+against a well-meaning change, pinned by a test so the warning survives.
+
+**The empty-needle guard.** Obsidian's own implementation is
+`"" !== needle && haystack.toLowerCase().includes(needle.toLowerCase())` —
+the guard is on the NEEDLE, and the variadic forms
+(`containsAll`, `containsAny`) have no such guard, so they fold the case and
+call `includes` per needle, and `includes("")` is true. A single
+`str_contains` helper for all three would have been wrong on exactly this
+point, which is why the guard lives in one place and the case folding in
+another.
+
+**A link's `contains` compares the raw target.** Obsidian's `LinkValue` is a
+SUBCLASS of `String` whose data is the target the author wrote, so
+`linkish.contains("[")` is false for `linkish: "[[Hello World]]"` — the
+brackets are the rendering, not the data. The rendering is reachable through
+`toString()`, which answers `[[Hello World]]`. We compare the raw target for
+the same reason.
+
+**Not the same as the list receiver.** A note property whose inferred type is
+`multitext` is promoted to a LIST for these five methods, and a list answers
+`contains` by ELEMENT equality — `words.contains("hello")` is false for
+`words: [Hello, World]`, and `words.startsWith(...)` is refused outright
+("Cannot find function startsWith on type List"). That promotion is a
+type-coercion question rather than a case question, so it is not settled
+here; it belongs with the frontmatter-coercion work.
+
+**The TypeScript tree has the same divergence.** `main` and `ts-implementation`
+implement `contains` as `str(target).includes(needle)` — case-SENSITIVE, and
+with no empty-needle guard — so they answer this the way we used to. Those
+branches are the cross-implementation ORACLE rather than the shipping tree
+(`develop` is the shipping one), and `main` is frozen at `0fbef40`, so this
+entry records the divergence rather than repairing it there. The Rust side is
+the one the project ships, so the Rust side is the one that was repaired.
+
+| `limit: 0` | **No limit at all** — the view keeps every row | The one value that looks like "keep nothing" and means "keep everything". Obsidian's view parser only keeps a limit that is a number AND positive. |
+| `order: []` | Falls back to the single `file.name` column | An empty array is falsy in JavaScript, so Obsidian's own accessor (`this.order \|\| ["file.name"]`) never sees it as "no columns". |
+| Nulls in a sort | Sort **last**, in **both** directions | The direction is applied to the comparison of two VALUES, not to the null check, so a row with no value stays at the bottom whichever way the sort runs. A descending sort that simply reversed the ascending order would put it first. |
+| The columns of a view | Exactly the ones the view **orders** | A property the Base *declares*, or one the view *sorts* on, is not a column. Obsidian builds both its JSON rows and its markdown table from `getOrder()`. |
+| The keys of a JSON row | The columns' **display names** | Two columns sharing a display name share one key, and the later one overwrites the earlier — so a column can vanish from the JSON without the row changing shape. |
+
+
+### The CLI's traps, and where their evidence comes from
+
+These five are the ones that fail SILENTLY: a regression in any of them produces
+a result that looks complete and is not. Each is pinned by
+`tests/cli_traps.rs`, against the fixture vault `test/fixtures/cli-traps`.
+
+The evidence is the **shipped Obsidian application**, not a live query. The
+installation on this host ships its own JavaScript bundle, and the Bases engine
+is inside it; reading that file launches nothing, opens no vault and writes
+nothing. That matters because the CLI cannot be run here at all — it talks to
+the desktop app, which rewrites the `.base` files of the vault it is pointed at,
+and the vault the app has open is the parity oracle on `develop`.
+
+The three facts that decide the traps, transcribed from that bundle:
+
+| Trap | The code |
+|---|---|
+| The columns | `getOrder()` returns `this.order \|\| ["file.name"]`; the CLI maps its rows over it and keys each one by `getDisplayName()`. |
+| The values | The cell is `null == n \|\| n === NullValue.value ? "" : n.toString()` — a string, always, with the empty string for an absent one. |
+| The sort | The comparator returns `1` when the left value is the null value and `-1` when the right one is, and only THEN applies the direction to the value comparison. |
+
+The live CLI comparison is still owed: it is the deferred UI-validation work
+(STATUS.md item 14), and it needs a human in the Obsidian UI. What is here is
+the behaviour the shipped code implements, which is stronger than a probe —
+it is the code that decides.
 
 
 ### Obsidian writes LF on every platform
@@ -418,6 +666,138 @@ guard whose safety depends on the compilation target is the defect rather than
 its repair, and a `cfg`-gated rule never runs where it matters. The read side is
 unaffected: an existing Linux file named `NUL.md` stays readable; only *creating*
 one through `add_note_to_base` is refused.
+
+---
+
+## D12 — A missing argument is an error, but a null argument answers null
+
+| | |
+|---|---|
+| **Construct** | An argument the call site never passes, next to one it passes as `null`: `status.replace("a")` against `status.replace("a", null)` |
+| **Ours** | Three outcomes, as Obsidian has them. A REQUIRED parameter the call never passed raises `Cannot call function "replace", not enough arguments.` A required parameter passed as **null** makes the whole call answer **null**. A parameter marked **optional** that is passed as null is treated as **absent** — so `status.slice(0, null)` is the whole string. |
+| **Obsidian** | The same three: absent is an error in a required position, null answers the call null, and null in an optional position is pushed as absent. |
+| **Evidence** | Read out of Obsidian's own Bases evaluator, which ships in `resources/obsidian.asar` (`version.json` in that archive says 1.12.4; this file's header records the app as 1.13.7). Its call site checks every argument against the function's parameter table before the body runs — the function is quoted in full below — and the message is Obsidian's own i18n string `msgErrorNotEnoughArguments` from `i18n.js`: `Cannot call function "{{ function }}", not enough arguments.` Pinned by `tests/expr.rs` (`a_missing_required_argument_is_not_enough_arguments`, `a_null_required_argument_answers_null`, `a_null_optional_argument_is_absent`, `a_null_variadic_argument_answers_null`, `a_null_needle_in_a_list_is_compared_rather_than_answering_null`). |
+| **verify-in-obsidian** | no — the rule is in Obsidian's shipped evaluator, not in the CLI's rendering of it |
+
+**The checker.** Every method and global is registered with a parameter
+table, and the call site runs this before the body:
+
+```js
+var S=t.params,x=0,T=[],D=function(e){
+  if(x===S.length){ if(!S[S.length-1].variadic) throw new Error(SK.msgErrorTooManyArguments({function:i})); x-- }
+  var t=S[x];
+  if(t.optional && e===gW.value) T.push(null);          // optional + null  -> absent
+  else {
+    if(!t.type.some(t=>e instanceof t)){
+      if(e===gW.value) return !1;                        // required + null  -> the CALL answers null
+      throw new Error(SK.msgErrorTypeError({function:i,parameter:t.name,expected:t.type[0].toString(),given:e.constructor.toString()}))
+    }
+    T.push(e)
+  }
+  return x++,!0
+};
+if(s && !D(s)) return gW.value;                          // the receiver's own argument
+for(h=0;h<o.length;h++) if(!D(o[h].getValue(e)||gW.value)) return gW.value;
+if(x<S.length) for(h=x;h<S.length;h++) if(!S[h].optional && !S[h].variadic) throw new Error(SK.msgErrorNotEnoughArguments({function:i}))
+```
+
+The three outcomes are therefore not stylistic. `e===gW.value` is "this
+argument IS the null value"; an argument the call site never wrote never
+reaches `D` at all, and the loop over the remaining parameters is what turns
+that into the error. `gW.value` is Obsidian's one null singleton, which its
+own `NullValue` exposes as `t.value`.
+
+**The bug this repaired.** The Rust implementation read every argument with
+`arg(args, i)`, which returned null for an absent argument as well as for a
+null one, so the two cases collapsed. Measured on the code this card started
+from — `develop` carrying D10's `ce5e764` — with `status` bound to the string
+`"active"`:
+
+```
+"active".contains()        ERROR Type error in "contains", parameter "value". Expected String not, given null.
+"active".slice(0, null)    ""
+"active".containsAll(null) false
+"active".replace("a")      "ctive"          <- the replacement is ABSENT, not null
+```
+
+`replace("a")` is the sharp one: the call is missing its required replacement
+and deleted the match instead. In the language Obsidian implements,
+`"active".replace("a")` yields `"undefinedctive"` while
+`.replace("a", null)` yields `"nullctive"` — the tell that absent and null are
+different things, and that neither is an empty string. After this change:
+
+```
+"active".contains()        ERROR Cannot call function "contains", not enough arguments.
+"active".contains(null)    null
+"active".slice(0, null)    "active"
+"active".replace("a")      ERROR Cannot call function "replace", not enough arguments.
+"active".replace("a", null) null
+"active".containsAll(null) null
+```
+
+**The parameter tables this models.** Straight out of the binary, where
+`zW(name, type...)` is a required parameter, `qW(...)` an optional one and
+`jW`/`k([...], jW(...), !0)` a variadic one:
+
+```
+contains    [self:String, value:String]
+containsAll [self:String, values:String...]            variadic
+containsAny [self:String, values:String...]            variadic
+startsWith  [self:String, query:String]
+endsWith    [self:String, query:String]
+repeat      [self:String, count:Number]
+slice       [self:String, start:Number, end:Number?]   end optional
+split       [self:String, separator:String|RegExp, n:Number?]   n optional
+replace     [value:String, pattern:String|RegExp, replacement:String]
+list.slice  [self:List, start:Number, end:Number?]     end optional
+list.contains [self:List, value (text union)]
+```
+
+`replace`'s first parameter is really named `value` in Obsidian (it is the
+receiver), which is why the type error for a bad pattern does not name
+`self`. Twelve methods read the rule today: the nine String methods above,
+`list.contains`, `link.contains` and `list.slice`. Every other built-in still
+reads an absent argument as null (`stdlib::arg`), because its parameter table
+is not modelled yet; that is the rest of the argument-level ticket, and it is
+why `stdlib::arg` still exists with D12 named in its doc comment.
+
+**A null needle in a LIST is compared; in a LINK it answers null.** The two
+look identical and are not:
+
+* `list.contains` declares `UW("value","text",mW)` — the `text` union, whose
+  type list is `Any`. A null passes the type check, so the call compares it
+  instead of answering null. Its body is `operate:function(e,t){return
+  e.includes(t)}`, and `EW.prototype.includes` is
+  `for(...) if(mW.looseEquals(e,this.get(n))) return!0`, where `get` returns
+  the null singleton for a null entry and `NullValue.prototype.equals`
+  returns true. So `list([1, 2]).contains(null)` is `false` and
+  `list([null]).contains(null)` is **true**.
+* a Link is a String in Obsidian — the Link value class is declared with
+  `String` as its base, `t}(wW)` — and it registers only `linksTo` and
+  `asFile`, so `link.contains` resolves to String's method, whose `value`
+  parameter is a plain `String`. Null does not satisfy it, and because the
+  null was passed the checker returns the null value:
+  `link("Note").contains(null)` is **null**.
+
+**What this corrects in the ticket.** The card had the link case right and the
+list case half right: `list.contains(null)` must not answer null, but "false"
+is only the answer for a list that does not hold a null — the comparison is
+the list's own, and it matches a null entry. Ours answers with `any(item is
+null)` for the null needle, which is that same answer, so only the missing
+argument had to change there.
+
+(That a Link IS a String also means every String method is callable on a link
+in Obsidian. Ours registers only `linksTo`, `asFile` and the null-receiver
+fallback on `Link`, so `link("x").slice(1)` is a "not a method on Link" error
+here and answers in Obsidian. That is a separate divergence, not this one; it
+is recorded here only because it is the reason `link.contains` is governed by
+String's parameter table.)
+
+**The TypeScript tree is not repaired.** `ts-implementation` reads arguments
+the same way the old Rust code did (`args[0] ?? null` throughout
+`src/expr/stdlib.ts`), so it does not model the distinction either. As with
+D10, this is the Rust tree's repair; the TypeScript tree is a separate piece
+of work.
 
 ## Bugs found in this implementation
 
@@ -549,18 +929,19 @@ replaced the live fence with nothing.
 Fixed in the Rust port by pairing two inline regions on their pinned view alone.
 The TypeScript tree still has this bug; it is not yet repaired there.
 
-### Date cells lost their `dateOnly` flag
+### Date cells lost their `dateOnly` flag (fixed)
 
 `DateValue` carried a `dateOnly` flag, and `file.mtime` was built with it set, so
-`toString()` truncated to `YYYY-MM-DD`. `BasesDate` keeps a fixed offset and
-renders full RFC 3339.
+`toString()` truncated to `YYYY-MM-DD`. `BasesDate` had no flag at all and
+rendered full RFC 3339, so a date-only value lost its shape between the two
+trees.
 
-This is a deliberate consequence of the value type rather than a defect: a
-`dateOnly` flag on `BasesDate` would change its derived `Ord`, which the query
-pipeline's sort depends on. The effect is that a rendered date cell in the Rust
-port carries a time component the TypeScript dropped, which **will** show up in
-`format=md` byte parity once Obsidian is reachable. Recorded here so it is not
-discovered as a mystery later.
+`BasesDate` now carries the flag, and `Display` renders a date-only value as
+`YYYY-MM-DD` and a datetime as `YYYY-MM-DDTHH:mm:ss` — local, with no offset
+suffix, which is what Obsidian's `toString()` does (D11). The flag is
+deliberately **not** part of `Eq`/`Ord`/`Hash`: those are written by hand over
+the instant, so the query pipeline's sort still compares instants and a
+date-only value and a midnight datetime still sort together.
 
 ### `project` appended a stray newline (fixed in both)
 
@@ -614,6 +995,63 @@ reports the note as absent and the commit proceeds. `FsVaultSource::exists` here
 distinguishes `NotFound` from every other code and refuses the rest. `false` in
 this method is permission to destroy a note rather than an absence of
 information, so the looser reading is the one that loses data.
+
+### `get_note` never returned the `base_hash` its own `write_note` demanded
+
+`write_note` took an optional `base_hash` and refused the write when it did not
+match the note on disk — the conditional write that stops an agent's edit from
+overwriting whatever arrived since it read. Its argument description says where
+the value comes from: "the `base_hash` from the `get_note` this edit is based
+on".
+
+`get_note` never returned one. The payload carried `path`, `raw`, `content` and
+`regions`, and the `WriteNoteArgs` doc comment — the only place the contract was
+written down — described a value the read did not produce. An agent following the
+documented flow had nothing to quote, so every write it made was a BLIND write:
+`base_hash` omitted, the concurrency check skipped, and the note on disk
+overwritten with whatever had arrived since the read.
+
+The hash was never missing from the engine. `Resolver::read_note` computes it
+(`content_hash(&raw)`) on both paths, and `NoteView::base_hash` carried it — the
+tool simply did not put it in the payload. The TypeScript tree returned it from
+the same read, so this was a divergence between the two implementations and not
+a design choice.
+
+The cause is visible in the history. `c4af62f` ("Fix four data-loss bugs") added
+the conditional write to the Rust tree, and its own message says "`get_note`
+returns a `base_hash` and `write_note` takes it" — but the diff adds the
+`base_hash` argument to `write_note` and touches nothing in `get_note`'s
+payload. The port that added the check did not add the value the check
+compares against, and the half that was missing is the half an agent can see.
+The TypeScript port of the same fix (`9a86bd5`) added both halves, which is why
+the two trees disagreed.
+
+Fixed in `src/tools.rs`: `get_note`'s payload carries `base_hash`, and
+`write_note`'s schema declares the argument it has always accepted — the
+handler read `base_hash` from a struct field that no declared schema described,
+so a client reading `tools/list` had no way to know the argument existed. Both
+tool descriptions now name the value and the flow, because the description is
+the only channel a model reads.
+
+Pinned by `get_note_returns_the_base_hash_write_note_compares_against`,
+`the_projection_carries_the_same_base_hash_as_the_raw_text`,
+`the_documented_conditional_write_flow_works_through_the_tool_surface` and
+`a_hash_from_get_note_that_has_gone_stale_is_refused` in `tests/tools.rs`. The
+last one is the half worth having: it asserts that a note changed between the
+read and the write is REFUSED and the user's text survives.
+
+Measured across the two trees, over a real MCP stdio session, each side
+pointed at a private copy of the testing vault:
+
+```
+before:  DIFF base_hash: rust=None  ts='68f8d427fb15f5083ab15b538f6fc255'
+after:   OK   base_hash: rust='68f8d427fb15f5083ab15b538f6fc255'
+                                                  ts='68f8d427fb15f5083ab15b538f6fc255'
+```
+
+and the whole `get_note` payload — `path`, `raw`, `content`, `base_hash`,
+`regions`, `health` — is identical on both sides after the fix, which is what
+the "verified equivalent" claim above needs to be true of this tool.
 
 ### A restored Base region was spliced into a CRLF Host note with a bare LF
 
@@ -754,6 +1192,13 @@ normalises CRLF to LF on read (D8); `ts-implementation` preserves them. The elev
 cases above contain no CRLF note, so the measurement stands as measured — but a
 CRLF note would now round-trip through one tree and not the other, and that is a
 recorded Divergence rather than a bug in either.
+
+**A second case is no longer equivalent, also deliberately.** A method call on
+a **null receiver**. `develop` answers null and drops the row (D10); the
+TypeScript tree still raises `Type error: "contains" is not a method on null`.
+Both are now recorded rather than assumed equal, and the eleven cases above
+contain no null-receiver call, so the measurement stands as measured. The
+TypeScript repair is a separate piece of work.
 
 ## The Rust parity harness fails loudly rather than skipping
 

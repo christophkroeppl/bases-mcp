@@ -453,20 +453,21 @@ fn booleans_and_dates_summarise_on_their_own_terms() {
         row("B.md", Some(false), Some(day(1, 3))),
         row("C.md", None, None),
     ];
-    // A date CELL renders as full RFC 3339 here, where the TypeScript's
-    // `DateValue` carried a `dateOnly` flag and rendered a bare `YYYY-MM-DD`.
-    // `BasesDate` keeps a fixed offset instead, so the instant is unambiguous and
-    // the time component survives. The SUMMARY cell is a bare date either way:
+    // A date CELL renders as a datetime with no offset suffix, where the
+    // TypeScript's `DateValue` carried a `dateOnly` flag and rendered a bare
+    // `YYYY-MM-DD`. `BasesDate` carries the same flag and a date-only value
+    // still renders bare; these two were built from an INSTANT, so they keep
+    // their time component. The SUMMARY cell is a bare date either way:
     // a summary of timestamps is unreadable at a glance.
-    let expected = r#"| flag  | due                  |
-| ----- | -------------------- |
-| true  | 2024-12-20T00:00:00Z |
-| false | 2024-01-03T00:00:00Z |
-|       |                      |
+    let expected = r#"| flag  | due                 |
+| ----- | ------------------- |
+| true  | 2024-12-20T00:00:00 |
+| false | 2024-01-03T00:00:00 |
+|       |                     |
 
-| flag  | due                  |
-| ----- | -------------------- |
-| 1     | 2024-01-03           |"#;
+| flag  | due                 |
+| ----- | ------------------- |
+| 1     | 2024-01-03          |"#;
 
     let result = with_rows("table", &["note.flag", "note.due"], rows.clone());
     let result = summarised_onto(
@@ -476,15 +477,15 @@ fn booleans_and_dates_summarise_on_their_own_terms() {
     assert_eq!(render(&base(), &result, RenderStyle::Structured), expected);
 
     for (column, spec, cell) in [
-        ("note.flag", "Checked", "| 1     |                      |"),
-        ("note.flag", "Unchecked", "| 1     |                      |"),
-        ("note.flag", "Filled", "| 2     |                      |"),
-        ("note.flag", "Empty", "| 0     |                      |"),
-        ("note.due", "Earliest", "|       | 2024-01-03           |"),
-        ("note.due", "Latest", "|       | 2024-12-20           |"),
+        ("note.flag", "Checked", "| 1     |                     |"),
+        ("note.flag", "Unchecked", "| 1     |                     |"),
+        ("note.flag", "Filled", "| 2     |                     |"),
+        ("note.flag", "Empty", "| 0     |                     |"),
+        ("note.due", "Earliest", "|       | 2024-01-03          |"),
+        ("note.due", "Latest", "|       | 2024-12-20          |"),
         // Not a span: a date is not a number, so a Range over one has nothing to
         // take the difference of and is blank rather than a millisecond figure.
-        ("note.due", "Range", "|       |                      |"),
+        ("note.due", "Range", "|       |                     |"),
     ] {
         let result = with_rows("table", &["note.flag", "note.due"], rows.clone());
         let result = summarised_onto(result, &[(column, spec)]);
@@ -570,7 +571,7 @@ fn a_bare_display_name_key_is_dead_config() {
 }
 
 #[test]
-fn an_unordered_view_lists_the_bases_own_properties() {
+fn an_unordered_view_lists_only_the_file_name() {
     let base = BaseFile {
         properties: BTreeMap::from([
             ("note.status".to_string(), PropertyConfig::default()),
@@ -580,15 +581,16 @@ fn an_unordered_view_lists_the_bases_own_properties() {
     };
     let mut result = result("table");
     result.view.order = None;
-    // `BaseFile::properties` is a sorted map, so an unordered view lists its
-    // properties in key order rather than in the order the file declared them.
-    // Only views with no `order` are affected, and Obsidian always writes one.
+    // A property the Base DECLARES is not a column unless the view ORDERS it.
+    // Obsidian's accessor is `this.order || ["file.name"]` -- one column, and
+    // not the declarations. A renderer that invented columns from the
+    // declarations would show properties Obsidian never emits.
     assert_eq!(
         render(&base, &result, RenderStyle::Flat),
-        r#"| file name | owner | status |
-| --------- | ----- | ------ |
-|   Beta    |       | active |
-|   Alpha   |       |  done  |"#
+        r#"| file name |
+| --------- |
+|   Beta    |
+|   Alpha   |"#
     );
 }
 

@@ -18,8 +18,9 @@
 //!     that compared nothing.
 //!
 //! Nothing here writes to `test/vault`. It is the Obsidian parity oracle and
-//! stays at exactly [`CORPUS_SIZE`] files. The write comparisons happen in two
-//! throwaway sandboxes -- a temp directory and a map -- seeded identically.
+//! stays at exactly [`CORPUS_SIZE`] files — a set the manifest pins, byte for
+//! byte. The write comparisons happen in two throwaway sandboxes -- a temp
+//! directory and a map -- seeded identically.
 //!
 //! mtime is the one field the two backends cannot agree on, and the reason the
 //! memory source has a fixed clock at all. `Vault` feeds `stat().mtime` to
@@ -37,9 +38,9 @@
 //! would compare a fake against a fake and prove nothing, which is the same
 //! mistake the suite's own header warns about.
 
-// Each integration test is its own crate, and no two of them need every helper here.
-// Each integration test is its own crate, and no suite needs every helper here.
-#[allow(dead_code)]
+// Every integration test is its own crate, and no suite needs every helper here.
+// The module carries its own `dead_code` allow, so this declaration needs
+// nothing beside it.
 mod common;
 
 use std::collections::BTreeMap;
@@ -52,12 +53,12 @@ use bases_mcp::vault::{
     coerce_frontmatter, content_hash, fold_key, is_indexable, match_path, points_at, FileStat,
     FsVaultSource, PathIndex, SourceKind, Vault, VaultSource,
 };
+use common::manifest::assert_vault_matches_manifest;
 use common::memory::{
     MemoryFault, MemoryOp, MemoryVaultSource, SharedSource, ANY_PATH, MEMORY_MTIME_MS,
 };
 use common::{
-    count_files, dotfile_tree, futures_block_on, load_corpus, seed_dir, vault_dir, VaultFile,
-    CORPUS_SIZE,
+    dotfile_tree, futures_block_on, load_corpus, seed_dir, vault_dir, VaultFile, CORPUS_SIZE,
 };
 use tempfile::TempDir;
 
@@ -133,11 +134,14 @@ where
 
 #[test]
 fn the_corpus_is_the_testing_vault_and_the_testing_vault_is_untouched() {
-    // The oracle's size underpins every comparison below: a tenth file would
-    // change what Obsidian returns for the same query, so the parity and
-    // equivalence suites would then be describing different vaults.
+    // The oracle underpins every comparison below: a changed file would change
+    // what Obsidian returns for the same query, so the parity and equivalence
+    // suites would then be describing different vaults.
+    //
+    // A MANIFEST, not a count: the count could only see a file being added, and
+    // the desktop app rewriting a `.base` file leaves the count at nine.
     assert_eq!(load_corpus().len(), CORPUS_SIZE);
-    assert_eq!(count_files(&vault_dir()), CORPUS_SIZE);
+    assert_vault_matches_manifest();
 }
 
 #[test]
@@ -1134,17 +1138,23 @@ fn file_tags_carry_their_hash_prefix_from_both_the_frontmatter_and_the_body() {
     // Confirmed against `base:query format=json` on Obsidian 1.13.7, which emits
     // `"Tags": "#Contacts, #Kontakte"`. A frontmatter tag may be written with or
     // without the `#`, and both normalise to the prefixed form.
+    //
+    // The elements are TAGS, not plain strings: Obsidian's `file.tags` is a
+    // `TagListValue`, whose elements are `TagValue`s. The class is load-bearing
+    // for equality -- a tag is never loose-equal to a plain string -- so the
+    // representation here has to be the tag one, not the string one. Measured
+    // against Obsidian 1.14.4.
     let vault = loaded();
     assert_eq!(
         vault.tags_for("Root Ticket.md"),
-        [BasesValue::String("#ticket".to_string())]
+        [BasesValue::Tag("#ticket".to_string())]
     );
     let project = vault.tags_for("Root Project.md");
     assert_eq!(
         project,
         [
-            BasesValue::String("#business-idea".to_string()),
-            BasesValue::String("#project".to_string()),
+            BasesValue::Tag("#business-idea".to_string()),
+            BasesValue::Tag("#project".to_string()),
         ]
     );
     assert!(vault.tags_for("Nope.md").is_empty());
@@ -1381,9 +1391,14 @@ fn links_to_is_false_because_backlinks_answers_the_same_question() {
 }
 
 #[test]
-fn a_markdown_link_property_becomes_a_link_and_a_url_property_does_not() {
-    // `[Business](Projects/Business)` is a note; `[Home](https://example.com)` is
-    // not, and coercing it would put a link object in a property that is a URL.
+fn a_markdown_link_property_stays_a_string_and_a_url_property_becomes_a_url() {
+    // Obsidian coerces a frontmatter STRING into a Link, a URL or a Date — in
+    // that order — and a MARKDOWN link is not among them. Measured against
+    // Obsidian 1.14.4: `[Business](Projects/Business)` stays a String, even
+    // though it names a note in the vault.
+    //
+    // The `[[...]]` form is the one that becomes a Link, and that is what
+    // makes `project.contains(link(this.file.name))` work at all.
     let vault = loaded();
     let mut data = BTreeMap::new();
     data.insert(
@@ -1406,15 +1421,18 @@ fn a_markdown_link_property_becomes_a_link_and_a_url_property_does_not() {
         "nested".to_string(),
         BasesValue::String("[[Tickets/Fix login redirect|Fix]]".to_string()),
     );
+    data.insert(
+        "url".to_string(),
+        BasesValue::String("https://example.com".to_string()),
+    );
 
     let coerced = coerce_frontmatter(&data, &vault);
+    // A markdown link is NOT coerced, whichever way it is written.
     assert_eq!(
         coerced.get("relative"),
-        Some(&BasesValue::Link {
-            target: "Projects/Business".to_string(),
-            display: Some("Business".to_string()),
-            resolved: None,
-        })
+        Some(&BasesValue::String(
+            "[Business](Projects/Business)".to_string()
+        ))
     );
     assert_eq!(
         coerced.get("absolute"),
@@ -1430,9 +1448,17 @@ fn a_markdown_link_property_becomes_a_link_and_a_url_property_does_not() {
         coerced.get("plain"),
         Some(&BasesValue::String("Just text".to_string()))
     );
-    // Resolved, because the index is already built. Coercion DURING a rebuild
-    // happens before the index exists and resolves nothing -- see
-    // `file_properties_are_the_coerced_frontmatter` for that half.
+    // A bare URL IS a URL — a distinct type, not a plain string.
+    assert_eq!(
+        coerced.get("url"),
+        Some(&BasesValue::Url {
+            text: "https://example.com".to_string()
+        })
+    );
+    // The `[[...]]` form is a Link. Resolved, because the index is already
+    // built. Coercion DURING a rebuild happens before the index exists and
+    // resolves nothing -- see `file_properties_are_the_coerced_frontmatter` for
+    // that half.
     assert_eq!(
         coerced.get("nested"),
         Some(&BasesValue::Link {
