@@ -76,6 +76,57 @@ fn podman(args: &[&str]) -> Command {
     command
 }
 
+/// Remove the containers that a KILLED run left behind.
+///
+/// `Drop` runs when the suite ends normally and when a cell panics, but
+/// not when the process is killed outright -- `SIGKILL` and `SIGINT` both
+/// end it without unwinding. The `--timeout` on the container bounds what
+/// such a run leaves RUNNING, but the container's RECORD survives, still
+/// referencing the image, and `podman rmi` counts a record as a use.
+///
+/// So the next run sweeps it: the container's name carries the pid of
+/// the run that created it, and a container whose creating process is
+/// gone belongs to a run that is over. A container whose creating pid is
+/// still alive belongs to a run that is HAPPENING -- possibly this one,
+/// or another suite running beside it -- and is left alone.
+fn remove_containers_of_dead_runs() {
+    let output = podman(&[
+        "ps",
+        "-a",
+        "--filter",
+        "name=bases-mcp-cm-",
+        "--format",
+        "{{.Names}}",
+    ])
+    .output();
+    let Ok(output) = output else { return };
+    if !output.status.success() {
+        return;
+    }
+    for name in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some(pid) = creating_pid(name) else {
+            continue;
+        };
+        // A pid that is still running owns its container.
+        if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            continue;
+        }
+        let _ = podman(&["rm", "-f", name]).output();
+    }
+}
+
+/// The pid of the run that created a container, from its name.
+///
+/// The name is `bases-mcp-cm-<pid>-<suffix>`, so the pid is the field
+/// after the prefix. A name that does not have that shape yields nothing
+/// rather than a guess: sweeping the wrong container is worse than
+/// leaving one behind.
+fn creating_pid(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix("bases-mcp-cm-")?;
+    let pid = rest.split('-').next()?;
+    pid.parse().ok()
+}
+
 /// Whether podman can talk to a runtime at all.
 ///
 /// Probed once, because a missing runtime is a SKIP (the test cannot run)
@@ -109,6 +160,16 @@ macro_rules! skip_unless {
                 return;
             }
         }
+        // The suite is about to start containers, so the containers that a
+        // KILLED run left behind go first. Their names carry the pid of
+        // the run that created them, and a container whose creating
+        // process is gone belongs to a run that is over.
+        //
+        // Once per PROCESS, not once per cell: the sweep is a `podman ps`
+        // and a `podman rm` per survivor, and doing it in every cell would
+        // multiply that by the number of cells for no gain.
+        static SWEPT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        SWEPT.get_or_init(remove_containers_of_dead_runs);
     };
 }
 
@@ -157,14 +218,20 @@ const NOTE_BODY: &str = "---\nstatus: open\n---\n\n# Container Note\n\nOriginal 
 ///
 /// The crash guard for a client that is killed rather than dropped:
 /// `Drop` does not run on `SIGKILL`, so without a deadline a killed
-/// client leaves the container running, holding a host port.
+/// client leaves the container RUNNING, holding a host port.
+///
+/// What the deadline does and does not settle, measured:
+///   * the container is STOPPED at the deadline, and the host port is
+///     released -- the port is what a leaked container really costs;
+///   * the container's RECORD survives, still referencing the image. A
+///     record is inert, but it is litter, and `podman rmi` counts it, so
+///     the next run sweeps it (see `remove_containers_of_dead_runs`).
 ///
 /// The value is the container's LIFETIME, so it has to be LONGER than
 /// the time the suite is willing to wait for one cell -- the 10-second
 /// startup deadline plus the 30-second handshake deadline -- or the
 /// container would be killed mid-cell and the cell would fail for a
-/// reason of its own. Five minutes leaves that margin wide, and still
-/// bounds what a killed client leaves behind.
+/// reason of its own. Five minutes leaves that margin wide.
 const CONTAINER_TIMEOUT_SECONDS: u32 = 300;
 
 // ---------------------------------------------------------------------------
@@ -1581,4 +1648,25 @@ fn free_port() -> u16 {
         }
     }
     panic!("no free port for the HTTP container");
+}
+
+/// The sweeper deletes containers, so the parse that decides WHAT it deletes
+/// is the dangerous part. A name it cannot read yields `None` — the sweep then
+/// leaves the container alone, because deleting the wrong one is worse than
+/// leaving litter.
+#[test]
+fn the_sweepers_name_parse_only_reads_its_own_containers() {
+    assert_eq!(creating_pid("bases-mcp-cm-1234-0"), Some(1234));
+    assert_eq!(creating_pid("bases-mcp-cm-1234-1"), Some(1234));
+    assert_eq!(creating_pid("bases-mcp-cm-1-0"), Some(1));
+
+    // Anything that is not ours must not be swept.
+    assert_eq!(creating_pid("postgres"), None);
+    assert_eq!(creating_pid("bases-mcp"), None);
+    assert_eq!(creating_pid("bases-mcp-cm-"), None);
+    assert_eq!(creating_pid("bases-mcp-cm-notanumber-0"), None);
+    assert_eq!(creating_pid("other-cm-1234-0"), None);
+
+    // A pid is a number, not a prefix of one: `12x` is not `12`.
+    assert_eq!(creating_pid("bases-mcp-cm-12x-0"), None);
 }
