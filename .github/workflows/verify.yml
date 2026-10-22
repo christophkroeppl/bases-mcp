@@ -34,10 +34,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: astral-sh/setup-uv@v3
-
-      - name: Install just
-        run: uv tool install just
+      # The task runner. NOT `uv tool install just`: there is a Python package
+      # of that name, it is a different project, and it crashes on import
+      # (`No module named 'dateutil'`) -- which is a 20-second job failure that
+      # looks like a test failure.
+      - uses: extractions/setup-just@v3
 
       - name: Install podman (full tier only)
         if: github.ref == 'refs/heads/main'
@@ -68,6 +69,12 @@ jobs:
   audit:
     name: dependency advisories
     runs-on: ubuntu-latest
+    # `rustsec/audit-check` publishes its verdict as a CHECK RUN, which the
+    # default read-only token cannot create: the job found zero vulnerabilities
+    # and then failed with "Resource not accessible by integration".
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       # A known-vulnerable dependency is a build failure, not a note. The
@@ -79,6 +86,9 @@ jobs:
   commitlint:
     name: commit messages
     runs-on: ubuntu-latest
+    # The range comes from `github.event.pull_request.*`, which is EMPTY on a
+    # push: `--from "" --to ""` is "both ends are the same commit" and exit 9.
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
