@@ -1464,6 +1464,96 @@ fn without_keep_id_the_vault_reads_but_cannot_be_written() {
     );
 }
 
+/// The image runs as the pinned non-root uid, and the container says so.
+///
+/// The whole user-namespace story rests on one number: the image's uid is
+/// **1000**, pinned in the `Containerfile` rather than left to
+/// `useradd --system` (which picks 999 on Debian). Two things depend on it:
+///
+///  - Under `--userns=keep-id` it is the uid the server owns its vault files
+///    as, which is the difference between a container that can WRITE the vault
+///    and one that only reads it.
+///  - guarden probes the IMAGE's user and renders `Userns=keep-id:uid=…,gid=…`
+///    from it (ADR-0019 in the guarden repository). A repository that leaves
+///    the uid to the base image gives the host a different number to pin on
+///    every base image it rebuilds.
+///
+/// Nothing asserted that the image's user IS uid 1000. The `Containerfile`
+/// said so, the docs said so, and the write tests would have failed on a
+/// DIFFERENT uid with a bare "Permission denied (os error 13)" — which names
+/// the file and says nothing about the uid. This is the assertion that names
+/// it.
+///
+/// It is also a **containment** claim, not an access one: a non-root uid
+/// bounds what an escaped container can reach and says nothing about who may
+/// call the tools.
+#[test]
+#[ignore = "needs a built image; run with --ignored"]
+fn the_image_runs_as_the_pinned_non_root_uid() {
+    skip_unless!("no image");
+    let image = image().expect("the image is set");
+
+    // What the image itself declares. This is the number guarden reads.
+    let declared = podman(&["image", "inspect", "--format", "{{.Config.User}}", &image])
+        .output()
+        .expect("podman inspects the image");
+    assert!(
+        declared.status.success(),
+        "the image can be inspected: {}",
+        String::from_utf8_lossy(&declared.stderr)
+    );
+    let declared = String::from_utf8_lossy(&declared.stdout).trim().to_string();
+    assert_eq!(
+        declared, "bases-mcp",
+        "the image declares the named user, and guarden reads that name out of the image"
+    );
+
+    // What the process actually runs as. The declared name is not the uid:
+    // `bases-mcp` is a NAME, and the uid is what the namespace mapping uses.
+    let output = podman(&[
+        "run",
+        "--rm",
+        "--pull=never",
+        "--entrypoint",
+        "/bin/sh",
+        &image,
+        "-c",
+        "id -u",
+    ])
+    .output()
+    .expect("the container runs");
+    assert!(
+        output.status.success(),
+        "the container runs: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let uid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert_eq!(
+        uid, "1000",
+        "the image's process runs as the PINNED uid 1000, and not as root"
+    );
+
+    // And the containment claim, measured: the process has no home and no
+    // shell, so an escaped container has nothing to run.
+    let output = podman(&[
+        "run",
+        "--rm",
+        "--pull=never",
+        "--entrypoint",
+        "/bin/sh",
+        &image,
+        "-c",
+        "echo \"home=$HOME\"; ls /usr/sbin/nologin >/dev/null && echo shell=nologin",
+    ])
+    .output()
+    .expect("the container runs");
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        rendered.contains("home=/"),
+        "the user has no home to write to: {rendered}"
+    );
+}
+
 /// A suffix that makes a container name unique within this test binary.
 ///
 /// The PID alone is not enough: two HTTP tests run in the SAME process, so
