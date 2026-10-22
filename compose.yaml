@@ -30,5 +30,18 @@ services:
     # choice: guarden publishes a loopback port at the edge, so the listener
     # is not on the network even though it is on every interface of the
     # container.
+    #
+    # THE BOUNDARY IS THE PUBLICATION, NOT THIS BIND. The listener has no
+    # authentication, no authorization and no rate limiting: anyone who can
+    # open the socket can call every tool, including the two that write. What
+    # keeps this deployment off the network is guarden publishing the port to
+    # loopback -- the `routes:` block in `.guarden/service.yml`. Change that
+    # publication to a routable address and this service becomes an
+    # unauthenticated read/write server on the network, and nothing in this
+    # repository notices or stops it.
+    #
+    # The container's non-root user (uid 1000) is a CONTAINMENT control: it
+    # bounds what an escaped container can reach. It is not an access
+    # control, and it does not authenticate a caller.
     environment:
       MCP_HTTP_HOST: "0.0.0.0"

@@ -53,6 +53,12 @@ COPY --from=build /build/target/release/bases-mcp /usr/local/bin/bases-mcp
 # reach: no home, no shell, and no write access outside a vault it is given.
 # A container that is escaped then escapes as nobody rather than as root.
 #
+# This is a CONTAINMENT control, not an access control. It bounds what an
+# escaped container can reach, and it says NOTHING about who may call the
+# tools: a non-root process serving an unauthenticated HTTP listener is still
+# an unauthenticated HTTP listener. The network boundary is the deployment's
+# job, and the transport has no credential of its own. See docs/tooling.md.
+#
 # The uid is PINNED to 1000 rather than left to `useradd --system`, which picks
 # 999 on Debian and can pick something else on another base. A pinned uid is
 # what makes the vault writable -- but only under the right USER NAMESPACE,
@@ -67,6 +73,11 @@ COPY --from=build /build/target/release/bases-mcp /usr/local/bin/bases-mcp
 # The fix is `--userns=keep-id`, which maps the host uid to the SAME uid
 # inside the container: the host's uid 1000 is uid 1000 in here, so the
 # process owns the files it has to modify. See docs/tooling.md.
+#
+# The uid is pinned for a second reason: guarden probes the IMAGE's user and
+# renders `Userns=keep-id:uid=...,gid=...` from it (ADR-0019 in the guarden
+# repository). A repository that leaves the uid to the base image gives the
+# host a different number to pin on every base image it rebuilds.
 RUN useradd --system --uid 1000 --no-create-home --shell /usr/sbin/nologin bases-mcp
 USER bases-mcp
 

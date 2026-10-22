@@ -162,7 +162,15 @@ impl fmt::Display for Depth {
 }
 
 /// One request, as this backend builds it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand rather than derived, because the derived one
+/// printed the `Authorization` header in cleartext: `headers: [("Authorization",
+/// "Basic dXNlcjpzZWNyZXQ=")]`. The base64 is not encryption — it is the
+/// credential, one decode away — and a `Debug` that prints it puts it into
+/// every log line, every assertion message and every panic that formats a
+/// request. The manual impl below prints the header NAMES and redacts the
+/// value of the one that carries a secret.
+#[derive(Clone, PartialEq, Eq)]
 pub struct DavRequest {
     pub url: String,
     pub method: WebdavMethod,
@@ -173,6 +181,34 @@ pub struct DavRequest {
     /// The per-request budget. A transport is expected to abandon the request
     /// when it elapses, and to fail the call rather than hang.
     pub timeout: Duration,
+}
+
+impl std::fmt::Debug for DavRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let headers: Vec<(&str, &str)> = self
+            .headers
+            .iter()
+            .map(|(name, value)| {
+                // The one header that carries a credential is redacted; the
+                // others are printed, because a `Depth: 1` and a
+                // `Content-Type: application/xml` are exactly what a reader of
+                // a request wants to see.
+                let shown = if name.eq_ignore_ascii_case("Authorization") {
+                    crate::config::REDACTED
+                } else {
+                    value.as_str()
+                };
+                (name.as_str(), shown)
+            })
+            .collect();
+        f.debug_struct("DavRequest")
+            .field("url", &self.url)
+            .field("method", &self.method)
+            .field("headers", &headers)
+            .field("body", &self.body)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 impl DavRequest {

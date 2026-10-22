@@ -126,6 +126,53 @@ as a Divergence in `docs/divergences.md`. It is not a default anyone has to undo
 and it is not safe on a network this server is not trusted on: the listener has
 no authentication. That gap is recorded, not hidden.
 
+#### The network boundary, stated where the operator reads it
+
+**The HTTP transport has no authentication, no authorization and no rate
+limiting. Anyone who can open the socket can call every tool, including the
+two that write.** The server does not enforce a network boundary; it *assumes*
+one. That assumption is the deployment's job, and this is where it is written
+down.
+
+The three deployments this project ships, and what each one assumes:
+
+| Deployment | Who can reach the listener | The assumption |
+|---|---|---|
+| **stdio** (the default) | the process that spawned it | none — the pipes are the boundary |
+| **HTTP on loopback** | processes on this machine | a local machine is a trusted one |
+| **HTTP in a container** | whatever the container's port is published to | the publication is a loopback one |
+
+So the boundary is **where the port is published**, not where the server binds.
+The container binds every interface of the container — it has to, or nothing
+outside it could dial it — and is still not on the network, because the host
+publishes it to `127.0.0.1`. A deployment that publishes the port to
+`0.0.0.0` on the host has put an unauthenticated read/write server on the
+network, and nothing in this repository stops it or notices it.
+
+Two of the six tools write: `write_note` and `add_note_to_base`. They protect
+the note's *content* — the reconciler and the read-verify-write hash check —
+and they do **not** decide *whether this caller may write*.
+
+What would close the gap is authentication on the transport, a policy for which
+client may call which tool, rate limiting, and TLS. None of that is built; the
+hardening list is at the repository root in `BACKLOG-network-security.md`, and
+`docs/divergences.md` D9 records the gap against this surface. **Re-open that
+list before this server is exposed beyond a network it is trusted on.**
+
+#### The container's non-root user is a containment control, not an access control
+
+The image runs as uid 1000 with no home and no shell, and the vault is the
+only thing it can write to. That bounds what an escaped container can reach.
+
+It says **nothing about who may call the tools.** A non-root process serving an
+unauthenticated HTTP listener is still an unauthenticated HTTP listener: the
+uid is the server's own privilege, not a credential the caller presents. The
+two are different boundaries and only one of them is closed.
+
+`--userns=keep-id` is a third thing again: it is about *ownership*, so the
+server can write a vault whose files belong to the invoking user. It changes
+whose files the server may modify, not who may talk to it.
+
 ### The transport is tested over the wire
 
 `tests/http_transport.rs` and `tests/stdio_transport.rs` spawn the real binary
