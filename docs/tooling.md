@@ -159,6 +159,14 @@ hardening list is at the repository root in `BACKLOG-network-security.md`, and
 `docs/divergences.md` D9 records the gap against this surface. **Re-open that
 list before this server is exposed beyond a network it is trusted on.**
 
+TLS in transit is the one item on that list with an answer that needs no code:
+the listener serves plaintext, and a reverse proxy terminates TLS in front of
+it. `docs/reverse-proxy.md` has copy-pasteable compose projects for Traefik,
+Caddy and nginx, each wired to the `Host` rule above, the upstream path `/mcp`,
+and a non-buffered SSE response. That is a deployment pattern, not a property of
+the server — the socket is still unauthenticated, which is what this section
+records.
+
 #### The container's non-root user is a containment control, not an access control
 
 The image runs as uid 1000 with no home and no shell, and the vault is the
