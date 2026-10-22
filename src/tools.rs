@@ -860,6 +860,7 @@ pub fn tool_definitions() -> Vec<Tool> {
                 "- Bases embedded in a note are the opposite -- get_note renders them \
                  STRUCTURED, with group headers and a summaries footer. Use markdown here to \
                  read a whole table; use get_note to read a base in the note it lives in.\n",
+                "Cells are escaped as Obsidian escapes them: a `|` inside a value is written \\|, so a value cannot forge a column. A NEWLINE inside a value is NOT escaped -- Obsidian does not either -- so it still ends the table row. Do not assume one line per record.\n",
                 "`context` is the host note that binds `this`. A base whose filter references \
                  `this` REQUIRES it: with no host note this tool fails rather than returning the \
                  empty result the Obsidian CLI returns, because an empty result is \

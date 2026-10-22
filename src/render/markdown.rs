@@ -136,6 +136,12 @@ fn to_cell_text(value: Option<&BasesValue>) -> String {
     value.map_or_else(String::new, BasesValue::to_display_string)
 }
 
+/// A table cell's text as Obsidian writes it: `|` becomes `\|`, and a newline
+/// is left alone, so it still splits the row. See `docs/divergences.md`.
+fn escape_cell(text: &str) -> String {
+    text.replace('|', "\\|")
+}
+
 /// Render a table of `columns` over `rows`.
 ///
 /// `widths` is `None` for a standalone table, and supplied when a table and its
@@ -155,9 +161,9 @@ fn table_for(
         }
     };
 
-    let headers: Vec<&str> = columns
+    let headers: Vec<String> = columns
         .iter()
-        .map(|column| column.header.as_str())
+        .map(|column| escape_cell(&column.header))
         .collect();
     let body: Vec<String> = rows
         .iter()
@@ -189,7 +195,7 @@ fn table_line(columns: &[RenderColumn], cells: &str) -> String {
 fn row_cells(columns: &[RenderColumn], row: &ResolvedRow) -> Vec<String> {
     columns
         .iter()
-        .map(|column| to_cell_text(cell_value(row, &column.id)))
+        .map(|column| escape_cell(&to_cell_text(cell_value(row, &column.id))))
         .collect()
 }
 
@@ -216,11 +222,13 @@ fn column_widths(
         .iter()
         .enumerate()
         .map(|(index, column)| {
-            let mut width = display_width(&column.header).max(display_width(
+            let mut width = display_width(&escape_cell(&column.header)).max(display_width(
                 extra_cells.get(index).map_or("", String::as_str),
             ));
             for row in rows {
-                width = width.max(display_width(&to_cell_text(cell_value(row, &column.id))));
+                width = width.max(display_width(&escape_cell(&to_cell_text(cell_value(
+                    row, &column.id,
+                )))));
             }
             // Obsidian never emits a narrower column than the rule it needs.
             width.max(3)
@@ -430,7 +438,7 @@ fn summary_cells(
                 .iter()
                 .filter_map(|row| cell_value(row, &column.id))
                 .collect();
-            summarise(spec, &values)
+            summarise(spec, &values).map(|cell| escape_cell(&cell))
         })
         .collect::<Result<Vec<String>>>()?;
     Ok(Some(cells))
@@ -438,9 +446,9 @@ fn summary_cells(
 
 /// The footer: a one-row table reusing the main table's column widths.
 fn summary_table(columns: &[RenderColumn], cells: &[String], widths: &[usize]) -> String {
-    let labels: Vec<&str> = columns
+    let labels: Vec<String> = columns
         .iter()
-        .map(|column| column.header.as_str())
+        .map(|column| escape_cell(&column.header))
         .collect();
     [
         table_line(columns, &pad_cells(&labels, widths, TableAlign::Left)),

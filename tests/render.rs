@@ -232,6 +232,52 @@ const SUMMARISED_TABLE: &str = r#"| file name | status |
 // Flat: the format=md parity surface
 // ---------------------------------------------------------------------------
 
+/// Obsidian escapes `|` as `\|` in a header AND a body cell; we match the
+/// bytes. See `docs/divergences.md`.
+#[test]
+fn a_pipe_in_a_cell_is_escaped_as_obsidian_escapes_it() {
+    let mut base = base();
+    base.properties.insert(
+        "note.status".to_string(),
+        PropertyConfig {
+            display_name: Some("Stat|us".to_string()),
+            extra: Mapping::new(),
+        },
+    );
+    let markdown = render(
+        &base,
+        &with_rows(
+            "table",
+            &["file.name", "status"],
+            vec![row("P.md", "Pipe", "A|B")],
+        ),
+        RenderStyle::Flat,
+    );
+    assert_eq!(
+        markdown,
+        "| file name | Stat\\|us |\n| --------- | -------- |\n|   Pipe    |   A\\|B   |"
+    );
+}
+
+/// A newline is NOT escaped: it splits the row, as it does in the CLI. Turning
+/// it into `<br>` would be a silent divergence.
+#[test]
+fn a_newline_in_a_cell_splits_the_row_as_it_does_in_the_cli() {
+    let markdown = render(
+        &base(),
+        &with_rows(
+            "table",
+            &["file.name", "status"],
+            vec![row("P.md", "NL", "A\nB")],
+        ),
+        RenderStyle::Flat,
+    );
+    assert!(
+        markdown.contains("A\nB"),
+        "the newline must survive verbatim: {markdown:?}"
+    );
+}
+
 #[test]
 fn flat_renders_one_centred_table_for_every_view_type() {
     // `list` is a TABLE here, not a markdown list. That is the whole point of

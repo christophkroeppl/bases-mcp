@@ -515,6 +515,7 @@ Obsidian on all of these; each is pinned by a test so it cannot regress.
 | **The string methods do NOT share one case rule** | `contains` is **case-insensitive**; `==`, `startsWith` and `endsWith` are **case-sensitive** | The obvious expectation is that a family of search methods behaves uniformly. It does not, and it is Obsidian's asymmetry. See the table below. |
 | **`contains("")` is false, but `containsAll("")` and `containsAny("")` are true** | The empty-needle guard is on `contains` alone | Every other string contains the empty string, and the variadic forms do behave that way. See the table below. |
 | **A link's `contains` compares the RAW TARGET, not the `[[...]]` rendering** | `linkish.contains("[")` is **false** | The brackets look like part of the value. They are not — they are the rendering. See the table below. |
+| **A pipe in a table cell is escaped** | Written as a backslash followed by the pipe, in a header AND in a body cell. A backslash is left alone, and a newline is emitted **verbatim** | It reads like a cosmetic detail. It is the column boundary of a byte-compared surface, so the escape is what stops a value from closing its cell and forging a column. See below. |
 
 ### The case rules of the string methods
 
@@ -649,6 +650,49 @@ one of them no longer applies:
    `base_embed_re` still consumes it, because `write_note` parses what the AGENT
    sent and not only what the backend returned. What no longer exists is the
    machinery that matched a generated join to the note's own ending.
+
+### Table-cell escaping
+
+Measured against the live CLI on **1.14.4** with a probe note in `test/vault`
+whose `status` and whose `displayName` each held the construct, queried through
+`AllNotes.base` and a throwaway base. `format=md` collapses every view type into
+one table, so the escaping belongs to the CELL, not to the view type.
+
+```
+ value held                    bytes emitted
+ ----------                    -------------
+ A|B                           A\|B
+ A|B|C                         A\|B\|C
+ A\B                           A\B        (unchanged)
+ A\|B                          A\\|B      (the pipe gains a backslash; the existing one is untouched)
+ A + newline + B               A           then the ROW ENDS and B begins the next line
+ A + tab + B                   A<TAB>B     (unchanged)
+ A*B  A_B  A[B]C  A#B  A~B     unchanged
+```
+
+**The rule is exactly "the pipe becomes a backslash followed by the pipe", and
+nothing else.** There is no backslash escaping, so the transform is not
+reversible: a value that already held an escaped pipe comes out with two
+backslashes. It is a display escape, not an encoding — which is worth knowing
+before "improving" it by doubling backslashes, because that would break the byte
+comparison.
+
+**The pipe is the column boundary, the newline is the row boundary.** Escaping
+the pipe means a value can no longer close its cell and forge a column, so this
+is a security property and not only a cosmetic one. It does NOT stop a newline
+from ending the row: Obsidian leaves that byte alone, so a value holding one
+still splits its row. That is Obsidian's behaviour on the surface that is
+byte-compared, so we reproduce it rather than diverge — and the consequence is
+stated where the reader meets it, in `resolve_base`'s tool description, which
+tells an agent not to assume one line per record.
+
+Before this was measured the renderer emitted both bytes verbatim, which was a
+**parity bug** as well as an injection: a vault holding a pipe produced different
+bytes from the CLI. Nothing in `test/vault` held one, so the parity suite could
+not see it.
+
+Pinned by `a_pipe_in_a_cell_is_escaped_as_obsidian_escapes_it` and
+`a_newline_in_a_cell_splits_the_row_as_it_does_in_the_cli` in `tests/render.rs`.
 
 ---
 
