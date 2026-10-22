@@ -299,6 +299,85 @@ what stops a single late keep-alive from closing a session that is still live.
   frame until the buffer fills and the client sees a connected stream that
   produces nothing.
 
+## Timeouts and connection limits belong at the edge
+
+**The listener configures none.** There is no header-read, idle, keep-alive or
+request timeout anywhere in `src/`, and no knob to set one
+(`src/main.rs` builds `axum::serve(...).with_graceful_shutdown(...)` and nothing
+else). An unauthenticated client that opens connections and dribbles headers
+holds them indefinitely, and with no connection cap that is a slowloris /
+file-descriptor exhaustion exposure.
+
+The proxy is the place to close it, because it is also where the network
+boundary already is. What each one needs:
+
+**nginx** — a header timeout and a connection cap:
+
+```nginx
+# http { } level
+limit_conn_zone $binary_remote_addr zone=mcp_per_ip:10m;
+
+location /mcp {
+    # ... the proxy_pass block above ...
+    client_header_timeout 10s;
+    client_body_timeout   30s;
+    send_timeout          1h;   # the SSE stream is long-lived; do not cut it
+    limit_conn            mcp_per_ip 8;
+    limit_conn_status     429;
+}
+```
+
+`send_timeout` must stay long: the stream is supposed to idle between events, and
+a short one is the "connects and produces nothing" failure this document already
+warns about for buffering.
+
+**Traefik** — `respondingTimeouts` on the entrypoint and a rate-limit
+middleware:
+
+```yaml
+entryPoints:
+  websecure:
+    address: ":443"
+    transport:
+      respondingTimeouts:
+        readTimeout: 30s
+        idleTimeout: 1h
+```
+
+```yaml
+http:
+  middlewares:
+    mcp-connlimit:
+      inFlightReq:
+        amount: 8
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+```
+
+**Caddy** — `timeouts` on the server block and `request_body` limits:
+
+```
+{
+    servers {
+        timeouts {
+            read_header 10s
+            read_body   30s
+            idle        1h
+        }
+    }
+}
+```
+
+Caddy has no built-in per-IP connection cap; use `caddy-ratelimit` or put the cap
+in front.
+
+**These are starting points, not tuned values.** The numbers that matter are the
+ones your clients tolerate: an MCP client holds an SSE stream open for the life
+of a session, so `idle`/`send_timeout` must exceed the longest quiet period you
+expect, and the connection cap must exceed the number of concurrent sessions one
+agent opens.
+
 ## What TLS does not fix
 
 TLS protects the bytes between client and proxy. It is **not authentication**:

@@ -214,7 +214,8 @@ fn bad_host(name: &str, port: u16) -> String {
 fn bad_port(value: &str) -> String {
     format!(
         "MCP_HTTP_PORT is \"{value}\", which is not a port. Set it to a number \
-         between 1 and 65535, or unset it to use 8765."
+         between 0 and 65535 (0 asks the kernel for a free port and is announced \
+         as the port it chose), or unset it to use 8765."
     )
 }
 
@@ -347,7 +348,7 @@ pub fn usage() -> &'static str {
         "\n",
         "The vault is chosen by the environment, never by a flag. See\n",
         "BASES_MCP_VAULT and the BASES_MCP_WEBDAV_* variables in\n",
-        "docs/tooling.md and .env.example.\n",
+        "docs/tooling.md, README.md and .env.schema.\n",
         "\n",
         "HTTP transport only:\n",
         "\n",

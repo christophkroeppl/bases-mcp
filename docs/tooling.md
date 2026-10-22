@@ -84,8 +84,27 @@ BASES_MCP_WEBDAV_PASSWORD    WebDAV password
 ```
 
 `BASES_MCP_VAULT` wins if both are set, and says so on stderr. A selector that
-is set but blank is an error rather than an absence. All five live in
-`.env.example`, which is the documented home for environment variables.
+is set but blank is an error rather than an absence. They live in
+`.env.schema`, which is the documented home for environment variables; varlock
+validates it, and `varlock run -- bases-mcp` injects the resolved values.
+`README.md` carries the same table with every default and refusal rule.
+
+### Where the variables are declared
+
+`.env.schema` at the repository root is the single source of truth: it names
+every variable, its type, its default and which ones are secret. It is a
+**varlock** schema, and varlock is a developer/operator tool — the binary reads
+the plain process environment and has no dependency on it.
+
+```bash
+varlock load --agent              # validate the schema, secrets redacted
+varlock run -- bases-mcp          # inject the resolved values and run
+```
+
+Values go in `.env.local` (gitignored); the schema carries names and examples
+only. `.guarden/.env.schema` is the deployment's credential shape — the four
+vault variables the renderer plants as podman secrets — and does not duplicate
+the transport or audit variables, which `compose.yaml` sets.
 
 ### The HTTP endpoint
 
@@ -157,8 +176,9 @@ What would close the gap is authentication on the transport, a policy for which
 client may call which tool, rate limiting, and TLS. None of that is built. What
 is built is a record — every call, and every session's opening, is written to
 the audit trail described below — which makes an incident answerable after the
-fact and prevents nothing. The hardening list is at the repository root in
-`BACKLOG-network-security.md`, and `docs/divergences.md` D9 records the gap
+fact and prevents nothing. The hardening list is tracked in the kanban board
+(authentication, authorization, rate limiting, TLS, input validation, audit
+rules, deployment posture), and `docs/divergences.md` D9 records the gap
 against this surface. **Re-open that list before this server is exposed beyond a
 network it is trusted on.**
 
@@ -302,15 +322,13 @@ podman --runtime /path/to/crun build -f Containerfile -t localhost/bases-mcp:lat
 That is a property of the HOST, not of this image: the failure names the
 runtime, and it happens before the `Containerfile` is read at all.
 
-### The image is pinned to the toolchain the LOCKFILE needs
+### The image is pinned to the crate's own toolchain floor
 
-The crate declares `rust-version = "1.85"` — the edition-2024 floor — but that
-is not the constraint the build has. The **locked dependency graph** is:
-`rmcp 3.5.0` and the `icu` crates require rustc 1.88, and `cargo build
---locked` refuses the whole graph on an older compiler. The build image is
-pinned to `rust:1.88-bookworm` for that reason — an older image fails with
-"rmcp@3.5.0 requires rustc 1.88", which names a dependency rather than the
-image.
+The crate declares `rust-version = "1.99"` in `Cargo.toml`, and the image is
+pinned to `rust:1.99-bookworm` so the container, CI (`1.99.1`) and a developer
+machine build the same thing. A newer image also works; an older one refuses the
+crate before a single line of it is compiled, which is a clearer failure than a
+dependency naming a compiler it needs.
 
 The image also carries a placeholder at `tests/parity.rs`. `Cargo.toml`
 declares that test target by path, and a declared target whose file is missing
@@ -611,11 +629,12 @@ just parity-recorded # compare: resolve the vault ourselves and compare with the
 `--vault`, `--vault-dir` and `--data-dir` override the defaults (`vault`,
 `test/vault`, `test/parity/data`).
 
-The store is `test/parity/data/<digest>/`, where the digest is a sha256 over
-every recorded answer. JSON is canonicalised (object keys sorted) before it is
-hashed, so two Obsidian versions that agree on values share one directory even
-if they spell key order differently; a version that answers differently gets its
-own. The CLI version goes in `manifest.json` for a human and is **not** the key.
+Once a corpus is recorded, the store is `test/parity/data/<digest>/`, where the
+digest is a sha256 over every recorded answer. JSON is canonicalised (object
+keys sorted) before it is hashed, so two Obsidian versions that agree on values
+share one directory even if they spell key order differently; a version that
+answers differently gets its own. The CLI version goes in `manifest.json` for a
+human and is **not** the key.
 Each entry is stored twice — `<base>/<view>.json` for the rows and
 `<base>/<view>.md` for the rendering — and the manifest records a digest per
 file, so `check` can name the file that rotted rather than "the corpus".

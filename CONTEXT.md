@@ -2,6 +2,8 @@
 
 An MCP server that resolves Obsidian `.base` files to human-readable markdown, with strict parity against the local Obsidian CLI and correct handling of embedded bases that scope themselves to the note they live in.
 
+For how to build, run, configure and deploy it, see [README.md](README.md).
+
 ## Language
 
 **Base**:

@@ -78,17 +78,8 @@ pub struct FileStat {
     pub mtime: DateTime<FixedOffset>,
 }
 
-/// Replace every `\r\n` with `\n`, and nothing else.
-///
-/// A lone `\r` is left alone, and that is the design rather than a shortcut.
-/// `note::Lines` finds `\n` and nothing else, so a CR-only note is ONE line to
-/// this crate; replacing every `\r` would make it as many lines as it has
-/// carriage returns, inventing a line count the note never had. Leaving it alone
-/// is also what keeps such a note round-tripping byte for byte.
-///
-/// `\r\r\n` becomes `\r\n`, because the pair at the end of it is still a pair.
-/// Degrading a doubled carriage return to a real CRLF on the way to being
-/// normalised is strictly better than passing it up.
+/// Replace every `\r\n` with `\n`, and nothing else. See
+/// `docs/divergences.md` D8.
 ///
 /// See [`VaultSource::read_note`], which is where this runs.
 pub fn normalise_line_endings(text: &str) -> String {

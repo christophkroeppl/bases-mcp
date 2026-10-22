@@ -49,7 +49,7 @@ pub use webdav::{
     parse_dav_date, parse_multistatus, vault_path_from_href, vault_relative_path,
 };
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
@@ -90,6 +90,8 @@ pub struct Vault {
     notes: RwLock<BTreeMap<String, Arc<NoteRecord>>>,
     bases: RwLock<Vec<String>>,
     by_path: RwLock<PathIndex>,
+    /// Resolved target (extension stripped) -> the notes that link to it.
+    backlinks: RwLock<HashMap<String, Vec<String>>>,
     ready: AtomicBool,
 }
 
@@ -115,6 +117,7 @@ impl Vault {
             notes: RwLock::new(BTreeMap::new()),
             bases: RwLock::new(Vec::new()),
             by_path: RwLock::new(PathIndex::new()),
+            backlinks: RwLock::new(HashMap::new()),
             ready: AtomicBool::new(false),
         }
     }
@@ -203,6 +206,26 @@ impl Vault {
         *self.notes.write().unwrap() = notes;
         *self.bases.write().unwrap() = bases;
         *self.by_path.write().unwrap() = by_path;
+        // Built once, from the same `links_for` the query path reads, so a
+        // backlink and a `file.links` entry are the same fact. It resolves
+        // against `by_path`, which is why this runs after the store above.
+        let mut backlinks: HashMap<String, Vec<String>> = HashMap::new();
+        for path in self.note_paths() {
+            for link in self.links_for(&path) {
+                let Some(hit) = link.link_target() else {
+                    continue;
+                };
+                let entry = backlinks
+                    .entry(strip_extension(hit).to_string())
+                    .or_default();
+                // One hit is enough: a note that links here twice is still one
+                // backlink, and the current note's entries are contiguous.
+                if entry.last().map(String::as_str) != Some(path.as_str()) {
+                    entry.push(path.clone());
+                }
+            }
+        }
+        *self.backlinks.write().unwrap() = backlinks;
         self.ready.store(true, Ordering::Release);
         Ok(())
     }
@@ -393,24 +416,17 @@ impl Vault {
 
     /// `file.backlinks` is indexed, not read live -- see `docs/divergences.md`.
     pub fn backlinks_for(&self, path: &str) -> Vec<BasesValue> {
-        let target = strip_extension(path);
-        let mut out: Vec<BasesValue> = Vec::new();
-        // The path list is taken out of the borrow before the loop, because
-        // `links_for` reads the same map this iteration walks.
-        for other in self.note_paths() {
-            if other == path {
-                continue;
-            }
-            // One hit is enough: a note that links here twice is still one
-            // backlink, and `any` is what stops at the first.
-            if self.links_for(&other).iter().any(|link| {
-                link.link_target()
-                    .is_some_and(|hit| strip_extension(hit) == target)
-            }) {
-                out.push(BasesValue::String(other));
-            }
-        }
-        out
+        self.backlinks
+            .read()
+            .unwrap()
+            .get(&strip_extension(path))
+            .map(|sources| {
+                sources
+                    .iter()
+                    .map(|source| BasesValue::String(source.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// `file.tasks` is a documented extension, not part of the official surface.
@@ -602,11 +618,7 @@ fn is_url(text: &str) -> bool {
     if text.is_empty() || text.contains(' ') {
         return false;
     }
-    // Obsidian's own test is exactly this: the string must contain no space,
-    // and `new URL(text)` must not throw. The WHATWG parser is what decides
-    // the rest, and it is the same parser Rust's `url` crate implements — so
-    // `https://` (an empty host) fails while `mailto:a@b.com` and
-    // `file:///etc/passwd` (an opaque or empty-host body) both pass.
+    // The WHATWG parser decides the rest. See `docs/divergences.md` D11.
     url::Url::parse(text).is_ok()
 }
 

@@ -223,13 +223,13 @@ fn parse_view(raw: &Yaml, index: usize, path: &str) -> Result<BaseView> {
         );
     }
 
-    if let Some(group) = present(view, "groupBy").and_then(Yaml::as_mapping) {
-        if let Some(property) = present(group, "property").and_then(Yaml::as_str) {
-            parsed.group_by = Some(GroupBy {
-                property: property.to_string(),
-                direction: read_direction(present(group, "direction")),
-            });
-        }
+    if let Some(group) = present(view, "groupBy").and_then(Yaml::as_mapping)
+        && let Some(property) = present(group, "property").and_then(Yaml::as_str)
+    {
+        parsed.group_by = Some(GroupBy {
+            property: property.to_string(),
+            direction: read_direction(present(group, "direction")),
+        });
     }
 
     if let Some(entries) = present(view, "sort").and_then(Yaml::as_sequence) {
@@ -469,10 +469,6 @@ pub fn select_view<'a>(base: &'a BaseFile, view_name: Option<&str>) -> Result<&'
         })
 }
 
-// ---------------------------------------------------------------------------
-// YAML helpers
-// ---------------------------------------------------------------------------
-
 /// A mapping entry that is actually there.
 ///
 /// Absent and explicitly null are the same thing to Obsidian's reader -- both
@@ -484,7 +480,6 @@ fn present<'a>(entries: &'a Mapping, key: &str) -> Option<&'a Yaml> {
         .filter(|value| !value.is_null())
 }
 
-/// Whether a mapping has the key at all, whatever its value.
 fn contains(entries: &Mapping, key: &str) -> bool {
     entries.contains_key(Yaml::String(key.to_string()))
 }

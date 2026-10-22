@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{
-    DateTime, Datelike, Days, Duration as ChronoDuration, FixedOffset, Local, NaiveDate, NaiveTime,
-    TimeZone, Timelike,
+    Datelike, Days, Duration as ChronoDuration, FixedOffset, Local, NaiveDate, NaiveTime, TimeZone,
+    Timelike,
 };
 
 use crate::error::{BasesError, Result};
@@ -224,10 +224,6 @@ fn m_null_receiver(
     Ok(BasesValue::Null)
 }
 
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
 /// The argument at `i`, reading an ABSENT one as null.
 ///
 /// This is the erasure D12 is about: Obsidian tells a null argument from one
@@ -356,7 +352,6 @@ fn link_points_at(l: &BasesValue, path: &str) -> bool {
     }
 }
 
-/// The path a link-ish value refers to, for `linksTo` and `hasLink`.
 fn linkish_path(v: &BasesValue) -> Option<String> {
     match v {
         BasesValue::File(f) => Some(f.path.clone()),
@@ -391,10 +386,10 @@ fn compare_loose(a: &BasesValue, b: &BasesValue) -> std::cmp::Ordering {
     if matches!(b, BasesValue::Null) {
         return Ordering::Greater;
     }
-    if matches!(a, BasesValue::Date(_)) || matches!(b, BasesValue::Date(_)) {
-        if let (Some(da), Some(db)) = (coerce_date(a), coerce_date(b)) {
-            return da.millis().cmp(&db.millis());
-        }
+    if (matches!(a, BasesValue::Date(_)) || matches!(b, BasesValue::Date(_)))
+        && let (Some(da), Some(db)) = (coerce_date(a), coerce_date(b))
+    {
+        return da.millis().cmp(&db.millis());
     }
     if let (BasesValue::Duration(x), BasesValue::Duration(y)) = (a, b) {
         return x.millis.cmp(&y.millis);
@@ -439,11 +434,6 @@ fn escape_html(s: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Durations and dates
-// ---------------------------------------------------------------------------
-
-/// Milliseconds per duration unit.
 const DURATION_UNITS: [(&str, i64); 22] = [
     ("ms", 1),
     ("millisecond", 1),
@@ -826,12 +816,12 @@ pub fn format_date(d: &BasesDate, pattern: &str) -> String {
     let bytes = pattern.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'[' {
-            if let Some(close) = pattern[i..].find(']') {
-                out.push_str(&pattern[i + 1..i + close]);
-                i += close + 1;
-                continue;
-            }
+        if bytes[i] == b'['
+            && let Some(close) = pattern[i..].find(']')
+        {
+            out.push_str(&pattern[i + 1..i + close]);
+            i += close + 1;
+            continue;
         }
         let rest = &pattern[i..];
         let matched: Option<(&str, String)> = if rest.starts_with("YYYY") {
@@ -857,7 +847,7 @@ pub fn format_date(d: &BasesDate, pattern: &str) -> String {
         } else if rest.starts_with("hh") {
             Some((
                 "hh",
-                pad2(if dt.hour() % 12 == 0 {
+                pad2(if dt.hour().is_multiple_of(12) {
                     12
                 } else {
                     dt.hour() % 12
@@ -905,10 +895,6 @@ pub fn format_date(d: &BasesDate, pattern: &str) -> String {
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// Globals
-// ---------------------------------------------------------------------------
 
 fn g_if(args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
     let cond = arg(args, 0);
@@ -1152,10 +1138,6 @@ fn start_of_day(clock: &BasesDate) -> BasesDate {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Universal methods
-// ---------------------------------------------------------------------------
-
 fn m_to_string(
     target: &BasesValue,
     _args: &[BasesValue],
@@ -1203,10 +1185,6 @@ fn m_is_empty(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> 
         BasesValue::Url { text } => text.is_empty(),
     }))
 }
-
-// ---------------------------------------------------------------------------
-// String methods
-// ---------------------------------------------------------------------------
 
 // Obsidian's measured case-rule table is under "Behaviour probes" in
 // docs/divergences.md: contains folds, startsWith and endsWith do not.
@@ -1470,10 +1448,6 @@ fn m_str_as_file(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Number methods
-// ---------------------------------------------------------------------------
-
 fn m_num_abs(target: &BasesValue, _args: &[BasesValue], _ctx: &EvalContext) -> Result<BasesValue> {
     Ok(BasesValue::Number(as_number(target, "abs")?.abs()))
 }
@@ -1529,10 +1503,6 @@ fn as_number(v: &BasesValue, fn_name: &str) -> Result<f64> {
         .with_construct(fn_name)),
     }
 }
-
-// ---------------------------------------------------------------------------
-// List methods
-// ---------------------------------------------------------------------------
 
 fn m_list_contains(
     target: &BasesValue,
@@ -1604,7 +1574,6 @@ fn needles(args: &[BasesValue]) -> Vec<&BasesValue> {
     }
 }
 
-/// `contains` on a list that holds tags.
 fn m_tag_list_contains(
     target: &BasesValue,
     args: &[BasesValue],
@@ -1790,10 +1759,6 @@ fn extremum(items: &[BasesValue], want: std::cmp::Ordering) -> Result<BasesValue
     Ok(best)
 }
 
-// ---------------------------------------------------------------------------
-// Date, link and file methods
-// ---------------------------------------------------------------------------
-
 fn m_date_format(
     target: &BasesValue,
     args: &[BasesValue],
@@ -1918,12 +1883,6 @@ fn m_link_links_to(
     let Some(from_file) = (ctx.file.accessors.resolve)(from) else {
         return Ok(BasesValue::Bool(false));
     };
-    // The links are a local rather than a temporary in the tail expression:
-    // edition 2024 drops a tail expression's temporaries before the block's
-    // locals, and a value whose release point is the edition's choice is not
-    // worth reading twice. Nothing here has a `Drop` that observes the
-    // difference — it is spelled out so the next reader does not have to
-    // check.
     let links = (from_file.accessors.links)();
     Ok(BasesValue::Bool(
         links.iter().any(|l| link_points_at(l, &to)),
@@ -1933,16 +1892,8 @@ fn m_link_links_to(
 /// `subcategory.contains(link("Note#Heading", "Alias"))` is a documented
 /// pattern, so a Link receiver compares against the link text.
 ///
-/// A Link in Obsidian is a SUBCLASS of String whose data is the RAW TARGET,
-/// not the `[[...]]` rendering. So `linkish.contains("hello")` folds the case
-/// and `linkish.contains("")` is false — the string rules — but
-/// `linkish.contains("[")` is **false**, because the brackets are part of the
-/// rendering, not of the data. Measured against the CLI on 1.14.4: for
-/// `linkish: "[[Hello World]]"`, `contains("hello")` and `contains("Hello")`
-/// are true, `contains("[")` is false, and `contains("")` is false.
-///
-/// The rendering is reachable through `toString()`, which is what
-/// `linkish.toString()` answers: `[[Hello World]]`.
+/// A Link is a SUBCLASS of String whose data is the RAW TARGET. See
+/// `docs/divergences.md` D11.
 fn m_link_contains(
     target: &BasesValue,
     args: &[BasesValue],
@@ -2077,8 +2028,6 @@ fn m_file_has_link(
     let Some(to) = linkish_path(&other) else {
         return Ok(BasesValue::Bool(false));
     };
-    // A local, so the release point is written rather than chosen by the
-    // edition's tail-expression rule. See `m_link_links_to`.
     let links = (f.accessors.links)();
     Ok(BasesValue::Bool(
         links.iter().any(|l| link_points_at(l, &to)),
@@ -2098,17 +2047,11 @@ fn m_file_contains(
         return Ok(BasesValue::Bool(false));
     }
     let to = linkish_path(&needle).unwrap_or_default();
-    // A local, so the release point is written rather than chosen by the
-    // edition's tail-expression rule. See `m_link_links_to`.
     let links = (f.accessors.links)();
     Ok(BasesValue::Bool(
         links.iter().any(|l| link_points_at(l, &to)),
     ))
 }
-
-// ---------------------------------------------------------------------------
-// Object methods
-// ---------------------------------------------------------------------------
 
 fn m_object_keys(
     target: &BasesValue,
@@ -2154,10 +2097,6 @@ fn m_object_values(
     Ok(BasesValue::List(values))
 }
 
-// ---------------------------------------------------------------------------
-// Higher-order list methods
-// ---------------------------------------------------------------------------
-
 /// Invoke the lambda once, for element `index` with the given accumulator.
 fn call(
     runner: &crate::evaluator::LambdaRunner<'_>,
@@ -2174,6 +2113,18 @@ fn call(
         acc,
         ctx,
     })
+}
+
+/// The largest list a formula may build. `map` and `flatMap` compose, and the
+/// resolver is shared by every session, so an uncapped list is an OOM for all
+/// of them rather than for the caller.
+const MAX_LIST_ELEMENTS: usize = 65_536;
+
+fn too_many_elements(construct: &str) -> BasesError {
+    BasesError::new(format!(
+        "`{construct}` built a list larger than {MAX_LIST_ELEMENTS} elements"
+    ))
+    .with_construct(construct)
 }
 
 /// Run a higher-order method over a list. The evaluator supplies the closure
@@ -2206,8 +2157,11 @@ pub fn run_higher_order(
             BasesValue::List(out)
         }
         "map" => {
-            let mut out = Vec::with_capacity(items.len());
+            let mut out = Vec::with_capacity(items.len().min(MAX_LIST_ELEMENTS));
             for (i, v) in items.iter().enumerate() {
+                if out.len() >= MAX_LIST_ELEMENTS {
+                    return Err(too_many_elements("map"));
+                }
                 out.push(call(&runner, body, i, v, None, ctx)?);
             }
             BasesValue::List(out)
@@ -2246,8 +2200,18 @@ pub fn run_higher_order(
             let mut out = Vec::new();
             for (i, v) in items.iter().enumerate() {
                 match call(&runner, body, i, v, None, ctx)? {
-                    BasesValue::List(inner) => out.extend(inner),
-                    other => out.push(other),
+                    BasesValue::List(inner) => {
+                        if out.len() + inner.len() > MAX_LIST_ELEMENTS {
+                            return Err(too_many_elements("flatMap"));
+                        }
+                        out.extend(inner);
+                    }
+                    other => {
+                        if out.len() >= MAX_LIST_ELEMENTS {
+                            return Err(too_many_elements("flatMap"));
+                        }
+                        out.push(other);
+                    }
                 }
             }
             BasesValue::List(out)
@@ -2270,10 +2234,6 @@ pub fn run_higher_order(
         }
     })
 }
-
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
 
 /// The value path of a higher-order method. Unreachable: the evaluator
 /// intercepts these before evaluating arguments, so reaching this is a bug in
@@ -2454,18 +2414,4 @@ pub fn add_months(d: &BasesDate, months: i64) -> Result<BasesDate> {
     };
     // Shifting months does not give the value a time it did not have.
     Ok(BasesDate::new(dt, d.date_only))
-}
-
-/// Unused today, kept because a `relative` filter on a fixed clock is the one
-/// place a duration is compared as a `ChronoDuration` rather than as millis.
-#[allow(dead_code)]
-fn chrono_ms(ms: i64) -> ChronoDuration {
-    ChronoDuration::milliseconds(ms)
-}
-
-/// Keeps the `Datelike` import honest across a refactor; the trait is what makes
-/// `.year()`, `.month()` and `.day()` available on a chrono date.
-#[allow(dead_code)]
-fn _uses_datelike(dt: &DateTime<FixedOffset>) -> i32 {
-    dt.year()
 }

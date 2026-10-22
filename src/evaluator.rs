@@ -30,7 +30,6 @@ pub struct ThisContext {
 /// Everything an expression can see.
 #[derive(Clone)]
 pub struct EvalContext {
-    /// This note's frontmatter.
     pub note: BTreeMap<String, BasesValue>,
     pub file: FileValue,
     /// Computed formula columns.
@@ -142,10 +141,10 @@ pub fn evaluate_expression(source: &str, ctx: &EvalContext) -> Result<BasesValue
     // `project.contains(link(this.file.name))` would short-circuit on a missing
     // `project` and quietly evaluate to null -- exactly the silent empty result
     // this project exists to avoid.
-    if ctx.this_value.is_none() {
-        if let Some(reference) = find_this_reference(&ast) {
-            return Err(MissingThisContext { base: reference }.into());
-        }
+    if ctx.this_value.is_none()
+        && let Some(reference) = find_this_reference(&ast)
+    {
+        return Err(MissingThisContext { base: reference }.into());
     }
     evaluate(&ast, ctx)
 }
@@ -155,10 +154,10 @@ pub fn find_this_reference(node: &Node) -> Option<String> {
     match &node.kind {
         NodeKind::Identifier(name) => (name == "this").then(|| "this".to_string()),
         NodeKind::Member { object, property } => {
-            if let NodeKind::Identifier(name) = &object.kind {
-                if name == "this" {
-                    return Some(format!("this.{property}"));
-                }
+            if let NodeKind::Identifier(name) = &object.kind
+                && name == "this"
+            {
+                return Some(format!("this.{property}"));
             }
             find_this_reference(object)
         }
@@ -177,20 +176,16 @@ pub fn find_this_reference(node: &Node) -> Option<String> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Namespaces that are never a note property
-// ---------------------------------------------------------------------------
-
 /// A bare identifier is a note property, so these must be excluded explicitly
 /// or a filter would read them as frontmatter. Exported so filter inversion
 /// excludes exactly the same names rather than keeping a second copy.
 pub const RESERVED: [&str; 7] = ["this", "file", "note", "formula", "value", "index", "acc"];
 
 fn resolve_identifier(name: &str, ctx: &EvalContext) -> Result<BasesValue> {
-    if let Some(bindings) = &ctx.bindings {
-        if let Some(v) = bindings.get(name) {
-            return Ok(v.clone());
-        }
+    if let Some(bindings) = &ctx.bindings
+        && let Some(v) = bindings.get(name)
+    {
+        return Ok(v.clone());
     }
 
     // A dotted name routes to the right namespace. This happens here as well as
@@ -403,8 +398,7 @@ fn read_file_member(file: &FileValue, name: &str) -> BasesValue {
     let a = &file.accessors;
     match name {
         // Probed against a live Obsidian 1.13.7: the `file.name` column renders
-        // WITHOUT the extension, matching `basename`. Recorded in
-        // docs/divergences.md; the docs claim the opposite.
+        // WITHOUT the extension, matching `basename`.
         "name" | "basename" => BasesValue::String(file.basename.clone()),
         "path" => BasesValue::String(file.path.clone()),
         "folder" => BasesValue::String(file.folder.clone()),
@@ -424,10 +418,6 @@ fn read_file_member(file: &FileValue, name: &str) -> BasesValue {
         _ => BasesValue::Null,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Operators
-// ---------------------------------------------------------------------------
 
 fn evaluate_unary(
     op: UnaryOp,
@@ -653,10 +643,6 @@ fn apply_duration_or_number(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Calls and members
-// ---------------------------------------------------------------------------
-
 /// The lambda body and the context it runs in, passed together.
 ///
 /// The body is a borrowed `&Node` rather than something captured, because a
@@ -774,10 +760,10 @@ fn evaluate_member(
 ) -> Result<BasesValue> {
     // `this.<prop>` routes through the property-path resolver so frontmatter
     // keys on the host note resolve (`this.projects`), not just file members.
-    if let NodeKind::Identifier(name) = &object.kind {
-        if name == "this" {
-            return resolve_property_path(&format!("this.{property}"), ctx);
-        }
+    if let NodeKind::Identifier(name) = &object.kind
+        && name == "this"
+    {
+        return resolve_property_path(&format!("this.{property}"), ctx);
     }
     let target = evaluate_within(object, ctx, depth)?;
     Ok(read_member(&target, property))
@@ -844,10 +830,6 @@ fn index_into(target: &BasesValue, index: &BasesValue) -> BasesValue {
         _ => BasesValue::Null,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Coercion
-// ---------------------------------------------------------------------------
 
 pub fn to_number_loose(v: &BasesValue) -> Option<f64> {
     match v {

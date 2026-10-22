@@ -48,10 +48,6 @@ use crate::value::{BasesValue, strip_extension};
 use crate::vault::source::{FileStat, SourceKind, VaultSource, normalise_line_endings};
 use crate::vault::{Vault, content_hash};
 
-// ---------------------------------------------------------------------------
-// Surface
-// ---------------------------------------------------------------------------
-
 /// What the agent sent. Every field is optional, and only `draft_id` is load
 /// bearing: it is the one field that says which half of the handshake this is.
 ///
@@ -110,7 +106,6 @@ pub enum AddNoteToBaseResult {
 }
 
 impl AddNoteToBaseResult {
-    /// The note that was written, when one was.
     pub fn written(&self) -> Option<&str> {
         match self {
             Self::Commit(commit) => Some(&commit.written),
@@ -131,10 +126,6 @@ impl AddNoteToBaseResult {
         matches!(self, Self::Commit(_))
     }
 }
-
-// ---------------------------------------------------------------------------
-// The draft store
-// ---------------------------------------------------------------------------
 
 /// Thirty minutes: long enough to write a note, short enough that a stale
 /// `draft_id` cannot surface in a later session and author a row against a
@@ -267,10 +258,6 @@ fn expired_draft(id: &str, ttl_ms: i64) -> BasesError {
     .with_construct("draft_id")
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
 /// Draft a note, or commit one against a draft already handed out.
 ///
 /// The branch is on `draft_id` alone: that is the only field that says which
@@ -286,10 +273,6 @@ pub async fn add_note_to_base(
     }
     propose_draft(resolver, options).await
 }
-
-// ---------------------------------------------------------------------------
-// First call: invert the filter into a draft
-// ---------------------------------------------------------------------------
 
 async fn propose_draft(
     resolver: &Resolver,
@@ -524,10 +507,6 @@ fn reserved_device(path: &str, device: &str) -> BasesError {
     .with_note(path)
 }
 
-// ---------------------------------------------------------------------------
-// Second call: verify, then commit
-// ---------------------------------------------------------------------------
-
 async fn commit_draft(
     resolver: &Resolver,
     options: &AddNoteOptions,
@@ -693,7 +672,7 @@ async fn verification_failures(
     stored: &StoredDraft,
     content: &str,
 ) -> Result<Vec<FilterProbe>> {
-    let vault = vault_with_draft(resolver.shared_backend(), &stored.path, content).await;
+    let vault = vault_with_draft(resolver.shared_backend(), &stored.path, content).await?;
     let ctx = draft_eval_context(&vault, &stored.path, base, stored.context.as_deref())?;
 
     let mut failures = Vec::new();
@@ -971,10 +950,6 @@ fn verification_error(
     ))
 }
 
-// ---------------------------------------------------------------------------
-// Filter inversion
-// ---------------------------------------------------------------------------
-
 /// One proposed frontmatter key and the value to write for it.
 #[derive(Debug, Clone, PartialEq)]
 struct Entry {
@@ -1113,21 +1088,21 @@ fn invert_node(node: &Node, source: &str, context: Option<&str>) -> Inversion {
         right,
     } = &node.kind
     {
-        if let Some(key) = note_property_key(left) {
-            if let Some(value) = plain_literal(right) {
-                return Inversion {
-                    entries: vec![Entry { key, value }],
-                    unresolved: Vec::new(),
-                };
-            }
+        if let Some(key) = note_property_key(left)
+            && let Some(value) = plain_literal(right)
+        {
+            return Inversion {
+                entries: vec![Entry { key, value }],
+                unresolved: Vec::new(),
+            };
         }
-        if let Some(key) = note_property_key(right) {
-            if let Some(value) = plain_literal(left) {
-                return Inversion {
-                    entries: vec![Entry { key, value }],
-                    unresolved: Vec::new(),
-                };
-            }
+        if let Some(key) = note_property_key(right)
+            && let Some(value) = plain_literal(left)
+        {
+            return Inversion {
+                entries: vec![Entry { key, value }],
+                unresolved: Vec::new(),
+            };
         }
     }
 
@@ -1187,9 +1162,6 @@ fn describe(node: &FilterNode) -> String {
 fn describe_all(children: &[FilterNode]) -> String {
     children.iter().map(describe).collect::<Vec<_>>().join(", ")
 }
-
-// -- node shapes ------------------------------------------------------------
-
 /// The frontmatter key a node reads, or `None` when it is not a note property.
 ///
 /// `file.*`, `formula.*` and `this.*` all read from somewhere frontmatter
@@ -1239,7 +1211,6 @@ fn as_call_tag(node: &Node) -> Option<BasesValue> {
     }
 }
 
-/// `link(<arg>)` with exactly one argument, returned.
 fn link_argument(node: &Node) -> Option<&Node> {
     let NodeKind::Call { callee, args } = &node.kind else {
         return None;
@@ -1291,10 +1262,6 @@ fn plain_literal(node: &Node) -> Option<BasesValue> {
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Draft rendering
-// ---------------------------------------------------------------------------
 
 /// Assemble the note: frontmatter first, because that is the part the Base reads.
 ///
@@ -1399,24 +1366,21 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-// ---------------------------------------------------------------------------
-// The verification vault
-// ---------------------------------------------------------------------------
-
-/// The real vault with one unsaved note spliced in, and read-only.
-async fn vault_with_draft(inner: Arc<dyn VaultSource>, path: &str, content: &str) -> Arc<Vault> {
+/// The real vault with one unsaved note spliced in, and read-only. The index
+/// build can fail (a refused WebDAV `PROPFIND` is an error, not a smaller
+/// vault), and rmcp has no panic isolation, so it is propagated.
+async fn vault_with_draft(
+    inner: Arc<dyn VaultSource>,
+    path: &str,
+    content: &str,
+) -> Result<Arc<Vault>> {
     let vault = Arc::new(Vault::new(Box::new(DraftVaultSource {
         inner,
         path: path.to_string(),
         content: content.to_string(),
     })));
-    // The index always builds from a listing this backend can produce, so a
-    // failure here is a real failure rather than an empty vault.
-    vault
-        .load()
-        .await
-        .expect("the verification vault indexes the real listing plus one draft");
-    vault
+    vault.load().await?;
+    Ok(vault)
 }
 
 /// The overlay the verify step reads through.
@@ -1542,4 +1506,66 @@ pub fn iso_millis(millis: i64) -> String {
             DateTime::<Utc>::from_timestamp_millis(0).expect("epoch is representable")
         })
         .to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vault::source::{FileStat, SourceKind, VaultSource};
+
+    /// A source whose listing always fails, standing in for a WebDAV backend
+    /// whose PROPFIND was refused.
+    struct FailingList;
+
+    #[async_trait::async_trait]
+    impl VaultSource for FailingList {
+        fn kind(&self) -> SourceKind {
+            SourceKind::Fs
+        }
+        async fn list(&self) -> Result<Vec<String>> {
+            Err(BasesError::new("listing refused"))
+        }
+        async fn read_note(&self, _path: &str) -> Result<String> {
+            unreachable!("the index does not build")
+        }
+        async fn read_fresh(&self, _path: &str) -> Result<String> {
+            unreachable!("the index does not build")
+        }
+        async fn exists(&self, _path: &str) -> Result<bool> {
+            unreachable!("the index does not build")
+        }
+        async fn write_text(&self, _path: &str, _data: &str) -> Result<()> {
+            unreachable!("the index does not build")
+        }
+        async fn stat(&self, _path: &str) -> Result<FileStat> {
+            unreachable!("the index does not build")
+        }
+        async fn hash(&self, _path: &str) -> Result<String> {
+            unreachable!("the index does not build")
+        }
+        async fn ensure_dir(&self, _path: &str) -> Result<()> {
+            unreachable!("the index does not build")
+        }
+        async fn delete(&self, _path: &str) -> Result<()> {
+            unreachable!("the index does not build")
+        }
+    }
+
+    /// A refused listing is an error the caller can report, not a panic that
+    /// unwinds the session worker (rmcp has no panic isolation).
+    #[tokio::test]
+    async fn a_failed_listing_is_an_error_rather_than_a_panic() {
+        let error = vault_with_draft(
+            std::sync::Arc::new(FailingList),
+            "Draft.md",
+            "---\ntags:\n  - x\n---\n",
+        )
+        .await
+        .expect_err("a refused listing is an error");
+        assert!(
+            error.message().contains("listing refused"),
+            "{}",
+            error.message()
+        );
+    }
 }

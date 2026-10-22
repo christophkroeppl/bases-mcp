@@ -123,15 +123,15 @@ pub fn query_base(
         for (name, node) in formula_order.iter().zip(&compiled) {
             ctx.formula.insert(name.clone(), evaluate(node, &ctx)?);
         }
-        if let Some(filter) = &global_filter {
-            if !run_filter(filter, &ctx)? {
-                continue;
-            }
+        if let Some(filter) = &global_filter
+            && !run_filter(filter, &ctx)?
+        {
+            continue;
         }
-        if let Some(filter) = &view_filter {
-            if !run_filter(filter, &ctx)? {
-                continue;
-            }
+        if let Some(filter) = &view_filter
+            && !run_filter(filter, &ctx)?
+        {
+            continue;
         }
         rows.push(ResolvedRow {
             path: note_path,
@@ -189,10 +189,6 @@ pub fn query_base(
         warnings: Vec::new(),
     })
 }
-
-// ---------------------------------------------------------------------------
-// `this`
-// ---------------------------------------------------------------------------
 
 /// Bind `this` to the Host note, or refuse the value in the one voice every
 /// caller uses.
@@ -269,10 +265,6 @@ fn bad_context(context: &str, what: &str) -> BasesError {
     ))
     .with_note(context)
 }
-
-// ---------------------------------------------------------------------------
-// Filters
-// ---------------------------------------------------------------------------
 
 /// A filter tree with every expression already parsed.
 enum CompiledFilter {
@@ -382,10 +374,6 @@ fn run_filter_within(filter: &CompiledFilter, ctx: &EvalContext, depth: &Depth) 
     }
 }
 
-// ---------------------------------------------------------------------------
-// Formulas
-// ---------------------------------------------------------------------------
-
 /// Topologically order formulas so a formula may reference another.
 ///
 /// Cycle detection is here rather than left to the evaluator: a formula set that
@@ -454,7 +442,6 @@ fn visit<'a>(
     Ok(())
 }
 
-/// Does `expr` reference `formula.<name>` (or a bare `name` that is a formula)?
 fn references_formula(expr: &str, name: &str) -> bool {
     // The substring test first, because `formula.ppu` parses as a member access
     // whose OBJECT is `formula`, and an AST walk alone would not see the name.
@@ -463,10 +450,6 @@ fn references_formula(expr: &str, name: &str) -> bool {
     }
     try_parse(expr).is_some_and(|ast| ast.mentions_formula(name))
 }
-
-// ---------------------------------------------------------------------------
-// Property IDs
-// ---------------------------------------------------------------------------
 
 /// Every Property ID the pipeline must resolve for the row cache.
 fn collect_properties(base: &BaseFile, view: &BaseView) -> BTreeSet<String> {
@@ -501,7 +484,6 @@ pub fn canonical(id: &str) -> String {
     format!("note.{trimmed}")
 }
 
-/// Resolve one Property ID against a row's context.
 pub fn resolve_property(id: &str, ctx: &EvalContext) -> Result<BasesValue> {
     let prop = canonical(id);
     if let Some(name) = prop.strip_prefix("formula.") {
@@ -532,10 +514,6 @@ fn context_for(
     ctx.this_value = this_value.cloned();
     ctx
 }
-
-// ---------------------------------------------------------------------------
-// Ordering
-// ---------------------------------------------------------------------------
 
 /// The sort a view resolves to, which is never nothing.
 ///
@@ -572,25 +550,8 @@ fn sort_rows(rows: &mut [ResolvedRow], sort: &[SortEntry]) {
             let (Some(av), Some(bv)) = (a.values.get(&id), b.values.get(&id)) else {
                 continue;
             };
-            // A null sorts AFTER every value, in BOTH directions.
-            //
-            // This is the one rule that is not "reverse the ascending order":
-            // Obsidian's comparator returns 1 when the LEFT value is null and
-            // -1 when the RIGHT one is, and the direction is applied to the
-            // result of the VALUE comparison only. So a row with no value
-            // stays at the bottom whichever way the sort runs.
-            //
-            // Getting this wrong is invisible in the ascending case (a null
-            // ranked lowest comes first there) and wrong in the descending
-            // case, where a naive reverse would put it FIRST.
-            //
-            // The ONE exception is a boolean column, and Obsidian's order of
-            // tests is what makes it an exception: the boolean branch is
-            // checked BEFORE the null one, so a null beside a boolean is
-            // compared as the boolean it folds into -- `false` -- and the
-            // direction applies to that comparison like any other. A missing
-            // checkbox therefore sorts with the unchecked ones, not at the
-            // bottom.
+            // A null sorts last in BOTH directions, and a boolean column is
+            // the exception. See `docs/divergences.md`.
             match (av, bv) {
                 (BasesValue::Null, BasesValue::Null) => continue,
                 (BasesValue::Bool(_), _) | (_, BasesValue::Bool(_)) => {
@@ -686,7 +647,3 @@ fn group_key(value: Option<&BasesValue>) -> String {
         other => other.to_display_string(),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Limit
-// ---------------------------------------------------------------------------

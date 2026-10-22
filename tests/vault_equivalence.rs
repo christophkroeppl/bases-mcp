@@ -1517,3 +1517,54 @@ fn points_at_refuses_a_name_that_is_only_a_prefix_of_the_path() {
     ));
     assert!(!points_at("SomeProjectX", "Projects/SomeProject.md"));
 }
+
+/// A symlink inside the vault must not become a write outside it.
+///
+/// `abs()` is lexical, so a link entry passes its root check. Following the
+/// link would create the file at its target -- here, a path in a different
+/// directory entirely.
+#[test]
+fn a_symlinked_note_is_refused_rather_than_followed() {
+    let dir = TempDir::new().expect("a temp dir is created");
+    let outside = TempDir::new().expect("a second temp dir is created");
+    let target = outside.path().join("pwned.md");
+    std::os::unix::fs::symlink(&target, dir.path().join("evil.md"))
+        .expect("the symlink is created");
+
+    let fs = FsVaultSource::new(dir.path()).expect("a sandbox is a directory");
+    let error = failure_of(fs.write_text("evil.md", "# attacker\n"));
+
+    assert!(
+        error.message().contains("symlink"),
+        "the refusal names the reason: {}",
+        error.message()
+    );
+    assert!(
+        !target.exists(),
+        "the write must not create the link's target: {}",
+        target.display()
+    );
+}
+
+/// The same guard for a link in a DIRECTORY component: `linked/pwned.md` is
+/// lexical inside the vault, but `linked` resolves outside it.
+#[test]
+fn a_write_through_a_symlinked_directory_is_refused() {
+    let dir = TempDir::new().expect("a temp dir is created");
+    let outside = TempDir::new().expect("a second temp dir is created");
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("linked"))
+        .expect("the directory symlink is created");
+
+    let fs = FsVaultSource::new(dir.path()).expect("a sandbox is a directory");
+    let error = failure_of(fs.write_text("linked/pwned.md", "# attacker\n"));
+
+    assert!(
+        error.message().contains("symlink"),
+        "the refusal names the reason: {}",
+        error.message()
+    );
+    assert!(
+        !outside.path().join("pwned.md").exists(),
+        "the write must not land outside the vault"
+    );
+}

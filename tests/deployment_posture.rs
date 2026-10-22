@@ -122,10 +122,10 @@ fn the_documented_default_is_the_loopback_default() {
         tooling.contains("MCP_HTTP_HOST    bind address (default 127.0.0.1)"),
         "docs/tooling.md states the default bind address"
     );
-    let example = read(".env.example");
+    let schema = read(".env.schema");
     assert!(
-        example.contains("MCP_HTTP_HOST="),
-        ".env.example names the bind address variable"
+        schema.contains("MCP_HTTP_HOST="),
+        ".env.schema names the bind address variable"
     );
 }
 
@@ -621,18 +621,18 @@ fn the_two_trust_models_are_told_apart_in_the_operator_docs() {
     );
 }
 
-/// The `.env.example` — the documented home for environment variables — says
+/// The `.env.schema` — the documented home for environment variables — says
 /// which of its variables is the trust-relevant one.
 #[test]
-fn the_env_example_names_the_network_trust_model() {
-    let example = read(".env.example");
+fn the_env_schema_names_the_network_trust_model() {
+    let schema = read(".env.schema");
     assert!(
-        example.contains("no authentication"),
-        ".env.example says the listener has no authentication"
+        schema.contains("no authentication"),
+        ".env.schema says the listener has no authentication"
     );
     assert!(
-        example.contains("Bind 0.0.0.0 only on a network you trust"),
-        ".env.example says what widening the bind requires"
+        schema.contains("Bind 0.0.0.0 only on a network you trust"),
+        ".env.schema says what widening the bind requires"
     );
 }
 

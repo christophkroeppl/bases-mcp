@@ -340,10 +340,10 @@ fn port_is_open(address: SocketAddr) -> bool {
 fn sse_payload(body: &str) -> Json {
     for line in body.lines() {
         let line = line.trim_end_matches('\r');
-        if let Some(payload) = line.strip_prefix("data: ") {
-            if payload.starts_with('{') {
-                return serde_json::from_str(payload).expect("the data line is JSON");
-            }
+        if let Some(payload) = line.strip_prefix("data: ")
+            && payload.starts_with('{')
+        {
+            return serde_json::from_str(payload).expect("the data line is JSON");
         }
     }
     // An empty body is a legitimate answer to a notification, and the caller

@@ -1506,6 +1506,8 @@ fn labels_are_not_title_cased_and_keep_their_underscores() {
     assert_eq!(strip_namespace("formula.x"), "x");
     assert_eq!(canonical_id_of("status"), "note.status");
     assert_eq!(canonical_id_of("note.status"), "note.status");
+    assert_eq!(canonical_id_of("  status  "), "note.status");
+    assert_eq!(canonical_id_of("  note.status  "), "note.status");
 }
 
 #[test]

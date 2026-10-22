@@ -59,10 +59,6 @@ pub const SNAPSHOT_SCHEMA: u32 = 1;
 /// one of ours by accident.
 const DIGEST_TAG: &str = "bases-mcp/parity-snapshot/v1";
 
-// ---------------------------------------------------------------------------
-// Talking to the CLI
-// ---------------------------------------------------------------------------
-
 /// The Obsidian CLI, addressed by binary and registered vault name.
 ///
 /// The contract this type encodes is hard-won and documented on the live suite:
@@ -169,10 +165,6 @@ with the app settled.",
             .filter(|line| !line.is_empty())
     }
 }
-
-// ---------------------------------------------------------------------------
-// The recorded shape
-// ---------------------------------------------------------------------------
 
 /// One base view, as the CLI answered it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -308,10 +300,6 @@ pub fn digest_of(entries: &[Recorded]) -> String {
     }
     hex::encode(hasher.finalize())
 }
-
-// ---------------------------------------------------------------------------
-// Recording
-// ---------------------------------------------------------------------------
 
 pub struct RecordRequest {
     pub cli: Cli,
@@ -461,10 +449,6 @@ fn canonical_candidate(path: &Path) -> Result<PathBuf> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Obsidian's vault registry, and the tripwire around it
-// ---------------------------------------------------------------------------
-
 /// The directory holding `obsidian.json`.
 ///
 /// `OBSIDIAN_CONFIG_DIR` exists because the app's config location is a
@@ -478,10 +462,10 @@ pub fn obsidian_config_path() -> Result<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
     let linux = config_home.map(|dir| dir.join("obsidian").join("obsidian.json"));
-    if let Some(path) = &linux {
-        if path.exists() {
-            return Ok(path.clone());
-        }
+    if let Some(path) = &linux
+        && path.exists()
+    {
+        return Ok(path.clone());
     }
     #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
@@ -671,10 +655,6 @@ impl VaultGuard {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The store: writing, loading and checking a corpus
-// ---------------------------------------------------------------------------
-
 /// Write a corpus, keyed by the digest of its answers.
 ///
 /// A corpus with this digest that already validates is left alone, so
@@ -858,7 +838,6 @@ fn safe_join(root: &Path, relative: &str) -> std::result::Result<PathBuf, String
     Ok(root.join(path))
 }
 
-/// Read and fully validate one corpus directory.
 pub fn load_corpus(dir: &Path) -> Result<LoadedCorpus> {
     validate_corpus(dir).map_err(|errors| BasesError::new(errors.join("; ")))
 }
@@ -1177,10 +1156,6 @@ is a decision — pass --corpus <path>.",
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Comparing
-// ---------------------------------------------------------------------------
 
 /// What a comparison found.
 #[derive(Debug, Default)]

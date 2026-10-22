@@ -1179,6 +1179,21 @@ fn credentials_inside_the_url_are_refused_and_never_echoed() {
 }
 
 #[test]
+fn a_password_with_a_slash_or_an_at_sign_is_never_echoed() {
+    for (url, secret) in [
+        ("http://u:pa/ss@host/vault", "pa/ss"),
+        ("http://u:p@ss@host/vault", "p@ss"),
+    ] {
+        let message = refused(parse_config(&env(vec![
+            ("BASES_MCP_WEBDAV_URL", url),
+            ("BASES_MCP_WEBDAV_USER", "u"),
+            ("BASES_MCP_WEBDAV_PASSWORD", "p"),
+        ])));
+        assert!(!message.contains(secret), "{url}: {message}");
+    }
+}
+
+#[test]
 fn a_non_http_scheme_is_refused() {
     for url in ["ftp://h/vault", "file:///tmp/vault"] {
         let message = refused(parse_config(&env(vec![

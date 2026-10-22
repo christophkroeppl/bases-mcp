@@ -57,7 +57,6 @@ impl From<Literal> for BasesValue {
 pub enum NodeKind {
     Literal(Literal),
     Identifier(String),
-    /// `!` or `-`.
     Unary {
         op: UnaryOp,
         operand: Box<Node>,

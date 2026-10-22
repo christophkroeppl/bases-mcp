@@ -83,7 +83,11 @@ pub fn display_name_for(base: &BaseFile, id: &str) -> String {
 }
 
 /// Normalise a Property ID to its `note.`-prefixed canonical spelling.
+///
+/// Trimmed, as [`crate::base::query::canonical`] trims: a padded ID must not
+/// yield a column ID and a header label that disagree.
 pub fn canonical_id_of(id: &str) -> String {
+    let id = id.trim();
     for prefix in ["note.", "file.", "formula."] {
         if id.starts_with(prefix) {
             return id.to_string();

@@ -134,7 +134,10 @@ async fn serve_http() -> Result<(), String> {
         let listener = tokio::net::TcpListener::bind(address)
             .await
             .map_err(|error| format!("cannot bind {address}: {error}"))?;
-        listeners.push((address, listener));
+        // `MCP_HTTP_PORT=0` asks the kernel for a free port, so only the bound
+        // address can be dialled.
+        let bound = listener.local_addr().unwrap_or(address);
+        listeners.push((bound, listener));
     }
 
     // `0.0.0.0` means rmcp was told to accept any `Host`, which is the

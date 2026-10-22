@@ -10,7 +10,7 @@ scripts/
 test/
 .env
 .env.*
-!.env.example
+!.env.schema
 
 # Local agent configuration and the docs that describe it.
 AGENTS.md

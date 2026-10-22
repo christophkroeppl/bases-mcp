@@ -410,7 +410,6 @@ fn precedence_of(op: Infix) -> Precedence {
             Precedence::Factor
         }
         Infix::Not => Precedence::Unary,
-        // Call, member and index bind tightest.
         Infix::Call | Infix::Member | Infix::Index => Precedence::Call,
     }
 }

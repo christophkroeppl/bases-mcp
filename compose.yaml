@@ -1,5 +1,9 @@
 # Guarden deployment compose — the unit source for `.guarden/service.yml`.
 #
+# This is NOT a standalone compose file: it has no `build:`, no `ports:` and no
+# vault variable, so `docker compose up` against it will not work. For a
+# standalone run see README.md ("Container"), which has the `podman run` form.
+#
 # The local transport is stdio (an agent spawns the binary); this file is the
 # deployment-scoped one. Every difference below is forced by guarden:
 #

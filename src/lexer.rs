@@ -78,9 +78,7 @@ pub struct Token {
     pub raw: String,
     /// Present for Str, Regex and Identifier.
     pub text: Option<String>,
-    /// Present for Number.
     pub number: Option<f64>,
-    /// Present for Regex.
     pub regex: Option<RegexLiteral>,
     pub start: usize,
     pub end: usize,

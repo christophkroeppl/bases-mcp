@@ -532,6 +532,22 @@ fn higher_order_methods_bind_value_and_index() {
     assert_eq!(s("list([1, 2, 3]).find(value > 1)"), "2");
 }
 
+/// `flatMap` composes, and the resolver is shared by every session, so an
+/// uncapped list is an OOM for all of them. 2^17 is over the 65,536 cap.
+#[test]
+fn a_runaway_flat_map_is_refused_rather_than_exhausting_memory() {
+    let mut expr = String::from("list([1])");
+    for _ in 0..17 {
+        expr.push_str(".flatMap(list([value, value]))");
+    }
+    let error = ev(&expr).expect_err("the cap refuses the list");
+    assert!(
+        error.message().contains("larger than"),
+        "the refusal names the cap: {}",
+        error.message()
+    );
+}
+
 #[test]
 fn reduce_seeds_from_the_second_argument() {
     // Real vaults seed with 0 for a sum and null for the documented max idiom,

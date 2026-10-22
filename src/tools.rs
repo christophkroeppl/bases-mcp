@@ -71,9 +71,7 @@ use crate::error::BasesError;
 use crate::render::markdown::{RenderStyle, render_markdown};
 use crate::service::{NoteOptions, Resolver, json_rows};
 
-/// The server name a client sees.
 pub const SERVER_NAME: &str = "bases-mcp";
-/// The server version a client sees.
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// How much of what was asked for actually happened.
@@ -259,9 +257,6 @@ impl ToolSurface {
             crate::audit::report_lost(&problem);
         }
     }
-
-    // -- the six tools -------------------------------------------------------
-
     async fn list_bases(&self) -> Result<Audited, BasesError> {
         let bases = self.resolver.list_bases().await?;
         let count = bases.len();
@@ -580,10 +575,6 @@ fn construct_of(result: &CallToolResult) -> Option<String> {
         .map(str::to_string)
 }
 
-// ---------------------------------------------------------------------------
-// Arguments
-// ---------------------------------------------------------------------------
-
 /// `resolve_base`'s arguments.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -617,7 +608,6 @@ enum OutputFormat {
 /// `get_note`'s arguments.
 #[derive(Debug, Deserialize)]
 struct GetNoteArgs {
-    /// Path to the `.md` note.
     path: String,
     /// Return the stored text with base regions intact instead of the Projection.
     #[serde(default)]
@@ -646,7 +636,6 @@ struct WriteNoteArgs {
 /// `backlinks`' arguments.
 #[derive(Debug, Deserialize)]
 struct BacklinksArgs {
-    /// Path to the `.md` note.
     path: String,
 }
 
@@ -660,10 +649,6 @@ fn parse_args<T: DeserializeOwned>(arguments: &Map<String, Json>) -> Result<T, B
         BasesError::new(format!("Invalid arguments: {error}")).with_construct("arguments")
     })
 }
-
-// ---------------------------------------------------------------------------
-// Results
-// ---------------------------------------------------------------------------
 
 /// The counts every `resolve_base` answer carries, whatever the format.
 fn summarise(result: &QueryResult, health: Health) -> Json {
@@ -777,10 +762,6 @@ fn handshake_note(result: &AddNoteToBaseResult) -> Option<String> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Envelopes
-// ---------------------------------------------------------------------------
-
 /// A data result, on both channels.
 ///
 /// `structuredContent` is what a machine client reads; the fenced block is what
@@ -850,10 +831,6 @@ where
         Err(error) => Audited::new(failure(&error)),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tool declarations
-// ---------------------------------------------------------------------------
 
 /// Every tool this server serves, with its input schema.
 ///

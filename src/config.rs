@@ -22,9 +22,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-
-use regex::Regex;
 
 use crate::error::BasesError;
 use crate::vault::{WebdavVaultOptions, WebdavVaultSource};
@@ -39,7 +36,6 @@ pub const NAME: &str = "bases-mcp";
 /// original's configuration testable at all.
 pub type Env = BTreeMap<String, String>;
 
-/// Read the process environment.
 pub fn process_env() -> Env {
     std::env::vars().collect()
 }
@@ -279,12 +275,20 @@ fn invalid_webdav_url(url: &str) -> String {
 }
 
 /// Replace any `user:password@` in a URL with `***:***@`.
+///
+/// A URL that does not parse is not echoed: where its userinfo ends is
+/// unknowable, so any part of it could be the credential.
 fn redact_url(url: &str) -> String {
-    static PATTERN: OnceLock<Regex> = OnceLock::new();
-    PATTERN
-        .get_or_init(|| Regex::new(r"//[^/@]*@").expect("the userinfo pattern compiles"))
-        .replace_all(url, "//***:***@")
-        .into_owned()
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return "a URL that could not be parsed".to_string();
+    };
+    if parsed.username().is_empty() && parsed.password().is_none() {
+        return url.to_string();
+    }
+    let mut redacted = parsed.clone();
+    let _ = redacted.set_username("***");
+    let _ = redacted.set_password(Some("***"));
+    redacted.to_string()
 }
 
 /// Normalise the WebDAV base URL, or refuse it.
@@ -354,10 +358,6 @@ const USAGE: &str = concat!(
 pub fn usage() -> &'static str {
     USAGE
 }
-
-// ---------------------------------------------------------------------------
-// Opening the vault
-// ---------------------------------------------------------------------------
 
 /// The backend a configuration asks for, before it is known to be reachable.
 ///

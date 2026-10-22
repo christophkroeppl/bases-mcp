@@ -183,7 +183,6 @@ impl Resolver {
         self.vault.shared_source()
     }
 
-    /// The draft store, for the `add_note_to_base` handshake.
     pub fn drafts(&self) -> &crate::drafts::DraftStore {
         &self.drafts
     }
@@ -192,9 +191,6 @@ impl Resolver {
     pub async fn reload(&self) -> Result<()> {
         self.vault.reload().await
     }
-
-    // -- reads ---------------------------------------------------------------
-
     /// Every base in the vault, with the views each declares.
     ///
     /// A base that fails to parse fails the whole listing rather than being
@@ -424,9 +420,6 @@ impl Resolver {
             })
             .collect())
     }
-
-    // -- writes --------------------------------------------------------------
-
     /// Apply an agent's edit to a note.
     ///
     /// Base regions are restored verbatim and any attempt to change them is
@@ -526,10 +519,6 @@ impl Resolver {
         json_rows(base, result, &[])
     }
 }
-
-// ---------------------------------------------------------------------------
-// JSON rows
-// ---------------------------------------------------------------------------
 
 /// One JSON row per resolved row, keyed by display label.
 ///
@@ -722,10 +711,6 @@ fn clean_object<const N: usize>(fields: [(&str, Json); N]) -> Map<String, Json> 
         .map(|(key, value)| (key.to_string(), value))
         .collect()
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// The provenance a rendered region carries.
 ///

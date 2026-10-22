@@ -226,7 +226,6 @@ impl AuditContext {
 pub struct AuditRecord {
     /// When the call finished, RFC 3339 with milliseconds, in UTC.
     pub ts: String,
-    /// The tool that was called.
     pub tool: String,
     /// Who called it.
     pub caller: String,
@@ -392,12 +391,27 @@ impl FileSink {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
+            let existed = parent.exists();
             std::fs::create_dir_all(parent).map_err(|error| {
                 format!(
                     "cannot create the audit log directory {}: {error}",
                     parent.display()
                 )
             })?;
+            // A listed name is a disclosure even when the file is 0600. An
+            // existing directory is left alone — its mode is the operator's.
+            #[cfg(unix)]
+            if !existed {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).map_err(
+                    |error| {
+                        format!(
+                            "cannot narrow the audit log directory {} to 700: {error}",
+                            parent.display()
+                        )
+                    },
+                )?;
+            }
         }
         let file = open_file(&path, false)?;
         let size = file
@@ -518,14 +532,32 @@ fn open_file(path: &Path, truncate: bool) -> Result<File, String> {
         // widen that deliberately.
         options.mode(0o600);
     }
-    options
+    let file = options
         .open(path)
-        .map_err(|error| format!("cannot open the audit log {}: {error}", path.display()))
+        .map_err(|error| format!("cannot open the audit log {}: {error}", path.display()))?;
+    // `OpenOptions::mode` applies ONLY at creation, so an existing trail keeps
+    // whatever mode it was made with.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = file
+            .metadata()
+            .map_err(|error| format!("cannot stat the audit log {}: {error}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode != 0o600 {
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| {
+                    format!(
+                        "cannot narrow the audit log {} from {mode:o} to 600: {error}",
+                        path.display()
+                    )
+                })?;
+        }
+    }
+    Ok(file)
 }
-
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
 
 /// Where the trail goes, and how big it may get.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -656,6 +688,51 @@ impl AuditConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A trail that already exists with a wider mode is narrowed, not inherited.
+    /// `OpenOptions::mode` only applies at creation, so an older build, a
+    /// bind-mount or a permissive umask would otherwise leave the record of who
+    /// wrote what readable by anyone.
+    #[cfg(unix)]
+    #[test]
+    fn a_preexisting_wider_mode_is_narrowed() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("a temp dir is created");
+        let path = dir.path().join("audit.log");
+        std::fs::write(&path, b"").expect("the file is created");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("the mode is widened");
+
+        let sink = FileSink::open(&path, 1024).expect("the trail opens");
+        drop(sink);
+
+        let mode = std::fs::metadata(&path)
+            .expect("the file exists")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "the trail is narrowed to owner-only");
+    }
+
+    /// A directory the trail creates is owner-only too, so the file's name is
+    /// not listable by everyone even though the file itself is 0600.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_the_trail_creates_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("a temp dir is created");
+        let path = dir.path().join("nested/deep/audit.log");
+
+        let sink = FileSink::open(&path, 1024).expect("the trail opens");
+        drop(sink);
+
+        let mode = std::fs::metadata(dir.path().join("nested/deep"))
+            .expect("the directory exists")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "the directory is owner-only");
+    }
 
     fn env(pairs: &[(&str, &str)]) -> Env {
         pairs

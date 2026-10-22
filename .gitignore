@@ -2,12 +2,12 @@
 # vault is content we control, so this must never be committed.
 test/vault/.obsidian/
 
-# Machine-specific settings for the Obsidian CLI and any WebDAV server. The
-# example file is committed; the real one never is, because it holds paths that
+# Machine-specific values for the Obsidian CLI and any WebDAV server. The
+# schema is committed; the value file never is, because it holds paths that
 # differ per machine and, on the WebDAV side, credentials.
 .env
 .env.*
-!.env.example
+!.env.schema
 
 # The guarden credential schema is the tracked half of the varlock contract: a
 # project declares its credential SHAPE here and never a value. It is the one

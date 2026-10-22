@@ -70,6 +70,10 @@ corpus-check *ARGS:
 check-versions:
     @./scripts/check-versions.sh
 
+# Dependency advisories. Needs `cargo install cargo-audit` once.
+audit:
+    cargo audit
+
 precommit:
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings

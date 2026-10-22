@@ -52,6 +52,8 @@ pub fn content_hash(text: &str) -> String {
 
 pub struct FsVaultSource {
     root: PathBuf,
+    /// `root` with every symlink resolved, for the write guard's parent check.
+    root_real: PathBuf,
     files: RwLock<Option<Vec<String>>>,
     /// Note text, NORMALISED — the same string [`VaultSource::read_note`] returns.
     /// The cache is not a copy of the bytes on disk and never was meant to be; it
@@ -88,6 +90,7 @@ impl FsVaultSource {
             )));
         }
         Ok(Self {
+            root_real: std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone()),
             root,
             files: RwLock::new(None),
             text_cache: RwLock::new(HashMap::new()),
@@ -177,23 +180,9 @@ impl FsVaultSource {
         if rel.starts_with('/') {
             return Err(escapes_root(rel));
         }
-        // `\` is the same class of mistake and the more dangerous of the two,
-        // because the check at the bottom is COMPONENT-based and `PathBuf::push`
-        // is not. The loop below splits on `/` only, so `..\..\outside\evil.md` is
-        // one segment and the root does start with the result — but
-        // `Path::components` splits on either separator on Windows, so the
-        // operating system sees four segments there and the write lands outside
-        // the root.
-        //
-        // Unconditional, deliberately, and NOT `#[cfg(windows)]`: a rule whose
-        // safety depends on which binary it was compiled into is the defect itself
-        // rather than its repair, and it is also the one part of the fix this test
-        // suite could not otherwise reach from Linux. The cost is real and is
-        // stated here rather than discovered: a Linux vault holding a file whose
-        // name literally contains a backslash is indexed by `walk`, and reading it
-        // now fails. That name is not portable to Windows in the first place, and
-        // `VaultSource::list` documents its paths as vault-relative POSIX, in which
-        // a backslash is not a legal character.
+        // `\` is the same class of mistake and the more dangerous of the two:
+        // the root check is COMPONENT-based, and `Path::components` splits on
+        // either separator on Windows. Unconditional, not `#[cfg(windows)]`.
         if rel.contains('\\') {
             return Err(backslash_in_path(rel));
         }
@@ -226,6 +215,17 @@ fn backslash_in_path(rel: &str) -> BasesError {
         "Path contains a backslash, which this backend will not resolve: {rel}. A vault path is \
          POSIX-relative and uses `/`; a backslash is a path separator on Windows, where the same \
          argument would name a different file or walk out of the root."
+    ))
+}
+
+/// A write whose destination is, or is reached through, a symlink. Refused
+/// rather than resolved: a vault whose notes are links is not a shape this
+/// backend supports, and following one writes outside the vault.
+fn symlink_in_path(rel: &str) -> BasesError {
+    BasesError::new(format!(
+        "Refusing to write {rel}: the destination is, or is reached through, a symlink. A vault \
+         path must name a real file inside the vault, because following a link would write \
+         wherever it points."
     ))
 }
 
@@ -335,12 +335,35 @@ impl VaultSource for FsVaultSource {
 
     async fn write_text(&self, rel: &str, data: &str) -> Result<()> {
         let abs = self.abs(rel)?;
+        // `abs` is lexical, so a link entry passes its root check; following it
+        // would write wherever it points. `O_NOFOLLOW` below closes the window
+        // between this check and the open.
+        match tokio::fs::symlink_metadata(&abs).await {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(symlink_in_path(rel)),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io("stat", &abs, error)),
+        }
         if let Some(parent) = abs.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| io("create directory", parent, e))?;
+            // The parent may itself be (or be reached through) a symlink. Resolve
+            // it and refuse if the real directory is outside the vault.
+            if let Ok(real) = tokio::fs::canonicalize(parent).await
+                && !real.starts_with(&self.root_real)
+            {
+                return Err(symlink_in_path(rel));
+            }
         }
-        tokio::fs::write(&abs, data.as_bytes())
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = options.open(&abs).await.map_err(|e| io("write", &abs, e))?;
+        tokio::io::AsyncWriteExt::write_all(&mut file, data.as_bytes())
             .await
             .map_err(|e| io("write", &abs, e))?;
         // What goes to disk is exactly what the caller asked for — a verbatim write

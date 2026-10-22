@@ -43,5 +43,6 @@ echo
 echo "Other configuration"
 echo "==================="
 echo
-echo "  Copy .env.example to .env and edit it for anything machine-specific."
-echo "  .env is gitignored; .env.example is committed."
+echo "  Copy .env.schema to .env.local and edit it for anything machine-specific."
+echo "  .env.local is gitignored; .env.schema is committed."
+echo "  varlock load --agent validates it; varlock run -- bases-mcp injects it."

@@ -19,6 +19,10 @@ Evidence shorthand: `probe` = a `.base` file written into `test/vault` and
 queried with `obsidian base:query`, then deleted. `cli` = the same without a
 helper base.
 
+**Some entries cite `test/unit/*.ts` and `test/parity/*.test.ts`.** Those trees
+live on the `main` and `ts-implementation` branches only; `develop` is Rust
+alone. The branch table is at the end of this file.
+
 ---
 
 ## D1 — `this` binding
@@ -145,7 +149,7 @@ it would be refusing our own output.
 | **Construct** | A filter or formula nesting groups more than 96 levels deep, e.g. `((((…status != null…))))` |
 | **Ours** | A hard error naming the construct and the limit. Nothing is written. |
 | **Obsidian** | Renders the Base. A stack overflow is not catchable in Rust, so the alternative to a limit is a process abort: the MCP client sees the transport drop with no tool result, and every tool stays dead until the server restarts. |
-| **Evidence** | Measured on `develop` at `f377887`: 2500 levels evaluated, 3000 evaluated, 4000 → `fatal runtime error: stack overflow, aborting`, exit 134. After the guard: 96 levels is a refusal naming `Expression` and the number; 4000 is the same refusal, exit 0. |
+| **Evidence** | Measured on `develop` at `f377887`: 2500 levels evaluated, 3000 evaluated, 4000 → `fatal runtime error: stack overflow, aborting`, exit 134. After the guard: 97 levels is a refusal naming `Expression` and the number, and exactly 96 still passes; 4000 is the same refusal, exit 0. |
 | **verify-in-obsidian** | no — the crash is ours, not Obsidian's |
 
 The parser, the evaluator and the three filter-tree walks spend from one shared
@@ -304,7 +308,9 @@ time, and it was refused".
 
 The remaining hardening — authentication, authorization, rate limiting and
 TLS — is unchanged by the trail, and is still owed before the transport is
-exposed beyond the network it is currently trusted on.
+exposed beyond the network it is currently trusted on. TLS in transit is the
+one item with an answer that needs no code: the listener serves plaintext and a
+reverse proxy terminates TLS in front of it — see `docs/reverse-proxy.md`.
 
 ### What is enforced anyway
 
@@ -465,10 +471,11 @@ against one type name, so a value answers for every type it inherits from:
 **A URL and a Link inherit the String method set**, and what they inherit
 operates on their own text: `link.length` is the length of the TARGET (9 for
 `[[Some Note]]`), not of the `[[…]]` spelling, and `link.contains("Some")`
-matches the target. A URL has **no** `asFile`, and a Date has **no** `asFile`
-either. Obsidian's Link class has no `target`, `display` or `path` member at
+matches the target. A URL has **no** `asFile` — asking for one is a hard error.
+A Date has one, and it answers **null**: there is no file behind a date.
+Obsidian's Link class has no `target`, `display` or `path` member at
 all — asking for one is a hard error there, and ours keeps them, which is
-recorded below rather than here.
+recorded as D14 rather than here.
 
 **Dates are LOCAL, and a date-only value is local midnight.** Measured on a
 host at UTC+01:00, `number("2026-01-05")` is `1767567600000`, which is
@@ -820,12 +827,9 @@ the list's own, and it matches a null entry. Ours answers with `any(item is
 null)` for the null needle, which is that same answer, so only the missing
 argument had to change there.
 
-(That a Link IS a String also means every String method is callable on a link
-in Obsidian. Ours registers only `linksTo`, `asFile` and the null-receiver
-fallback on `Link`, so `link("x").slice(1)` is a "not a method on Link" error
-here and answers in Obsidian. That is a separate divergence, not this one; it
-is recorded here only because it is the reason `link.contains` is governed by
-String's parameter table.)
+(That a Link IS a String is also the reason `link.contains` is governed by
+String's parameter table: ours inherits the String method set into `Link` too,
+so `link("x").slice(1)` answers here as well — see D11.)
 
 **The TypeScript tree is not repaired.** `ts-implementation` reads arguments
 the same way the old Rust code did (`args[0] ?? null` throughout
@@ -869,6 +873,31 @@ matters — within one query — and anything that needs a FIXED clock (a test, 
 a future recorder that serialises our own output for a clock-dependent view)
 pins `EvalContext::clock` instead of asking the pipeline to lie.
 `tests/expr.rs`'s `clock_at` helper is that pin.
+
+## D14 — A Link exposes `target`, `display` and `path`; Obsidian's Link class does not
+
+| | |
+|---|---|
+| **Construct** | Reading a member of a link value: `mylink.target`, `mylink.display`, `mylink.path` |
+| **Ours** | All three answer. `target` is the link's target text; `display` is the alias, or null when the link has none; `path` is the resolved note's vault path, or null when the link does not resolve. They are kept because they are what the JSON surface exposes and what the equality rule needs. |
+| **Obsidian** | They are not members of the Link class at all. Reading one is a hard error, not a null. |
+| **Evidence** | Read out of Obsidian's own Bases evaluator, which ships in `resources/obsidian.asar` (installer 1.12.4 — the app `docs/divergences.md` records as 1.13.7). Every value class derives from the base class `mW`, whose `keys()` returns `[]` and whose `objectAccess` returns `null`. The Link class (`t.type="Link"`) extends the String class `wW` — which adds exactly one member, `length` — and defines **no** `keys()` and **no** `objectAccess()` of its own. So a link's members are the String members, and `target`, `display` and `path` are among them. The `File` class, by contrast, does declare its members explicitly (`["file","name","basename","fullname","path","folder","ext","ctime","mtime","size","links","embeds","backlinks","tags","properties"]`), which is what the difference is about. |
+| **verify-in-obsidian** | no — the rule is in Obsidian's shipped evaluator, not in the CLI's rendering of it |
+
+**Why the members exist here.** `target` is the link's identity — the thing
+`link("x")` compares by, and the target Obsidian's own Link class keeps
+privately in `this.data` rather than exposing. `display` is the alias, which
+Obsidian's Link class also keeps, in `this.display`. `path` is the resolved
+note's path, which Obsidian reaches through `resolve()` and exposes only as the
+`asFile` method. Ours surfaces all three because the JSON surface needs them
+and an agent cannot otherwise tell an alias from a target.
+
+**What it costs.** A link that Obsidian would refuse to give a member from, ours
+answers. A formula written against Obsidian's behaviour — one that expects a
+hard error — sees a value here instead. That is the divergence, and it is
+recorded rather than repaired: the JSON surface is the contract this server
+publishes, and a member that vanishes would be a worse answer than one that
+was never in Obsidian.
 
 ## Bugs found in this implementation
 
@@ -1332,9 +1361,6 @@ constructs, and a guard that pins only one of them lets the other drift.
 | `develop` | The Rust implementation. The shipping one. |
 | `main` | Frozen at `0fbef40`. The TypeScript implementation, kept as the cross-implementation oracle. |
 | `ts-implementation` | `main` plus the four data-loss fixes ported to TypeScript. |
-
-`test/unit/*.ts` and `test/parity/*.test.ts` are cited by entries in this file and
-live on those two branches only; `develop` is Rust alone.
 
 ## TypeScript and Rust: verified equivalent
 

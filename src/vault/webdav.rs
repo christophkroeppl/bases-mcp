@@ -67,10 +67,6 @@ pub const DAV_PROPFIND_BODY: &str = concat!(
     r#"</d:prop></d:propfind>"#,
 );
 
-// ---------------------------------------------------------------------------
-// The vocabulary
-// ---------------------------------------------------------------------------
-
 /// The `VaultSource` method a request was issued for.
 ///
 /// `hash` is absent because it issues no request of its own: it hashes the text
@@ -268,9 +264,16 @@ pub struct HttpTransport {
 impl HttpTransport {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            client: reqwest::Client::builder().build().map_err(|e| {
-                BasesError::new(format!("WebDAV: could not build an HTTP client: {e}"))
-            })?,
+            // No redirects: a 3xx must reach `dav_refusal`, not be followed.
+            // reqwest's default follows up to 10, which would move a read — or
+            // a PUT's body — to a target the configured URL never named, and
+            // the read-back hash would verify the redirected bytes.
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|e| {
+                    BasesError::new(format!("WebDAV: could not build an HTTP client: {e}"))
+                })?,
         })
     }
 }
@@ -308,10 +311,6 @@ impl WebdavTransport for HttpTransport {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Refusals
-// ---------------------------------------------------------------------------
 
 /// Statuses an operation treats as success anyway.
 ///
@@ -412,10 +411,6 @@ pub fn dav_refusal(
         .with_construct("webdav"),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Multistatus
-// ---------------------------------------------------------------------------
 
 /// One resource as a `207 Multi-Status` body describes it.
 ///
@@ -518,8 +513,6 @@ fn is_success(status: Option<&str>) -> bool {
         let Some(code) = chars.get(index + 1..index + 4).and_then(code_of) else {
             continue;
         };
-        // `is_none_or(..)` needs 1.82; the crate's floor is 1.85 now that it
-        // is on edition 2024.
         if chars.get(index + 4).is_none_or(|c| c.is_whitespace()) {
             return (200..300).contains(&code);
         }
@@ -552,10 +545,6 @@ fn trimmed(value: Option<&String>) -> Option<String> {
         Some(text.to_string())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
 
 /// A vault-relative POSIX path as it appears in an error message.
 ///
@@ -643,7 +632,6 @@ fn resource_url(base_url: &str, path: &str, collection: bool) -> String {
     }
 }
 
-/// The pathname of an href that may or may not be a full URL.
 fn href_pathname(href: &str) -> String {
     match reqwest::Url::parse(href) {
         Ok(url) => url.path().to_string(),
@@ -780,10 +768,6 @@ fn cyclic(path: &str) -> BasesError {
     ))
     .with_construct("webdav")
 }
-
-// ---------------------------------------------------------------------------
-// The multistatus reader
-// ---------------------------------------------------------------------------
 
 /// One `propstat` block: the status it reported under and the properties it
 /// carried. Both are optional because a server may send either half alone.
@@ -974,10 +958,10 @@ impl DavReader {
             }
             return;
         }
-        if self.stack.last().is_some_and(|name| name == "status") {
-            if let Some(buffer) = self.status_text.as_mut() {
-                buffer.push_str(text);
-            }
+        if self.stack.last().is_some_and(|name| name == "status")
+            && let Some(buffer) = self.status_text.as_mut()
+        {
+            buffer.push_str(text);
         }
     }
 
@@ -991,18 +975,20 @@ impl DavReader {
             };
             self.record(&open.name, value);
         }
-        if name == "status" && self.propstat.is_some() {
-            if let Some(block) = self.propstat.as_mut() {
-                block.status = self.status_text.take();
-            }
+        if name == "status"
+            && self.propstat.is_some()
+            && let Some(block) = self.propstat.as_mut()
+        {
+            block.status = self.status_text.take();
         }
         if name == "href" {
             self.response.href = self.href_text.take();
         }
-        if name == "propstat" && self.propstat.is_some() {
-            if let Some(block) = self.propstat.take() {
-                self.response.propstats.push(block);
-            }
+        if name == "propstat"
+            && self.propstat.is_some()
+            && let Some(block) = self.propstat.take()
+        {
+            self.response.propstats.push(block);
         }
         if name == "response" {
             self.walk.responses.push(std::mem::take(&mut self.response));
@@ -1041,10 +1027,6 @@ fn local_name(qualified: &[u8]) -> String {
         None => text.into_owned(),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Dates
-// ---------------------------------------------------------------------------
 
 /// The instant a `getlastmodified` names.
 ///
@@ -1244,10 +1226,6 @@ fn stat_of(resource: Option<&DavResource>, path: &str) -> Result<FileStat> {
     )?;
     Ok(FileStat { size, mtime })
 }
-
-// ---------------------------------------------------------------------------
-// The source
-// ---------------------------------------------------------------------------
 
 /// What a request needs beyond its method and path.
 #[derive(Debug, Default, Clone)]

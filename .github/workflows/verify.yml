@@ -27,6 +27,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@v1
         with:
+          # Pinned to the crate's declared floor (`rust-version` in Cargo.toml)
+          # so CI, the image and a developer machine agree.
+          toolchain: 1.99.1
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -68,6 +71,17 @@ jobs:
         run: cargo test --all-targets
         env:
           OBSIDIAN_BIN: /nonexistent/obsidian
+
+  audit:
+    name: dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A known-vulnerable dependency is a build failure, not a note. The
+      # action reads Cargo.lock and reports against the RustSec advisory DB.
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   commitlint:
     name: commit messages

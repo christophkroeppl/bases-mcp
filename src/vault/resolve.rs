@@ -58,6 +58,8 @@ pub struct PathIndex {
     keys: Vec<String>,
     paths: Vec<String>,
     slots: HashMap<String, usize>,
+    /// `fold_key(strip_extension(key))` -> slots, in registration order.
+    folded: HashMap<String, Vec<usize>>,
 }
 
 impl PathIndex {
@@ -70,9 +72,14 @@ impl PathIndex {
         if key.is_empty() || self.slots.contains_key(key) {
             return;
         }
-        self.slots.insert(key.to_string(), self.keys.len());
+        let slot = self.keys.len();
+        self.slots.insert(key.to_string(), slot);
         self.keys.push(key.to_string());
         self.paths.push(path.to_string());
+        self.folded
+            .entry(fold_key(&strip_extension(key)))
+            .or_default()
+            .push(slot);
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
@@ -93,6 +100,15 @@ impl PathIndex {
             .iter()
             .zip(self.paths.iter())
             .map(|(k, p)| (k.as_str(), p.as_str()))
+    }
+
+    /// The slots whose folded key equals `folded`, in registration order.
+    pub fn folded_candidates(&self, folded: &str) -> &[usize] {
+        self.folded.get(folded).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub fn path_at(&self, slot: usize) -> &str {
+        self.paths[slot].as_str()
     }
 }
 
@@ -115,12 +131,10 @@ pub fn match_path(target: &str, by_path: &PathIndex) -> Option<String> {
     // Fall back to a folded comparison so case and diacritics do not matter.
     let wanted = fold_key(&without_ext);
     let mut best: Option<&str> = None;
-    for (key, path) in by_path.iter() {
-        if fold_key(&strip_extension(key)) != wanted {
-            continue;
-        }
-        // `is_none_or(..)` needs 1.82; the crate's floor is 1.85 now that it
-        // is on edition 2024.
+    // A lookup, not a fold over every key: a miss used to cost O(vault), which
+    // made `file.backlinks` O(vault^2).
+    for &slot in by_path.folded_candidates(&wanted) {
+        let path = by_path.path_at(slot);
         if best.is_none_or(|current| link_length(path) < link_length(current)) {
             best = Some(path);
         }

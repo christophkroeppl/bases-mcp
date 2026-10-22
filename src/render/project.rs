@@ -145,7 +145,6 @@ pub fn parse_fence_info(info: &str) -> Option<FenceProvenance> {
     Some(out)
 }
 
-/// Wrap rendered markdown in a provenance fence.
 pub fn wrap_in_fence(body: &str, provenance: &FenceProvenance) -> RenderedRegion {
     let text = [
         format!("```{}", fence_info(provenance)),
@@ -410,13 +409,7 @@ pub fn reconcile_note(note_path: &str, original: &str, edited: &str) -> Reconcil
             });
             continue;
         };
-        // A rendered fence is replaced SILENTLY. Round-tripping a Projection --
-        // read the note, edit the prose, write it back -- is the DESIGNED flow,
-        // so reporting a refusal every time would mark the happy path
-        // `partial-with-errors` and teach an agent to ignore refusals, which
-        // costs more than it buys. We cannot tell an untouched fence from an
-        // edited one here anyway: the rendered rows were never the source of
-        // truth, and the live region is restored byte for byte either way.
+        // A rendered fence is replaced SILENTLY. See `docs/divergences.md` D6.
         if !segment.is_rendered() && *original_raw != segment.raw() {
             refused.push(RefusedRegion {
                 index: region.index,

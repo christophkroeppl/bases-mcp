@@ -36,10 +36,6 @@ use crate::value::BasesValue;
 /// Note properties: the frontmatter of a note, as the evaluator reads them.
 pub type Properties = BTreeMap<String, BasesValue>;
 
-// ---------------------------------------------------------------------------
-// Segments
-// ---------------------------------------------------------------------------
-
 /// Which of the four segment shapes this is.
 ///
 /// The spellings are the TypeScript's, because they are what a note's own text
@@ -138,8 +134,7 @@ impl BaseFence {
         }
     }
 
-    /// The Base a rendered fence came from, from its `path=` attribute. `None`
-    /// for a live fence, which carries its YAML instead of a path.
+    /// `None` for a live fence, which carries its YAML instead of a path.
     pub fn base_path(&self) -> Option<&str> {
         match self {
             BaseFence::Live { .. } => None,
@@ -329,10 +324,6 @@ pub fn serialise(segments: &[Segment]) -> String {
     segments.iter().map(Segment::raw).collect()
 }
 
-// ---------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------
-
 /// Parse a note into ordered segments plus the derived facts Bases needs.
 pub fn parse_note(path: impl Into<String>, text: &str) -> ParsedNote {
     let mut segments: Vec<Segment> = Vec::new();
@@ -477,23 +468,8 @@ pub fn split_base_embeds(segments: &[Segment]) -> Vec<Segment> {
 
 /// Where a `base_embed_re` match ending at `matched_end` really ends.
 ///
-/// The match is one byte longer than the Base region on a CRLF line, and that byte
-/// is load-bearing. Rust's `(?m)` `$` does not match before a `\r`, so the pattern
-/// has to CONSUME the `\r` to reach `$`; JavaScript's multiline `$` matches there,
-/// so the TypeScript tree's span stopped short and the `\r` belonged to the prose
-/// after it. The `regex` crate has no look-around to say "but not that `\r`", so
-/// the span is trimmed here instead — which is what keeps the two implementations
-/// byte-identical rather than merely equivalent.
-///
-/// **Why this survives normalisation.** Every note this crate reads has been
-/// through [`crate::vault::normalise_line_endings`], so a `\r` never sits before
-/// a `\n` in practice and the `\r?` in the pattern cannot match. It is kept
-/// because `write_note` also parses the text the AGENT sent, which never passed
-/// through the backend: an agent whose editor rewrote a Base region's line to CRLF
-/// would otherwise have the region fail to match here, the reconciler would read
-/// it as deleted, and the restore — which anchors on the surviving regions and
-/// finds none — would append the region to the end of the Host note. A parser that
-/// cannot see a region cannot protect it.
+/// A match is one byte longer than the Base region on a CRLF line, and that
+/// byte is load-bearing. See `docs/divergences.md` D8.
 ///
 /// A match always contains the embed itself, so trimming one byte can never
 /// produce an empty or inverted span.
@@ -535,10 +511,6 @@ fn merge_adjacent_prose(segments: Vec<Segment>) -> Vec<Segment> {
     }
     merged
 }
-
-// ---------------------------------------------------------------------------
-// Frontmatter
-// ---------------------------------------------------------------------------
 
 /// A matched frontmatter block: its whole source text, and its YAML body.
 struct FrontmatterBlock<'a> {
@@ -682,10 +654,6 @@ fn yaml_key(key: &Yaml) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Fence handling
-// ---------------------------------------------------------------------------
-
 /// The fence language of a rendered Base region.
 ///
 /// Duplicated rather than imported from the renderer: the renderer depends on
@@ -828,10 +796,6 @@ fn fence_language(info: &str) -> String {
         .unwrap_or_default()
         .to_lowercase()
 }
-
-// ---------------------------------------------------------------------------
-// Links, tags, tasks
-// ---------------------------------------------------------------------------
 
 /// Every wikilink and markdown link, with offsets relative to `text`.
 pub fn extract_links(text: &str) -> Vec<WikiLink> {
@@ -1006,21 +970,11 @@ fn blank_out(bytes: &[u8]) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Lines
-// ---------------------------------------------------------------------------
-
 /// The span of one line: where it starts, where its content ends, and where the
 /// next line begins.
 ///
 /// `content_end` excludes a single trailing `\r`, which is what the TypeScript's
-/// `split(/\r?\n/)` did and which makes the field mean what its name says. Worth
-/// recording that no consumer currently READS the difference — the fence info
-/// string is `.trim()`ed, a closing fence is matched with `is_ascii_whitespace`,
-/// a task's text is `.trim()`ed, and the two remaining uses count backticks at the
-/// START of a line — so this costs a branch and buys the honest model rather than
-/// an observed behaviour. It was audited rather than assumed, and deleting it is a
-/// safe follow-up for anyone who wants the field gone.
+/// `split(/\r?\n/)` did and which makes the field mean what its name says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Line {
     start: usize,
@@ -1092,10 +1046,6 @@ fn line_after(bytes: &[u8], pos: usize) -> usize {
         .map_or(bytes.len(), |line| line.start)
 }
 
-// ---------------------------------------------------------------------------
-// Patterns
-// ---------------------------------------------------------------------------
-
 /// Compile a pattern on first use. Every note in a vault walk hits these, and a
 /// pattern is a constant, so it is built once and never rebuilt.
 macro_rules! pattern {
@@ -1128,17 +1078,8 @@ pattern!(external_scheme_re, r"(?i)^[a-z]+://");
 fn base_embed_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // The trailing `\r?` matches nothing on any note this crate READ — the
-        // backend normalises CRLF to LF — and is kept for the text the agent
-        // SENT, which never passed through it. Without it, an agent that rewrote a
-        // Base region's line to CRLF would have its region invisible here, and an
-        // invisible region is one the reconciler restores at the wrong place.
-        // JavaScript's multiline `$` matches before `\r`, so the TypeScript tree
-        // never needed this and the port did.
-        //
-        // Consuming the `\r` also makes the match one byte longer than the span
-        // JavaScript produced, so `split_base_embeds` trims it back; see
-        // `region_end` for why the region must not own that byte.
+        // The trailing `\r?` matches nothing on any note this crate READ, and
+        // is kept for the text the agent SENT. See `docs/divergences.md` D8.
         Regex::new(r"(?m)^([ \t]*)!\[\[([^\]|#]+?\.base)(#[^\]|]*)?(\|[^\]]*)?\]\][ \t]*\r?$")
             .expect("the base embed pattern compiles")
     })

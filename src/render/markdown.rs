@@ -90,7 +90,6 @@ fn view_order(view: &BaseView) -> Vec<String> {
     }
 }
 
-/// Render a resolved query as markdown.
 pub fn render_markdown(
     base: &BaseFile,
     result: &QueryResult,
@@ -136,10 +135,6 @@ fn cell_value<'a>(row: &'a ResolvedRow, id: &str) -> Option<&'a BasesValue> {
 fn to_cell_text(value: Option<&BasesValue>) -> String {
     value.map_or_else(String::new, BasesValue::to_display_string)
 }
-
-// ---------------------------------------------------------------------------
-// Tables
-// ---------------------------------------------------------------------------
 
 /// Render a table of `columns` over `rows`.
 ///
@@ -314,10 +309,6 @@ fn is_east_asian_wide(code: u32) -> bool {
         | 0x20000..=0x3fffd)
 }
 
-// ---------------------------------------------------------------------------
-// Grouped and list rendering
-// ---------------------------------------------------------------------------
-
 /// A table view, keeping its group headers and its summaries footer.
 fn render_as_table(base: &BaseFile, result: &QueryResult) -> Result<String> {
     let columns = render_columns(base, &result.view);
@@ -408,10 +399,6 @@ fn render_as_list(base: &BaseFile, result: &QueryResult) -> String {
 fn one_trailing_newline(text: &str) -> String {
     format!("{}\n", text.trim_end_matches('\n'))
 }
-
-// ---------------------------------------------------------------------------
-// Summaries
-// ---------------------------------------------------------------------------
 
 /// The summarised value for each column, or `""` for a column the view does not
 /// summarise.

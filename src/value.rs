@@ -364,7 +364,7 @@ impl FileValue {
     }
 }
 
-/// The containing folder of a path. The root is `"/"`.
+/// The root is `"/"`.
 pub fn folder_of(path: &str) -> String {
     match path.rfind('/') {
         Some(i) => path[..i].to_string(),
@@ -401,7 +401,6 @@ impl BasesValue {
         }
     }
 
-    /// The tag text, if this value is a tag.
     pub fn as_tag(&self) -> Option<&str> {
         match self {
             BasesValue::Tag(text) => Some(text),
@@ -476,7 +475,6 @@ impl BasesValue {
         BasesValue::Namespace(std::sync::Arc::new(std::collections::BTreeMap::new()))
     }
 
-    /// A link's resolved target, for link equality.
     pub fn link_target(&self) -> Option<&str> {
         match self {
             BasesValue::Link {
@@ -678,7 +676,6 @@ pub fn values_equal(a: &BasesValue, b: &BasesValue) -> bool {
                 None => false,
             }
         }
-        // Two dates, and a date against a datetime. See `dates_equal`.
         (BasesValue::Date(x), BasesValue::Date(y)) => dates_equal(x, y),
         _ => compare(a, b) == Some(std::cmp::Ordering::Equal),
     }
