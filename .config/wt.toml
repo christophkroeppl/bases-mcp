@@ -1,0 +1,8 @@
+# The FULL test tier, before a merge.
+#
+# This is the only local run that builds the image and drives the container
+# cells, and the only one allowed to say no: `pre-merge` blocks the merge.
+# The fast tier runs on every commit (see .githooks/pre-commit), because a
+# commit is a checkpoint and a merge is the point of no return.
+[[pre-merge]]
+test = "just test-full"

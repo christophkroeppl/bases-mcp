@@ -468,10 +468,59 @@ podman run --rm -i --userns=keep-id \
 `-i` keeps stdin open; without it the container's stdin is closed and the
 protocol stream ends immediately.
 
+## Test tiers
+
+Three tiers, and one definition each: the git hook, the merge hook and CI all
+call the `just` recipe rather than assembling their own command line, because a
+second command line is a second definition that drifts.
+
+| Tier | What runs | Triggered by |
+|---|---|---|
+| `just test-fast` | `fmt`, `clippy`, the ordinary suites, `check-versions`. No image, no CLI. | every commit (`.githooks/pre-commit`), CI on `develop` and on pull requests |
+| `just test-full` | the above, plus the CLI parity suite **when Obsidian answers**, plus the container cells | `wt merge` (`.config/wt.toml`), CI on `main` |
+| `BASES_MCP_ALLOW_SKIP=1 just test-full` | the same, with parity skipped **loudly** | CI on `main`, which has no Obsidian CLI |
+
+`just container` builds the image from this tree and drives the six container
+cells. It **fails** when the image does not build or no OCI runtime can start a
+container: containers are a shipped feature, and a full run that quietly skipped
+them would be a green suite that tested nothing. The build is also the runtime
+probe, because `podman info` answers perfectly well with a `crun` that is too old
+to start one — so a host in that state gets a retry with `/usr/bin/runc` and a
+line saying which runtime it used, rather than a skip.
+
+The parity probe is a real query (`obsidian base:query ... format=json`), not
+`obsidian version` and not the exit code: the CLI answers a version with a dead
+bridge and exits 0 either way.
+
+### Why `regenerate` is in no tier
+
+`tests/oracle_manifest.rs` holds two different things.
+
+**The guard** — `the_testing_vault_matches_its_manifest`. Runs in every tier. It
+reads `test/vault`, hashes every file, and compares against
+`test/vault.manifest`, so a `.base` file that Obsidian rewrote is a mismatch and
+a red gate.
+
+**The tool** — `regenerate`. `#[ignore]`d, and in no tier. It rewrites the
+manifest from whatever the vault currently holds.
+
+If the tool ran before the guard, it would fit the manifest to the drift and the
+guard would then report success: the oracle could change under the parity suite
+and nothing would say so. So the tool is manual, and its diff is the review
+artifact:
+
+```sh
+cargo test --test oracle_manifest -- --ignored regenerate
+git diff test/vault.manifest      # what changed about the oracle, and why
+```
+
+`--include-ignored` would run it, which is why `just container` scopes
+`--ignored` to `--test container_matrix` instead.
+
 ## Obsidian CLI gates
 
-`just check` does not need Obsidian. `just parity`, `just check-all` and
-`just record` do. `just corpus-check` and `just parity-recorded` do not: they
+`just check` does not need Obsidian. `just parity`, `just parity-if-up`,
+`just test-full`, `just check-all` and `just record` do. `just corpus-check` and `just parity-recorded` do not: they
 read the recorded corpus, not the CLI.
 
 Parity is a **Cargo feature**, not a `--skip` filter:
@@ -495,8 +544,8 @@ that is a deliberate choice: the alternative is a parity suite that passes
 because it tested nothing, which is the failure this project has already made
 once. Because that panic is the guard, `just check` runs the suite with
 `OBSIDIAN_BIN` pointed at a path that cannot exist — so the gate that excludes
-parity is *proved* on every run rather than assumed, and CI runs the same
-assertion as a step of its own.
+parity is *proved* on every run rather than assumed, on a developer machine and
+in CI alike.
 
 `just dev-setup` prints whether the CLI is on `PATH`, its version, the registered
 vaults, and — if the testing vault is missing — the exact path to add. The CLI

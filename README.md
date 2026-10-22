@@ -167,12 +167,25 @@ is trusted on.** Authentication, authorization, rate limiting and TLS are owed.
 ## Development
 
 ```
-just check           fmt, clippy, tests without Obsidian. What CI runs.
+just test-fast       fmt, clippy, ordinary suites. Every commit and CI-on-push.
+just test-full       the image built AND driven, plus parity when Obsidian is up.
+                     `wt merge` and CI-on-main. Fails if containers cannot run.
+just check           the fast tier's steps, without the tier wrapper.
 just check-all       everything, requiring the live Obsidian CLI.
 just parity          the Obsidian CLI gate on its own.
 just dev-setup       what a new machine needs, once.
 just --list          everything else.
 ```
+
+The tiers are the same `just` recipes everywhere — the git hook, the merge hook
+and CI all call them, so there is one definition rather than three command
+lines. `just test-full` **fails** when the image will not build or no OCI
+runtime can start a container: containers are a shipped feature, so a "full"
+run that skipped them would be a green suite that tested nothing.
+
+`wt merge` runs it through `.config/wt.toml`. Worktrunk requires the project's
+hooks to be approved once per machine — `wt config approvals add` — because a
+checked-in hook file is arbitrary shell code.
 
 Parity is a Cargo feature, not a `--skip` filter: `tests/parity.rs` is declared
 with `required-features = ["parity"]`, so plain `cargo test` cannot build the

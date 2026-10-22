@@ -2,7 +2,7 @@ name: verify
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, main]
   pull_request:
 
 concurrency:
@@ -39,38 +39,31 @@ jobs:
       - name: Install just
         run: uv tool install just
 
-      - name: Versions agree
-        run: ./scripts/check-versions.sh
+      - name: Install podman (full tier only)
+        if: github.ref == 'refs/heads/main'
+        run: sudo apt-get update && sudo apt-get install -y podman
 
-      - name: Format
-        run: cargo fmt --check
+      # The tier is the SAME definition a developer runs (`just test-fast`,
+      # `just test-full`), not a copy of its steps: a CI that assembles its own
+      # command line is a second definition that drifts.
+      #
+      # Fast tier = fmt, clippy, and the ordinary suites, with
+      # `OBSIDIAN_BIN=/nonexistent/obsidian` so a run that reaches for the CLI
+      # fails here rather than silently comparing nothing. Parity is NOT
+      # compiled: `required-features = ["parity"]` gates the target itself.
+      - name: "Tests (fast tier: no image, no CLI)"
+        if: github.ref != 'refs/heads/main'
+        run: just test-fast
 
-      - name: Lint
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Tests
-        # Parity is excluded because it needs a live Obsidian CLI against a
-        # registered vault, which does not exist in CI. The exclusion is a Cargo
-        # feature gate on the TARGET (`required-features` in Cargo.toml), not a
-        # `--skip` filter: a filter matches TEST NAMES, and only one of the eight
-        # tests in tests/parity.rs has "parity" in its name. The other seven ran,
-        # three of them panicked at the no-CLI guard, and CI was red on every push
-        # since f377887 while its own comment claimed parity was excluded. The
-        # same filter was also silently dropping two ordinary tests —
-        # `render_is_the_flat_cli_parity_surface` in tests/service.rs and
-        # `resolve_base_says_which_of_its_two_surfaces_is_the_parity_one` in
-        # tests/tools.rs — from suites that have nothing to do with the CLI.
-        run: cargo test --all-targets
-
-      - name: No test reaches for the Obsidian CLI
-        # The proof, and the regression guard: `tests/parity.rs` PANICS rather than
-        # skips when the CLI cannot answer, precisely so a run that compared
-        # nothing cannot report green. If the gate above ever stops excluding that
-        # target, this step is the one that says so — loudly, and in the job that
-        # runs on every push.
-        run: cargo test --all-targets
-        env:
-          OBSIDIAN_BIN: /nonexistent/obsidian
+      # Main is the merge target, so it gets the tier a merge gets: the image is
+      # built and the container cells are driven. `BASES_MCP_ALLOW_SKIP=1` is how
+      # this job says "there is no Obsidian CLI here" -- the parity suite prints
+      # that it compared nothing, so the exclusion is visible rather than
+      # inferred. Everything else in the tier, containers included, still fails
+      # the job.
+      - name: "Tests (full tier: image in, CLI excluded)"
+        if: github.ref == 'refs/heads/main'
+        run: BASES_MCP_ALLOW_SKIP=1 just test-full
 
   audit:
     name: dependency advisories
