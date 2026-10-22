@@ -1,0 +1,69 @@
+[package]
+name = "bases-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "MCP server that resolves Obsidian Bases to human- & agent-readable markdown"
+license = "Apache-2.0"
+default-run = "bases-mcp"
+
+[[bin]]
+name = "bases-mcp"
+path = "src/main.rs"
+
+[lib]
+name = "bases_mcp"
+path = "src/lib.rs"
+
+[features]
+parity = []
+
+[[test]]
+name = "parity"
+required-features = ["parity"]
+
+[dependencies]
+rmcp = { version = "3", features = ["server", "transport-io", "schemars", "transport-streamable-http-server"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs", "net", "signal"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+# The HTTP request parts, so the audit trail can read the session id out of
+# the request rmcp hands the handler. The version is pinned to the one axum
+# and rmcp already resolve to, so the `http::request::Parts` in an
+# extension is the SAME type and not a second one.
+http = "1.5"
+tower = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"
+percent-encoding = "2"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+sha2 = "0.10"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "charset",
+  "http2",
+] }
+regex = "1.13.1"
+url = "2.5"
+unicode-normalization = "0.1.25"
+base64 = "0.23.1"
+quick-xml = { version = "0.41", default-features = false, features = ["encoding"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+futures = "0.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.test]
+opt-level = 0

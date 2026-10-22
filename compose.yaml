@@ -1,0 +1,84 @@
+# Guarden deployment compose — the unit source for `.guarden/service.yml`.
+#
+# This is NOT a standalone compose file: it has no `build:`, no `ports:` and no
+# vault variable, so `docker compose up` against it will not work. For a
+# standalone run see README.md ("Container"), which has the `podman run` form.
+#
+# The local transport is stdio (an agent spawns the binary); this file is the
+# deployment-scoped one. Every difference below is forced by guarden:
+#
+#   * no `build:` — a deployed compose carries a pinned image reference. The
+#     host builds it from `Containerfile`, and `weedr service build` tags it
+#     with the reference declared here, so the two cannot disagree.
+#   * no `ports:` — guarden allocates the loopback publication from the
+#     manifest's `routes:`, and a port's host-IP cannot be templated.
+#   * no `networks:` — guarden gives each container its own pasta namespace.
+#   * no `profiles:` — REFUSED by the renderer.
+#   * no space-bearing healthchecks — REFUSED by podlet.
+#   * no host-path binds — REFUSED outside the service's own volumes.
+#
+# The transport is selected by the command rather than an environment variable,
+# so a stale environment cannot start this container on the wrong transport.
+
+services:
+  bases-mcp:
+    image: localhost/bases-mcp:latest
+    command: ["--transport", "http"]
+    # `MCP_HTTP_HOST` must be `0.0.0.0` inside a container. The default is
+    # `127.0.0.1`, which binds the loopback OF THE CONTAINER: the listener
+    # would be reachable from inside and from nowhere else, and the route in
+    # `.guarden/service.yml` would have nothing to dial.
+    #
+    # This is the same widening the divergence registry records for a
+    # non-containerized `0.0.0.0` bind, and it is the operator's explicit
+    # choice: guarden publishes a loopback port at the edge, so the listener
+    # is not on the network even though it is on every interface of the
+    # container.
+    #
+    # THE BOUNDARY IS THE PUBLICATION, NOT THIS BIND. The listener has no
+    # authentication, no authorization and no rate limiting: anyone who can
+    # open the socket can call every tool, including the two that write. What
+    # keeps this deployment off the network is guarden publishing the port to
+    # loopback -- the `routes:` block in `.guarden/service.yml`. Change that
+    # publication to a routable address and this service becomes an
+    # unauthenticated read/write server on the network, and nothing in this
+    # repository notices or stops it.
+    #
+    # The container's non-root user (uid 1000) is a CONTAINMENT control: it
+    # bounds what an escaped container can reach. It is not an access
+    # control, and it does not authenticate a caller.
+    environment:
+      MCP_HTTP_HOST: "0.0.0.0"
+      # The audit trail goes to a FILE, not to stderr. stderr in a container
+      # is the runtime's log, and nothing rotates it: the trail would grow
+      # until the container's disk filled. The binary rolls the file over at
+      # `MCP_AUDIT_LOG_MAX_MB` and keeps ONE previous generation, so the
+      # disk cost is twice the threshold and never more.
+      #
+      # The threshold's DEFAULT lives in the binary (5 MB) and is declared
+      # here so the deployment's value is visible in the compose file rather
+      # than buried in a setting nobody reads. It is a megabyte count, not a
+      # byte count.
+      MCP_AUDIT_LOG: "/var/log/bases-mcp/audit.log"
+      MCP_AUDIT_LOG_MAX_MB: "5"
+    volumes:
+      # The trail's own volume. It is NOT `state:`, because a snapshot of the
+      # audit trail is not something an operator rolls back to — the trail's
+      # value is in its history, and a rollback would erase the record of
+      # what happened before the rollback. A `bulk:` volume is not snapshotted
+      # and survives a re-ingest.
+      #
+      # It is declared `bulk: [audit]` in `.guarden/service.yml`, which the
+      # renderer requires in both directions: a mounted named volume the
+      # manifest does not name is refused, and so is a declared volume this
+      # file does not mount.
+      #
+      # The mount source is the volume ITSELF. That is what guarden renders
+      # for a bulk volume: it creates a bare subvolume with no snapper
+      # configuration and no payload directory (spec 8.1), so there is no
+      # `.snapshots` subtree and no `data/` level to mount past. A `state:`
+      # volume would be mounted at `<vol>/data` instead.
+      - audit:/var/log/bases-mcp
+
+volumes:
+  audit:

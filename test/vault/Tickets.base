@@ -1,0 +1,41 @@
+filters:
+  and:
+    - file.hasTag("ticket")
+    - project.contains(link(this.file.name))
+formulas:
+  priority_display: if(priority == "high", "1 – high", if(priority == "normal", "2 – normal", if(priority == "low", "3 – low", "no priority")))
+  task_count: file.tasks.length
+properties:
+  formula.priority_display:
+    displayName: Priority
+views:
+  - type: cards
+    name: All
+    groupBy:
+      property: formula.priority_display
+      direction: ASC
+    order:
+      - file.name
+      - status
+      - formula.priority_display
+      - type
+    cardOrders:
+      file.file: {}
+      formula.priority_display: {}
+      "formula.priority_display\x1fnote.type": {}
+    columnColors:
+      file.file: {}
+      formula.priority_display: {}
+    groupByProperty: formula.priority_display
+    columnOrders:
+      formula.priority_display:
+        - 1 – high
+        - 2 – normal
+    swimlaneByProperty: note.type
+    swimlaneOrders:
+      "formula.priority_display\x1fnote.type":
+        - task
+        - Uncategorized
+    collapsedLanes:
+      "formula.priority_display\x1fnote.type": []
+    cardTitleProperty: file.name

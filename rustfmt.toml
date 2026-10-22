@@ -1,0 +1,6 @@
+# rustfmt formats with the crate's language edition: `cargo fmt` passes
+# `--edition` from `Cargo.toml`, so this line follows it rather than leading it.
+# Edition 2024's style sorts imports version-wise, which is why the edition bump
+# reordered `use` blocks across the tree.
+edition = "2024"
+max_width = 100

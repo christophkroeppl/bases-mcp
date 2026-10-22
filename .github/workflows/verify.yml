@@ -1,0 +1,104 @@
+name: verify
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # One build directory shared by every step, so nothing is compiled twice.
+  CARGO_TARGET_DIR: target
+
+jobs:
+  verify:
+    name: fmt, clippy, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # commitlint's --from/--to need full history, and so does a reviewer
+          # reading the diff.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          # Pinned to the crate's declared floor (`rust-version` in Cargo.toml)
+          # so CI, the image and a developer machine agree.
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The task runner. NOT `uv tool install just`: there is a Python package
+      # of that name, it is a different project, and it crashes on import
+      # (`No module named 'dateutil'`) -- which is a 20-second job failure that
+      # looks like a test failure.
+      - uses: extractions/setup-just@v3
+
+      - name: Install podman (full tier only)
+        if: github.ref == 'refs/heads/main'
+        run: sudo apt-get update && sudo apt-get install -y podman
+
+      # The tier is the SAME definition a developer runs (`just test-fast`,
+      # `just test-full`), not a copy of its steps: a CI that assembles its own
+      # command line is a second definition that drifts.
+      #
+      # Fast tier = fmt, clippy, and the ordinary suites, with
+      # `OBSIDIAN_BIN=/nonexistent/obsidian` so a run that reaches for the CLI
+      # fails here rather than silently comparing nothing. Parity is NOT
+      # compiled: `required-features = ["parity"]` gates the target itself.
+      - name: "Tests (fast tier: no image, no CLI)"
+        if: github.ref != 'refs/heads/main'
+        run: just test-fast
+
+      # Main is the merge target, so it gets the tier a merge gets: the image is
+      # built and the container cells are driven. `BASES_MCP_ALLOW_SKIP=1` is how
+      # this job says "there is no Obsidian CLI here" -- the parity suite prints
+      # that it compared nothing, so the exclusion is visible rather than
+      # inferred. Everything else in the tier, containers included, still fails
+      # the job.
+      - name: "Tests (full tier: image in, CLI excluded)"
+        if: github.ref == 'refs/heads/main'
+        run: BASES_MCP_ALLOW_SKIP=1 just test-full
+
+  audit:
+    name: dependency advisories
+    runs-on: ubuntu-latest
+    # `rustsec/audit-check` publishes its verdict as a CHECK RUN, which the
+    # default read-only token cannot create: the job found zero vulnerabilities
+    # and then failed with "Resource not accessible by integration".
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+      # A known-vulnerable dependency is a build failure, not a note. The
+      # action reads Cargo.lock and reports against the RustSec advisory DB.
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  commitlint:
+    name: commit messages
+    runs-on: ubuntu-latest
+    # The range comes from `github.event.pull_request.*`, which is EMPTY on a
+    # push: `--from "" --to ""` is "both ends are the same commit" and exit 9.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-save @commitlint/cli @commitlint/config-conventional
+      - name: Lint the commits in this pull request
+        run: |
+          npx commitlint --from "${{ github.event.pull_request.base.sha }}" \
+                         --to   "${{ github.event.pull_request.head.sha }}" \
+                         --verbose

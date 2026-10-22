@@ -1,0 +1,49 @@
+# The parity base.
+#
+# This exists so the Obsidian CLI has something to compare against. `Tickets.base`
+# scopes itself with `this`, and the CLI cannot bind `this` at all -- it returns
+# an empty result -- so it exercises the documented divergence rather than parity.
+#
+# This base has no `this`, so `obsidian base:query path="AllNotes.base" format=json`
+# is a genuine oracle for our row set, ordering and cell values.
+filters:
+  and:
+    - file.hasTag("ticket")
+formulas:
+  priority_display: if(priority == "high", "1 – high", if(priority == "normal", "2 – normal", if(priority == "low", "3 – low", "no priority")))
+properties:
+  note.status:
+    displayName: Status
+  formula.priority_display:
+    displayName: Priority
+views:
+  - type: table
+    name: All
+    order:
+      - file.name
+      - status
+      - formula.priority_display
+    sort:
+      - property: file.name
+        direction: ASC
+    # Summaries exist here to prove the two surfaces diverge on purpose:
+    # `obsidian base:query format=md` drops them, our Projection keeps them.
+    # The key is a Property ID and the value is a built-in summary name.
+    summaries:
+      file.name: Count
+      note.status: Unique
+      formula.priority_display: Empty
+  - type: cards
+    name: ByPriority
+    groupBy:
+      property: formula.priority_display
+      direction: ASC
+    order:
+      - file.name
+      - status
+      - formula.priority_display
+  - type: list
+    name: AsList
+    order:
+      - file.name
+      - status

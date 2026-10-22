@@ -1,0 +1,18 @@
+# Link identity: a link is compared by resolved target, not by text.
+filters:
+  and:
+    - file.ext == "md"
+formulas:
+  matches_bare: authors.contains(link(this.file.name))
+  matches_alias_form: authors.contains(link(this.file.name, "Alias"))
+views:
+  - type: table
+    name: People
+    order:
+      - file.name
+      - authors
+      - formula.matches_bare
+      - formula.matches_alias_form
+    groupBy:
+      property: formula.matches_bare
+      direction: ASC

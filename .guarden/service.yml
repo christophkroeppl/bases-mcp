@@ -1,0 +1,36 @@
+# Guarden service manifest for bases-mcp.
+#
+# Serves the MCP Streamable HTTP transport at http://HOST:PORT/mcp — the same
+# binary an agent spawns over stdio, wrapped in a listener so several agents can
+# share one vault. The vault is configured by the environment; see
+# `.guarden/.env.schema`.
+#
+# Security: the listener is network-accessible and unauthenticated, and the
+# network is assumed safe. That is a recorded, accepted gap — see D9 in
+# docs/divergences.md.
+
+project: bases-mcp
+
+units: compose.yaml
+
+schema: .guarden/.env.schema
+
+bulk:
+  # The audit trail's volume. `bulk:` rather than `state:` because a snapshot
+  # of the trail is not something an operator rolls back to — the trail's
+  # value is in its history, and a rollback would erase the record of what
+  # happened before the rollback. A `bulk:` volume is not snapshotted and
+  # survives a re-ingest.
+  #
+  # It is DECLARED here because guarden refuses a named volume the manifest
+  # does not name: an undeclared volume lands in the service's rootless image
+  # store, where nothing lists it and removing the service discards it.
+  - audit
+
+routes:
+  # The container's own port; guarden allocates the loopback publication and
+  # the edge dials it. `host:` is a label, not a domain: the full name is the
+  # track's host_prefix plus this.
+  - container: bases-mcp
+    port: 8765
+    host: bases-mcp

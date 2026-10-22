@@ -1,0 +1,18 @@
+# The build context is the service's home, which also holds the rootless image
+# store and the per-user podman secret database. Neither is part of the build,
+# and both are large: keep them out of the context.
+target/
+.git/
+.githooks/
+.kilo/
+docs/
+scripts/
+test/
+.env
+.env.*
+!.env.schema
+
+# Local agent configuration and the docs that describe it.
+AGENTS.md
+CONTEXT.md
+opencode.jsonc

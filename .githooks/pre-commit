@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# The fast tier: fmt, clippy and the ordinary suites. No image, no Obsidian.
+#
+# The FULL tier runs from `wt merge` (see .config/wt.toml), not here. A commit
+# is a checkpoint; a merge is the point of no return.
+set -euo pipefail
+exec just test-fast

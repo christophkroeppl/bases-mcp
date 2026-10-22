@@ -1,0 +1,16 @@
+{
+	"$schema": "https://opencode.ai/config.json",
+	"formatter": {
+		"rustfmt": {
+			"command": ["rustfmt", "--edition", "2024", "$FILE"],
+			"extensions": [".rs"]
+		},
+		"prettier": { "disabled": true }
+	},
+	"lsp": {
+		"rust": {
+			"command": ["rust-analyzer"],
+			"extensions": [".rs"]
+		}
+	}
+}

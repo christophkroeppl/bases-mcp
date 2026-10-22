@@ -1,0 +1,41 @@
+# Filter forms that break naive implementations.
+#
+# Sources for each trap class:
+#   B1  not: is NAND                                    quartz docs/Base.base
+#   B4  contains dispatches on three receiver types     forum /base-contains.../109959
+#   B8  empty list + "does not contain" excludes        forum /unexpected-behavior.../101755
+#   B9  date.isEmpty() is always false                  official Functions.md
+#   B27 a formula used bare as a filter condition        elecdot/vault overview-structure.base
+#   B32 hasTag vs tags: '#' prefix on elements
+#   B35 Range is overloaded for numbers and dates
+filters:
+  and:
+    - file.ext == "md"
+formulas:
+  needs_follow_up: kind == "note" || kind == "review"
+  date_is_not_empty: date(when).isEmpty()
+  today_str: today().format("YYYY-MM-DD")
+  tag_probe: file.tags.contains("#ticket")
+views:
+  - type: table
+    name: BareFormulaFilter
+    # A formula referenced as a bare predicate, with no comparison.
+    filters:
+      and:
+        - formula.needs_follow_up
+    order:
+      - file.name
+      - kind
+      - formula.date_is_not_empty
+      - formula.today_str
+      - formula.tag_probe
+  - type: table
+    name: StringVsListContains
+    order:
+      - file.name
+      - kind
+  - type: list
+    name: AsList
+    order:
+      - file.name
+      - kind

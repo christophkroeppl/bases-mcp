@@ -1,0 +1,17 @@
+# `not:` is NAND, not negation.
+#
+# Six siblings means "none of these six are true". A note in two of the folders
+# is EXCLUDED -- which is what distinguishes NAND from `!(a || b)`.
+filters:
+  and:
+    - file.ext == "md"
+    - not:
+        - file.inFolder("plugins")
+        - file.inFolder("features")
+        - file.inFolder("advanced")
+views:
+  - type: table
+    name: Core
+    order:
+      - file.name
+      - file.folder
