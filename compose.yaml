@@ -32,3 +32,36 @@ services:
     # container.
     environment:
       MCP_HTTP_HOST: "0.0.0.0"
+      # The audit trail goes to a FILE, not to stderr. stderr in a container
+      # is the runtime's log, and nothing rotates it: the trail would grow
+      # until the container's disk filled. The binary rolls the file over at
+      # `MCP_AUDIT_LOG_MAX_MB` and keeps ONE previous generation, so the
+      # disk cost is twice the threshold and never more.
+      #
+      # The threshold's DEFAULT lives in the binary (5 MB) and is declared
+      # here so the deployment's value is visible in the compose file rather
+      # than buried in a setting nobody reads. It is a megabyte count, not a
+      # byte count.
+      MCP_AUDIT_LOG: "/var/log/bases-mcp/audit.log"
+      MCP_AUDIT_LOG_MAX_MB: "5"
+    volumes:
+      # The trail's own volume. It is NOT `state:`, because a snapshot of the
+      # audit trail is not something an operator rolls back to — the trail's
+      # value is in its history, and a rollback would erase the record of
+      # what happened before the rollback. A `bulk:` volume is not snapshotted
+      # and survives a re-ingest.
+      #
+      # It is declared `bulk: [audit]` in `.guarden/service.yml`, which the
+      # renderer requires in both directions: a mounted named volume the
+      # manifest does not name is refused, and so is a declared volume this
+      # file does not mount.
+      #
+      # The mount source is the volume ITSELF. That is what guarden renders
+      # for a bulk volume: it creates a bare subvolume with no snapper
+      # configuration and no payload directory (spec 8.1), so there is no
+      # `.snapshots` subtree and no `data/` level to mount past. A `state:`
+      # volume would be mounted at `<vol>/data` instead.
+      - audit:/var/log/bases-mcp
+
+volumes:
+  audit:

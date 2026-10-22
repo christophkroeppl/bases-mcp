@@ -26,6 +26,7 @@ use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 
+use bases_mcp::audit::{AuditConfigResult, parse_audit_config};
 use bases_mcp::config::{ConfigResult, NAME, open_source, parse_config, process_env};
 use bases_mcp::service::Resolver;
 use bases_mcp::tools::ToolSurface;
@@ -67,9 +68,10 @@ async fn main() -> ExitCode {
 /// Serve one client over stdin/stdout, until it disconnects.
 async fn serve_stdio() -> Result<(), String> {
     let resolver = open_resolver().await?;
+    let audit = open_audit("stdio")?;
 
     // Past this line, silence. The transport owns stdout from here on.
-    let server = ToolSurface::new(std::sync::Arc::new(resolver));
+    let server = ToolSurface::new(std::sync::Arc::new(resolver)).with_audit(audit, "stdio");
     let service = server
         .serve(rmcp::transport::stdio())
         .await
@@ -86,6 +88,7 @@ async fn serve_stdio() -> Result<(), String> {
 /// `Mcp-Session-Id` header and the client echoes it on every later request.
 async fn serve_http() -> Result<(), String> {
     let resolver = open_resolver().await?;
+    let audit = open_audit("http")?;
 
     // The endpoint is parsed here rather than read at bind time: a bad
     // MCP_HTTP_HOST or MCP_HTTP_PORT is refused before anything is opened, and
@@ -103,6 +106,10 @@ async fn serve_http() -> Result<(), String> {
     // the shared state.
     let factory = std::sync::Arc::new(resolver);
 
+    // The audit sink is shared by every session too: it is one trail, and a
+    // per-session file would be six trails interleaved in one directory.
+    let sink = std::sync::Arc::clone(&audit);
+
     // The service is a tower `Service`, and axum drives it directly. It handles
     // every method itself — POST for a request, GET for the SSE stream, DELETE
     // to close a session — so the whole router is that one service at `HTTP_PATH`.
@@ -110,7 +117,10 @@ async fn serve_http() -> Result<(), String> {
     // sessions are independent, so one router can serve several sockets.
     let app = {
         let service = StreamableHttpService::new(
-            move || Ok(ToolSurface::new(std::sync::Arc::clone(&factory))),
+            move || {
+                Ok(ToolSurface::new(std::sync::Arc::clone(&factory))
+                    .with_audit(std::sync::Arc::clone(&sink), "http"))
+            },
             std::sync::Arc::new(LocalSessionManager::default()),
             endpoint.rmcp_config(),
         );
@@ -162,16 +172,51 @@ async fn serve_http() -> Result<(), String> {
     for (address, listener) in listeners {
         let app = app.clone();
         servers.push(tokio::spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(on_shutdown())
-                .await
-                .map_err(|error| format!("{address}: {error}"))
+            // `into_make_service_with_connect_info` is what puts the peer's
+            // address into the request, so the audit trail can name where a
+            // call came from. Without it the trail says who called what and
+            // not from where, which is the half of the question a caller
+            // cannot forge.
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(on_shutdown())
+            .await
+            .map_err(|error| format!("{address}: {error}"))
         }));
     }
     for server in servers {
         server.await.map_err(|error| error.to_string())??;
     }
     Ok(())
+}
+
+/// Open the audit trail.
+///
+/// The configuration is read from the environment here, and a refusal is
+/// fatal: a server whose audit trail silently goes nowhere is the thing the
+/// trail exists to prevent, and a half-started server is worse than one that
+/// never ran.
+fn open_audit(transport: &str) -> Result<std::sync::Arc<dyn bases_mcp::audit::AuditSink>, String> {
+    let config = match parse_audit_config(&process_env()) {
+        AuditConfigResult::Ok { config, warnings } => {
+            for warning in warnings {
+                warn(&warning);
+            }
+            config
+        }
+        AuditConfigResult::Err { message } => return Err(message),
+    };
+    let sink = config.open()?;
+    // Where the trail goes is said ONCE, on stderr, at startup. An operator
+    // who cannot tell whether the trail is running has no way to know it is
+    // recording.
+    warn(&format!(
+        "audit trail on the {transport} transport: {}",
+        config.describe()
+    ));
+    Ok(std::sync::Arc::from(sink))
 }
 
 /// Parse the environment and index the vault it names.

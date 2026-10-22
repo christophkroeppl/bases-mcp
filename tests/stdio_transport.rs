@@ -60,14 +60,26 @@ impl Server {
     /// Spawn the binary over stdio with no `--transport` flag, which is the
     /// default a desktop agent gets.
     fn start_stdio(vault: &std::path::Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_bases-mcp"))
+        Self::spawn(vault, None)
+    }
+
+    /// A server whose audit trail is a file, so a test can read it back.
+    fn start_stdio_auditing(vault: &std::path::Path, audit: &std::path::Path) -> Self {
+        Self::spawn(vault, Some(audit))
+    }
+
+    fn spawn(vault: &std::path::Path, audit: Option<&std::path::Path>) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bases-mcp"));
+        command
             .env("BASES_MCP_VAULT", vault)
             .env_remove("MCP_TRANSPORT")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the binary spawns");
+            .stderr(Stdio::piped());
+        if let Some(audit) = audit {
+            command.env("MCP_AUDIT_LOG", audit);
+        }
+        let mut child = command.spawn().expect("the binary spawns");
 
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
@@ -417,5 +429,80 @@ fn read_within<R: Read + Send + 'static>(reader: R, within: Duration) -> Option<
             return None;
         }
         std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// The trail over stdio records the handshake and every call after it.
+///
+/// stdio is the transport a desktop agent launches, and it is the one with no
+/// session id and no peer address: the record carries what the transport has
+/// and omits what it does not, rather than inventing either. The handshake's
+/// record is the one that matters most here — a caller that connects and calls
+/// nothing would otherwise leave no trace at all.
+#[test]
+fn the_trail_records_the_handshake_and_the_calls_over_stdio() {
+    let _guard = ENV.lock().expect("the env lock is not poisoned");
+    let dir = tempfile::TempDir::new().expect("a temp dir is writable");
+    let log = dir.path().join("audit.log");
+    let mut server = Server::start_stdio_auditing(&vault_dir(), &log);
+
+    handshake(&mut server);
+    let response = server.request(
+        "tools/call",
+        json!({
+            "name": "get_note",
+            "arguments": { "path": "Root Ticket.md", "raw": true }
+        }),
+    );
+    assert!(
+        response.get("result").is_some(),
+        "the call is answered: {response}"
+    );
+
+    // The handshake's record is written by a notification handler that runs on
+    // its own task, so the file can lag the reply.
+    let trail = wait_for_trail(&log, |text| {
+        text.contains("\"tool\":\"initialize\"") && text.contains("\"tool\":\"get_note\"")
+    });
+    let record = |tool: &str| -> Json {
+        let line = trail
+            .lines()
+            .find(|line| line.contains(&format!("\"tool\":\"{tool}\"")))
+            .unwrap_or_else(|| panic!("the trail holds no {tool} record: {trail}"));
+        serde_json::from_str(line).expect("a record is one JSON value")
+    };
+
+    let handshake_record = record("initialize");
+    assert_eq!(handshake_record["caller"], "stdio-transport-test 0");
+    assert_eq!(handshake_record["transport"], "stdio");
+    assert!(
+        handshake_record.get("session").is_none() && handshake_record.get("peer").is_none(),
+        "stdio has neither a session nor a peer, and the record does not invent one: \
+         {handshake_record}"
+    );
+
+    let call = record("get_note");
+    assert_eq!(call["target"], "Root Ticket.md", "{call}");
+    assert_eq!(call["outcome"], "ok", "{call}");
+
+    assert!(
+        !trail.contains("# Root ticket"),
+        "the trail carried the note's content: {trail}"
+    );
+}
+
+/// Read the trail, waiting until `ready` accepts what is there.
+fn wait_for_trail(path: &std::path::Path, ready: impl Fn(&str) -> bool) -> String {
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if ready(&text) {
+            return text;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the trail never held what the test waited for: {text:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
