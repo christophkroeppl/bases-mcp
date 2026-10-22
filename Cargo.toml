@@ -26,6 +26,11 @@ required-features = ["parity"]
 rmcp = { version = "3", features = ["server", "transport-io", "schemars", "transport-streamable-http-server"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs", "net", "signal"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+# The HTTP request parts, so the audit trail can read the session id out of
+# the request rmcp hands the handler. The version is pinned to the one axum
+# and rmcp already resolve to, so the `http::request::Parts` in an
+# extension is the SAME type and not a second one.
+http = "1.5"
 tower = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

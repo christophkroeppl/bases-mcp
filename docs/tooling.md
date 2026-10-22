@@ -154,10 +154,13 @@ the note's *content* — the reconciler and the read-verify-write hash check —
 and they do **not** decide *whether this caller may write*.
 
 What would close the gap is authentication on the transport, a policy for which
-client may call which tool, rate limiting, and TLS. None of that is built; the
-hardening list is at the repository root in `BACKLOG-network-security.md`, and
-`docs/divergences.md` D9 records the gap against this surface. **Re-open that
-list before this server is exposed beyond a network it is trusted on.**
+client may call which tool, rate limiting, and TLS. None of that is built. What
+is built is a record — every call, and every session's opening, is written to
+the audit trail described below — which makes an incident answerable after the
+fact and prevents nothing. The hardening list is at the repository root in
+`BACKLOG-network-security.md`, and `docs/divergences.md` D9 records the gap
+against this surface. **Re-open that list before this server is exposed beyond a
+network it is trusted on.**
 
 TLS in transit is the one item on that list with an answer that needs no code:
 the listener serves plaintext, and a reverse proxy terminates TLS in front of
@@ -180,6 +183,93 @@ two are different boundaries and only one of them is closed.
 `--userns=keep-id` is a third thing again: it is about *ownership*, so the
 server can write a vault whose files belong to the invoking user. It changes
 whose files the server may modify, not who may talk to it.
+### The audit trail
+
+Every tool call is recorded: who called it, from where, what it acted on, and
+what came of it. The record is one JSON line per call. The session's opening —
+the handshake — is a record too, so a caller that connects and calls nothing
+still leaves a trace.
+
+```
+MCP_AUDIT_LOG          file the trail is written to (unset: stderr)
+MCP_AUDIT_LOG_MAX_MB   rollover threshold, in MEGABYTES (default 5)
+```
+
+```json
+{"ts":"2026-10-22T08:43:03.479Z","tool":"write_note","caller":"claude-code 1.2.3",
+ "transport":"http","session":"ac2c6e39-78a8-4fd8-98db-a24f985a0207",
+ "peer":"192.168.1.5:60672","target":"Notes/Todo.md","outcome":"ok","duration_ms":26}
+```
+
+**What it never carries.** Note contents, the text an agent sent, a
+credential, or the prose of an error — an error can quote a fragment of the
+file that failed to parse, so the record carries the CONSTRUCT a failure was
+about (`this`, `concurrent-edit`, `arguments`) and not the sentence.
+
+**What it does not do.** It is not an authentication and not a control. The
+client name is whatever the caller claimed; the session id is the
+transport's own token; only the peer address is unforgeable, and only the
+HTTP transport has one. The trail says who CLAIMED to call what, from where.
+
+**The handshake record.** `tool` is `initialize` and there is no target: it is
+`notifications/initialized` that the server answers, and it names the session
+before any tool is called. `tools/list` is not recorded — the tool list is
+fixed, public and identical for every caller, so the handshake already says
+who read it.
+
+**A line's position is its FINISH time, not its arrival.** Calls are served
+concurrently and `ts` is written when the call ends, so a slow call appears
+after a fast one that started later. Read the trail by `ts`, not by line order.
+
+**Rotation.** The file rolls over at `MCP_AUDIT_LOG_MAX_MB` and keeps ONE
+previous generation, so the disk cost is twice the threshold and never more.
+The size is checked before each write, so the current file never grows past
+the threshold by more than the record being written.
+
+**Unset goes to stderr**, and nothing rotates stderr — a journald or a
+container runtime owns that. A container whose stderr is the runtime's log
+would grow without bound, which is why `compose.yaml` names a file and
+declares a volume for it.
+
+**A trail that cannot be written does not break the call.** The loss is
+reported on stderr and the tool still answers: a failed audit write that
+turned a landed write into a failed one would teach an agent to retry it. A
+trail that cannot be OPENED is the other case: the server refuses to start,
+because a server whose trail silently goes nowhere is the thing the trail
+exists to prevent.
+
+**A caller cannot forge a line.** The `path` argument is caller-controlled,
+so a caller could try to put a newline in it. The record is one JSON value,
+so a newline inside a string is escaped, and the length of every
+caller-supplied field is capped.
+
+Measured on the built binary, over HTTP and then over stdio, with a
+`probe-client` handshake and `get_note` on the root note:
+
+```
+{"ts":"2026-10-22T09:04:32.729Z","tool":"initialize","caller":"probe-client 9.9.9",
+ "transport":"http","session":"3fc78dfd-6288-4be3-9d0e-6dd5a4d79bff",
+ "peer":"127.0.0.1:53432","outcome":"ok","duration_ms":0}
+{"ts":"2026-10-22T09:04:32.800Z","tool":"get_note","caller":"probe-client 9.9.9",
+ "transport":"http","session":"3fc78dfd-6288-4be3-9d0e-6dd5a4d79bff",
+ "peer":"127.0.0.1:53444","target":"Root Ticket.md","outcome":"ok","duration_ms":0}
+```
+
+and over stdio, which has no session and no peer:
+
+```
+{"ts":"2026-10-22T09:04:32.437Z","tool":"initialize","caller":"stdio-probe 1.0",
+ "transport":"stdio","outcome":"ok","duration_ms":0}
+{"ts":"2026-10-22T09:04:32.442Z","tool":"resolve_base","caller":"stdio-probe 1.0",
+ "transport":"stdio","outcome":"failed","error":"this","duration_ms":5}
+```
+
+`tests/audit.rs` covers the trail through the tool surface; the file sink's
+rollover is covered there too, because "the trail rolls over at N megabytes"
+is a claim about a file and only a file can prove it. `tests/http_transport.rs`
+and `tests/stdio_transport.rs` prove the fields the surface cannot supply —
+the client name, the session id, the peer address — against the running
+binary.
 
 ### The transport is tested over the wire
 

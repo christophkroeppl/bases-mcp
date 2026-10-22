@@ -267,10 +267,44 @@ the vault it is scoped to, and no record of who called what.
 
 This is a **recorded, accepted gap**, not a claim that the work below is done.
 The hardening list — authentication, authorization, rate limiting, TLS, input
-validation at the resolver boundary, and audit logging — is kept outside the
-branch, at the repository root, because working docs are not branch content.
-It should be re-opened before this server is ever exposed beyond the network
-it is currently trusted on.
+validation at the resolver boundary — is kept outside the branch, at the
+repository root, because working docs are not branch content. It should be
+re-opened before this server is ever exposed beyond the network it is currently
+trusted on.
+
+### What the audit trail does and does not close
+
+The trail landed with this entry: **every tool call is now recorded** — who
+claimed to call it, from where, what it acted on, and what came of it — and so
+is the session's opening, so a caller that connects and calls nothing still
+leaves a record. See `docs/tooling.md` for the record's shape and
+`src/audit.rs` for the rules.
+
+It closes the "and no record of who called what" half of this entry. It does
+NOT close the other half, and the two are not the same thing:
+
+- **The listener is still unauthenticated.** A caller that can open the socket
+  is a caller, and the trail records that it did so rather than preventing it.
+- **The trail is not an authorization.** Nothing in it decides whether a
+  caller may write. `write_note` and `add_note_to_base` are still open to
+  anyone who can reach the port.
+- **The identity in the record is partly self-asserted.** The client name and
+  version are whatever the caller said; the session id is the transport's own
+  token; only the peer address is unforgeable, and only the HTTP transport
+  has one. The trail says who CLAIMED to call what.
+- **The trail cannot prevent anything.** It is a record. An attacker who
+  reaches an unauthenticated endpoint can also read the trail if the trail is
+  on the same host — so the trail's own file permissions matter, and it is
+  created 0600 for that reason.
+
+What it buys is the thing a safe-network assumption cannot: after the fact,
+a record that says which caller did what. That is what turns "something
+changed a note and nobody knows what" into "this caller did this, at this
+time, and it was refused".
+
+The remaining hardening — authentication, authorization, rate limiting and
+TLS — is unchanged by the trail, and is still owed before the transport is
+exposed beyond the network it is currently trusted on.
 
 ### What is enforced anyway
 

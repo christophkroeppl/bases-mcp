@@ -31,6 +31,7 @@
 //! partial apply (see [`tools`]).
 
 pub mod ast;
+pub mod audit;
 pub mod base;
 pub mod config;
 pub mod depth;

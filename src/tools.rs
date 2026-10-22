@@ -58,12 +58,13 @@ use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
-use rmcp::service::RequestContext;
+use rmcp::service::{NotificationContext, RequestContext};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json, json};
 
+use crate::audit::{AuditContext, AuditRecord, AuditSink, CallOutcome};
 use crate::base::{QueryOptions, QueryResult};
 use crate::drafts::{AddNoteOptions, AddNoteToBaseResult, iso_millis};
 use crate::error::BasesError;
@@ -105,11 +106,37 @@ impl Health {
 #[derive(Debug, Clone)]
 pub struct ToolSurface {
     resolver: Arc<Resolver>,
+    /// Where the audit trail goes, and who is calling.
+    ///
+    /// `None` means no trail, which is the case for a surface built directly
+    /// in a test. A server built by `main` always has one: an audit trail
+    /// that depends on the caller remembering to ask for it is not a trail.
+    audit: Option<AuditTrail>,
+}
+
+/// The sink a trail is written to, and the transport it came over.
+#[derive(Debug, Clone)]
+pub struct AuditTrail {
+    sink: Arc<dyn AuditSink>,
+    transport: &'static str,
 }
 
 impl ToolSurface {
     pub fn new(resolver: Arc<Resolver>) -> Self {
-        Self { resolver }
+        Self {
+            resolver,
+            audit: None,
+        }
+    }
+
+    /// The same surface, with a trail.
+    ///
+    /// The transport is named rather than deduced, because the trail records
+    /// where a call came from and the caller of this constructor knows which
+    /// of the two it is serving.
+    pub fn with_audit(mut self, sink: Arc<dyn AuditSink>, transport: &'static str) -> Self {
+        self.audit = Some(AuditTrail { sink, transport });
+        self
     }
 
     pub fn resolver(&self) -> &Arc<Resolver> {
@@ -125,30 +152,117 @@ impl ToolSurface {
     ///
     /// `Err` is reserved for the request itself being unroutable — an unknown
     /// tool name — which is a JSON-RPC concern rather than a tool result.
+    ///
+    /// Every call goes through here, so this is where the trail is written:
+    /// one record per call, whatever the tool was and whatever became of it.
     pub async fn dispatch(
         &self,
         name: &str,
         arguments: &Map<String, Json>,
     ) -> Result<CallToolResult, McpError> {
-        match name {
-            "list_bases" => Ok(attempt(self.list_bases()).await),
-            "resolve_base" => Ok(attempt(self.resolve_base(arguments)).await),
-            "get_note" => Ok(attempt(self.get_note(arguments)).await),
-            "write_note" => Ok(attempt(self.write_note(arguments)).await),
-            "add_note_to_base" => Ok(attempt(self.add_note_to_base(arguments)).await),
-            "backlinks" => Ok(attempt(self.backlinks(arguments)).await),
-            other => Err(McpError::invalid_params(
-                format!(
-                    "Unknown tool \"{other}\". Call tools/list for the six this server serves."
-                ),
-                None,
-            )),
+        self.dispatch_with_caller(name, arguments, &AuditContext::default())
+            .await
+    }
+
+    /// Run one tool by name, as a known caller.
+    ///
+    /// The same call, with the identity behind it. The identity is passed in
+    /// rather than looked up here because it lives in the TRANSPORT's
+    /// request context, and this method is also the one a test calls without
+    /// a transport at all.
+    pub async fn dispatch_with_caller(
+        &self,
+        name: &str,
+        arguments: &Map<String, Json>,
+        caller: &AuditContext,
+    ) -> Result<CallToolResult, McpError> {
+        let started = std::time::Instant::now();
+        let outcome = match name {
+            "list_bases" => Some(attempt(self.list_bases()).await),
+            "resolve_base" => Some(attempt(self.resolve_base(arguments)).await),
+            "get_note" => Some(attempt(self.get_note(arguments)).await),
+            "write_note" => Some(attempt(self.write_note(arguments)).await),
+            "add_note_to_base" => Some(attempt(self.add_note_to_base(arguments)).await),
+            "backlinks" => Some(attempt(self.backlinks(arguments)).await),
+            _ => None,
+        };
+        match outcome {
+            Some(outcome) => {
+                // The record is written AFTER the call, so it carries what
+                // became of it. A trail that says a call happened but not how
+                // it ended is half a trail.
+                let (call_status, construct) = outcome_of(&outcome.result);
+                self.record(
+                    name,
+                    caller,
+                    call_status,
+                    outcome.target.as_deref(),
+                    construct.as_deref(),
+                    started,
+                );
+                Ok(outcome.result)
+            }
+            None => {
+                // A name that routes to nothing is still a call, and it is
+                // the one an audit trail is most interested in: it is what a
+                // caller probing for a tool it should not have looks like.
+                self.record(name, caller, CallOutcome::UnknownTool, None, None, started);
+                Err(McpError::invalid_params(
+                    format!(
+                        "Unknown tool \"{name}\". Call tools/list for the six this server serves."
+                    ),
+                    None,
+                ))
+            }
+        }
+    }
+
+    /// Write one record for one call.
+    ///
+    /// A sink that fails does not fail the call: the trail is not allowed to
+    /// break the work it is recording, because a failed audit write that
+    /// turned a landed write into a failed one would teach an agent to retry
+    /// it. The loss is reported on stderr instead.
+    fn record(
+        &self,
+        tool: &str,
+        caller: &AuditContext,
+        outcome: CallOutcome,
+        target: Option<&str>,
+        construct: Option<&str>,
+        started: std::time::Instant,
+    ) {
+        let Some(trail) = &self.audit else {
+            return;
+        };
+        let record = AuditRecord::new(caller, trail.transport, tool, outcome)
+            .with_target(target)
+            .with_error(construct)
+            .with_duration(started.elapsed());
+        if let Err(problem) = trail.sink.write(&record) {
+            crate::audit::report_lost(&problem);
+        }
+    }
+
+    /// Write the session's opening record.
+    ///
+    /// `tool` carries the protocol method the caller completed, which is
+    /// `initialize`. There is no duration: the handshake is not a tool call
+    /// and nothing here measures it, so the record says zero rather than a
+    /// number it did not take.
+    fn record_handshake(&self, caller: &AuditContext) {
+        let Some(trail) = &self.audit else {
+            return;
+        };
+        let record = AuditRecord::new(caller, trail.transport, "initialize", CallOutcome::Ok);
+        if let Err(problem) = trail.sink.write(&record) {
+            crate::audit::report_lost(&problem);
         }
     }
 
     // -- the six tools -------------------------------------------------------
 
-    async fn list_bases(&self) -> Result<CallToolResult, BasesError> {
+    async fn list_bases(&self) -> Result<Audited, BasesError> {
         let bases = self.resolver.list_bases().await?;
         let count = bases.len();
         let payload = json!({
@@ -164,18 +278,17 @@ impl ToolSurface {
                 .collect::<Vec<_>>(),
             "health": Health::Ok.as_str(),
         });
-        Ok(data(
+        // No single path: the call is about the whole vault, so the trail
+        // records no target rather than one of the bases it listed.
+        Ok(Audited::new(data(
             payload,
             Some(format!(
                 "Every base queries the whole vault. {count} base(s) found."
             )),
-        ))
+        )))
     }
 
-    async fn resolve_base(
-        &self,
-        arguments: &Map<String, Json>,
-    ) -> Result<CallToolResult, BasesError> {
+    async fn resolve_base(&self, arguments: &Map<String, Json>) -> Result<Audited, BasesError> {
         let args: ResolveBaseArgs = parse_args(arguments)?;
         let path = self.resolver.resolve_base_path(&args.base)?;
         let base = self.resolver.load_base(&path).await?;
@@ -196,7 +309,7 @@ impl ToolSurface {
                 ContentBlock::text(health_note(&result, health)),
             ]);
             call.structured_content = Some(summarise(&result, health));
-            return Ok(call);
+            return Ok(Audited::with_target(call, &path));
         }
 
         // `includeAllFormulas` adds a column for every formula the Base
@@ -214,10 +327,10 @@ impl ToolSurface {
                 Json::Array(json_rows(&base, &result, &extra)),
             );
         }
-        Ok(data(payload, None))
+        Ok(Audited::with_target(data(payload, None), &path))
     }
 
-    async fn get_note(&self, arguments: &Map<String, Json>) -> Result<CallToolResult, BasesError> {
+    async fn get_note(&self, arguments: &Map<String, Json>) -> Result<Audited, BasesError> {
         let args: GetNoteArgs = parse_args(arguments)?;
         let note = self
             .resolver
@@ -244,13 +357,10 @@ impl ToolSurface {
             "`content` is a Projection. Edit `raw`, not `content`, and send that to write_note."
                 .to_string()
         });
-        Ok(data(payload, warning))
+        Ok(Audited::with_target(data(payload, warning), &note.path))
     }
 
-    async fn write_note(
-        &self,
-        arguments: &Map<String, Json>,
-    ) -> Result<CallToolResult, BasesError> {
+    async fn write_note(&self, arguments: &Map<String, Json>) -> Result<Audited, BasesError> {
         let args: WriteNoteArgs = parse_args(arguments)?;
         let before = self
             .resolver
@@ -281,40 +391,49 @@ impl ToolSurface {
             "removedRegion": result.removed_region,
             "health": health.as_str(),
         });
-        Ok(data(
-            payload,
-            refusal_note(result.refused.len(), result.removed_region),
+        Ok(Audited::with_target(
+            data(
+                payload,
+                refusal_note(result.refused.len(), result.removed_region),
+            ),
+            &result.path,
         ))
     }
 
-    async fn add_note_to_base(
-        &self,
-        arguments: &Map<String, Json>,
-    ) -> Result<CallToolResult, BasesError> {
+    async fn add_note_to_base(&self, arguments: &Map<String, Json>) -> Result<Audited, BasesError> {
         let args: AddNoteOptions = parse_args(arguments)?;
         let result = self.resolver.add_note_to_base(&args).await?;
-        let payload = match &result {
-            AddNoteToBaseResult::Proposal(proposal) => json!({
-                "draft_id": proposal.draft_id,
-                "path": proposal.path,
-                "content": proposal.content,
-                "expires_at": proposal.expires_at,
-                "base": proposal.base,
-                "view": proposal.view,
-                "context": proposal.context,
-                "health": Health::Ok.as_str(),
-            }),
-            AddNoteToBaseResult::Commit(commit) => json!({
-                "written": commit.written,
-                "draft_id": commit.draft_id,
-                "verified": commit.verified,
-                "health": Health::Ok.as_str(),
-            }),
+        let (payload, target) = match &result {
+            AddNoteToBaseResult::Proposal(proposal) => (
+                json!({
+                    "draft_id": proposal.draft_id,
+                    "path": proposal.path,
+                    "content": proposal.content,
+                    "expires_at": proposal.expires_at,
+                    "base": proposal.base,
+                    "view": proposal.view,
+                    "context": proposal.context,
+                    "health": Health::Ok.as_str(),
+                }),
+                proposal.path.clone(),
+            ),
+            AddNoteToBaseResult::Commit(commit) => (
+                json!({
+                    "written": commit.written,
+                    "draft_id": commit.draft_id,
+                    "verified": commit.verified,
+                    "health": Health::Ok.as_str(),
+                }),
+                commit.written.clone(),
+            ),
         };
-        Ok(data(payload, handshake_note(&result)))
+        Ok(Audited::with_target(
+            data(payload, handshake_note(&result)),
+            &target,
+        ))
     }
 
-    async fn backlinks(&self, arguments: &Map<String, Json>) -> Result<CallToolResult, BasesError> {
+    async fn backlinks(&self, arguments: &Map<String, Json>) -> Result<Audited, BasesError> {
         let args: BacklinksArgs = parse_args(arguments)?;
         let path = self.resolver.resolve_note_path(&args.path)?;
         let backlinks = self.resolver.backlinks(&path)?;
@@ -327,9 +446,9 @@ impl ToolSurface {
                 .collect::<Vec<_>>(),
             "health": Health::Ok.as_str(),
         });
-        Ok(data(
-            payload,
-            Some(format!("{count} note(s) link to {path}.")),
+        Ok(Audited::with_target(
+            data(payload, Some(format!("{count} note(s) link to {path}."))),
+            &path,
         ))
     }
 }
@@ -351,15 +470,114 @@ impl ServerHandler for ToolSurface {
     fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResponse, McpError>> + '_ {
         let arguments = request.arguments.unwrap_or_default();
         async move {
-            self.dispatch(&request.name, &arguments)
+            // The identity behind the call, read out of the transport's own
+            // request context. It is read HERE rather than inside the
+            // handler because this is the only place the context exists:
+            // `dispatch` is also called without a transport at all.
+            let caller = AuditContext::from_request(&context);
+            self.dispatch_with_caller(&request.name, &arguments, &caller)
                 .await
                 .map(CallToolResponse::from)
         }
     }
+
+    /// The session's opening record.
+    ///
+    /// A caller that connects, reads `tools/list` and leaves calls no tool,
+    /// so without this the first thing an incident asks — who opened a
+    /// session, and from where — has no answer. The record lands when the
+    /// client completes the handshake, which every real client does before
+    /// it calls anything.
+    fn on_initialized(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + '_ {
+        // The record is written inline: there is nothing to wait for, and a
+        // handshake recorded before the handler returns is one a caller
+        // cannot race with its first call.
+        self.record_handshake(&AuditContext::from_notification(&context));
+        std::future::ready(())
+    }
+}
+
+/// A tool result, with the facts the audit trail needs about it.
+///
+/// The trail wants two things the result itself does not carry: the vault
+/// path the call acted on, and whether it refused part of what it was asked
+/// to do. Both are read out of the result HERE, once, rather than in each of
+/// the six handlers — so a tool added later cannot forget to report its own
+/// target.
+#[derive(Debug)]
+pub struct Audited {
+    /// What the agent gets.
+    pub result: CallToolResult,
+    /// The vault path the call acted on, resolved.
+    pub target: Option<String>,
+}
+
+impl Audited {
+    /// A result with no target, for a call about the whole vault.
+    pub fn new(result: CallToolResult) -> Self {
+        Self {
+            result,
+            target: None,
+        }
+    }
+
+    /// A result for a call that acted on one path.
+    pub fn with_target(result: CallToolResult, target: &str) -> Self {
+        Self {
+            result,
+            target: Some(target.to_string()),
+        }
+    }
+}
+
+/// What became of a call, and the construct a failure was about.
+///
+/// The construct is a short token of our own — `concurrent-edit`, `this`,
+/// `arguments` — and never the error's prose. The prose can quote a
+/// fragment of the file that failed, and the trail must not carry note
+/// contents.
+fn outcome_of(result: &CallToolResult) -> (CallOutcome, Option<String>) {
+    let health = result
+        .structured_content
+        .as_ref()
+        .and_then(|payload| payload.get("health"))
+        .and_then(Json::as_str);
+    match health {
+        Some("ok") => (CallOutcome::Ok, None),
+        Some("partial-with-errors") => (CallOutcome::Partial, None),
+        Some("failed") => (CallOutcome::Failed, construct_of(result)),
+        // A result with no health field is a failure the engine did not
+        // shape: `isError` is the only thing left to go on.
+        _ => {
+            if result.is_error == Some(true) {
+                (CallOutcome::Failed, construct_of(result))
+            } else {
+                (CallOutcome::Ok, None)
+            }
+        }
+    }
+}
+
+/// The construct a failure was about, from the structured error.
+///
+/// `None` for anything that is not a failure, and `None` for a failure whose
+/// error carries no construct: the trail records what it can and never
+/// guesses.
+fn construct_of(result: &CallToolResult) -> Option<String> {
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|payload| payload.get("error"))
+        .and_then(|error| error.get("construct"))
+        .and_then(Json::as_str)
+        .map(str::to_string)
 }
 
 // ---------------------------------------------------------------------------
@@ -623,13 +841,13 @@ fn context_of(error: &BasesError) -> Map<String, Json> {
 }
 
 /// Run a tool body, turning anything it throws into a structured tool result.
-async fn attempt<F>(work: F) -> CallToolResult
+async fn attempt<F>(work: F) -> Audited
 where
-    F: std::future::Future<Output = Result<CallToolResult, BasesError>>,
+    F: std::future::Future<Output = Result<Audited, BasesError>>,
 {
     match work.await {
-        Ok(call) => call,
-        Err(error) => failure(&error),
+        Ok(audited) => audited,
+        Err(error) => Audited::new(failure(&error)),
     }
 }
 

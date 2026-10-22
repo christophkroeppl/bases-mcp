@@ -99,9 +99,18 @@ impl Server {
     /// Retried, because the port can be taken between [`ephemeral_port`]
     /// releasing it and this child binding it — see [`START_ATTEMPTS`].
     fn start_on(host: &str) -> Self {
+        Self::start_on_auditing(host, None)
+    }
+
+    /// A server whose audit trail is a file, so a test can read it back.
+    fn start_auditing(audit: &std::path::Path) -> Self {
+        Self::start_on_auditing("127.0.0.1", Some(audit))
+    }
+
+    fn start_on_auditing(host: &str, audit: Option<&std::path::Path>) -> Self {
         let mut last = String::new();
         for _ in 0..START_ATTEMPTS {
-            match Self::try_start_on(host) {
+            match Self::try_start_on(host, audit) {
                 Ok(server) => return server,
                 Err(reason) => last = reason,
             }
@@ -109,7 +118,7 @@ impl Server {
         panic!("the HTTP server did not start in {START_ATTEMPTS} attempts: {last}");
     }
 
-    fn try_start_on(host: &str) -> Result<Self, String> {
+    fn try_start_on(host: &str, audit: Option<&std::path::Path>) -> Result<Self, String> {
         let port = ephemeral_port();
         let vault = vault_dir();
         let resolved = (host, port)
@@ -117,7 +126,8 @@ impl Server {
             .expect("the host resolves")
             .next()
             .expect("the host resolves to an address");
-        let mut child = Command::new(env!("CARGO_BIN_EXE_bases-mcp"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bases-mcp"));
+        command
             .arg("--transport")
             .arg("http")
             .env("MCP_HTTP_PORT", port.to_string())
@@ -127,9 +137,13 @@ impl Server {
             // failure prints the server's complaint rather than a bare
             // "connection refused".
             .stderr(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("the binary spawns");
+            .stdout(Stdio::piped());
+        // A trail file only when the test asked for one: a server whose trail
+        // is stderr writes a line per call into the pipe nobody reads.
+        if let Some(audit) = audit {
+            command.env("MCP_AUDIT_LOG", audit);
+        }
+        let mut child = command.spawn().expect("the binary spawns");
 
         let bound = SocketAddr::new(resolved.ip(), port);
         let base_url = format!("http://{bound}{HTTP_PATH}");
@@ -846,4 +860,108 @@ fn a_bad_bind_address_or_port_is_refused_by_name() {
 
     unset_env("MCP_HTTP_HOST");
     unset_env("MCP_HTTP_PORT");
+}
+
+/// The trail over HTTP names the caller, the session and the peer address.
+///
+/// This is the half no unit test can reach: the client name comes from the
+/// handshake, the session id from the transport's own header, and the peer
+/// address from the socket the request arrived on. The peer is the only one of
+/// the three a caller cannot forge, so it is the one that has to be proven over
+/// the wire rather than through a `MemorySink`.
+#[tokio::test]
+async fn the_trail_names_the_caller_the_session_and_the_peer() {
+    let dir = tempfile::TempDir::new().expect("a temp dir is writable");
+    let log = dir.path().join("audit.log");
+    let mut server = Server::start_auditing(&log);
+    server.connect_as("trail-probe").await;
+    let session = server
+        .session_id
+        .clone()
+        .expect("the handshake issued a session");
+
+    let (response, _) = server
+        .post(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "get_note",
+                "arguments": { "path": "Root Ticket.md", "raw": true }
+            }
+        }))
+        .await;
+    assert!(
+        response.get("error").is_none(),
+        "the call is answered: {response}"
+    );
+
+    // The handshake's record is written by the notification's own handler, so
+    // it can land after the POST that sent the notification returns.
+    let trail = wait_for_trail(&log, |text| {
+        text.contains("\"tool\":\"initialize\"") && text.contains("\"tool\":\"get_note\"")
+    });
+
+    let record = |tool: &str| -> Json {
+        let line = trail
+            .lines()
+            .find(|line| line.contains(&format!("\"tool\":\"{tool}\"")))
+            .unwrap_or_else(|| panic!("the trail holds no {tool} record: {trail}"));
+        serde_json::from_str(line).expect("a record is one JSON value")
+    };
+
+    // Who opened the session, and from where.
+    let handshake = record("initialize");
+    assert_eq!(handshake["caller"], "trail-probe 0", "{handshake}");
+    assert_eq!(handshake["transport"], "http", "{handshake}");
+    assert_eq!(
+        handshake["session"],
+        Json::String(session.clone()),
+        "{handshake}"
+    );
+    let peer = handshake["peer"].as_str().expect("a peer address");
+    assert!(
+        peer.starts_with("127.0.0.1:"),
+        "the peer is the socket the request arrived on: {peer}"
+    );
+
+    // What the call acted on.
+    let call = record("get_note");
+    assert_eq!(call["target"], "Root Ticket.md", "{call}");
+    assert_eq!(call["outcome"], "ok", "{call}");
+    assert_eq!(call["session"], Json::String(session), "{call}");
+    // Not the same socket as the handshake's: each request here arrives on a
+    // connection of its own, so the peer is per-connection rather than
+    // per-session. What it proves is that the address is recorded at all.
+    let call_peer = call["peer"].as_str().expect("a peer address");
+    assert!(
+        call_peer.starts_with("127.0.0.1:"),
+        "the call's peer is its own socket: {call_peer}"
+    );
+
+    // And the note's text is nowhere in it.
+    assert!(
+        !trail.contains("# Root ticket"),
+        "the trail carried the note's content: {trail}"
+    );
+}
+
+/// Read the trail, waiting until `ready` accepts what is there.
+///
+/// A record is written after the call it describes, and the handshake's record
+/// is written by a notification handler that runs on its own task, so the file
+/// can lag the reply a client just received.
+fn wait_for_trail(path: &std::path::Path, ready: impl Fn(&str) -> bool) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if ready(&text) {
+            return text;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the trail never held what the test waited for: {text:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
