@@ -570,10 +570,11 @@ pub fn json_rows(base: &BaseFile, result: &QueryResult, extra_formulas: &[String
 
 /// The columns a JSON row carries, in order.
 ///
-/// `order` is honoured when it is PRESENT AND NON-EMPTY. Obsidian's own
-/// accessor is `this.order || ["file.name"]`, and an empty array is falsy in
-/// JavaScript, so `order: []` falls back to the file-name column exactly as a
-/// missing `order` does.
+/// `order` is honoured whenever it is PRESENT. Obsidian's own accessor is
+/// `this.order || ["file.name"]`, and the `||` fires only for an ABSENT
+/// `order`: an empty array is TRUTHY in JavaScript, not falsy, so `order: []`
+/// is not "no order" -- `getOrder()` answers `[]` and the row carries NO
+/// columns beyond its `path`.
 ///
 /// The fallback is `file.name` alone, NOT the Base's declared properties.
 /// Obsidian's accessor names one column, and the CLI builds its rows from
@@ -582,8 +583,8 @@ pub fn json_rows(base: &BaseFile, result: &QueryResult, extra_formulas: &[String
 /// properties in the output that Obsidian never emits.
 fn json_columns(view: &BaseView) -> Vec<String> {
     match view.order.as_deref() {
-        Some(ids) if !ids.is_empty() => ids.to_vec(),
-        _ => vec!["file.name".to_string()],
+        Some(ids) => ids.to_vec(),
+        None => vec!["file.name".to_string()],
     }
 }
 
