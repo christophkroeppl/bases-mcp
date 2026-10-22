@@ -153,6 +153,20 @@ const BASE_YAML: &str = "filters:\n  and:\n    - status == \"open\"\nviews:\n  -
 
 const NOTE_BODY: &str = "---\nstatus: open\n---\n\n# Container Note\n\nOriginal body.\n";
 
+/// How long a container may run before podman kills it.
+///
+/// The crash guard for a client that is killed rather than dropped:
+/// `Drop` does not run on `SIGKILL`, so without a deadline a killed
+/// client leaves the container running, holding a host port.
+///
+/// The value is the container's LIFETIME, so it has to be LONGER than
+/// the time the suite is willing to wait for one cell -- the 10-second
+/// startup deadline plus the 30-second handshake deadline -- or the
+/// container would be killed mid-cell and the cell would fail for a
+/// reason of its own. Five minutes leaves that margin wide, and still
+/// bounds what a killed client leaves behind.
+const CONTAINER_TIMEOUT_SECONDS: u32 = 300;
+
 // ---------------------------------------------------------------------------
 // The MCP client, over both transports, against a container.
 // ---------------------------------------------------------------------------
@@ -358,10 +372,24 @@ impl HttpContainerClient {
     /// `port` is the HOST-side port; the container always listens on 8765.
     fn start(vault: &HostVault, port: u16, extra_env: &[(&str, &str)]) -> Self {
         let image = image().expect("the image is set");
-        // The name is generated ONCE, here, and used for both the run and
-        // the later removal. Generating it twice would produce two different
-        // names and the container would never be cleaned up.
+        // The name is generated ONCE, here, and used for the run, for every
+        // later lookup, and for the removal. Generating it twice would
+        // produce two different names and the container would never be
+        // cleaned up.
         let container_name = format!("bases-mcp-cm-{}-{}", std::process::id(), unique_suffix());
+        // The client is built BEFORE the container starts, so that every
+        // path out of this function drops it, and dropping it removes the
+        // container. A client built only after the handshake would leave
+        // the container behind on the paths that never reach the
+        // handshake -- the container died at startup, or its listener never
+        // answered -- because on those paths there would be nothing to
+        // drop.
+        let mut client = Self {
+            base: format!("http://127.0.0.1:{port}/mcp"),
+            session: None,
+            port,
+            name: container_name.clone(),
+        };
         // A stale container from a previous run would block the start.
         let _ = podman(&["rm", "-f", &container_name]).output();
         let mut args: Vec<String> = vec![
@@ -369,6 +397,20 @@ impl HttpContainerClient {
             "-d".into(),
             "--name".into(),
             container_name.clone(),
+            // A container that outlives its client keeps a host port bound
+            // and an image referenced, and `Drop` does not run on
+            // `SIGKILL`. `--timeout` bounds the container's LIFE, so a
+            // client that is killed outright -- which skips `Drop` -- still
+            // cannot leave a running container behind.
+            //
+            // NOT `--rm`: that removes the container the moment it exits,
+            // which would take the startup diagnostics below with it. The
+            // loop polls `inspect` for an exited container and then reads
+            // its log; with `--rm` the record is gone before the first
+            // poll, so the failure would arrive as a timeout that says
+            // nothing instead of the server's own words.
+            "--timeout".into(),
+            CONTAINER_TIMEOUT_SECONDS.to_string(),
             // The same two flags the stdio client uses, and for the same
             // reasons: without the user namespace the server cannot WRITE the
             // vault, and without the mount there is no vault at all -- the
@@ -411,6 +453,9 @@ impl HttpContainerClient {
         // A container that dies immediately leaves an exited container behind
         // and no listener. Surface its own log rather than a 30-second
         // timeout, which says nothing about the cause.
+        //
+        // The container is NOT removed here: the client holds its name and
+        // removes it when it is dropped, which happens on this panic too.
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             let state = podman(&["inspect", "--format", "{{.State.Status}}", &container_name])
@@ -421,7 +466,6 @@ impl HttpContainerClient {
                 let logs = podman(&["logs", &container_name])
                     .output()
                     .expect("podman runs");
-                let _ = podman(&["rm", "-f", &container_name]).output();
                 panic!(
                     "the container {} exited before it bound its listener:\nstdout:\n{}\nstderr:\n{}",
                     container_name,
@@ -432,7 +476,6 @@ impl HttpContainerClient {
             std::thread::sleep(Duration::from_millis(200));
         }
         // Give the listener a moment to bind, then handshake.
-        let base = format!("http://127.0.0.1:{port}/mcp");
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
             let mut stream = match TcpStream::connect(("127.0.0.1", port)) {
@@ -470,13 +513,7 @@ impl HttpContainerClient {
                         None => continue,
                     };
                     if header.trim().eq_ignore_ascii_case("mcp-session-id") {
-                        let session = value.trim().to_string();
-                        let client = Self {
-                            base: base.clone(),
-                            session: Some(session),
-                            port,
-                            name: container_name.clone(),
-                        };
+                        client.session = Some(value.trim().to_string());
                         // The handshake notification, or the server is not
                         // ready for a tool call.
                         client.raw_post(&serde_json::json!({
@@ -544,7 +581,11 @@ impl HttpContainerClient {
 
 impl Drop for HttpContainerClient {
     fn drop(&mut self) {
-        let _ = podman(&["rm", "-f", &format!("bases-mcp-cm-{}", std::process::id())]).output();
+        // The name that was CREATED, not one rebuilt from the pid. The
+        // created name carries a unique suffix, so `bases-mcp-cm-<pid>`
+        // never matches `bases-mcp-cm-<pid>-<suffix>`, and the container
+        // that is actually running is the one that survived every run.
+        let _ = podman(&["rm", "-f", &self.name]).output();
     }
 }
 
