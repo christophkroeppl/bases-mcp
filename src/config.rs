@@ -49,7 +49,15 @@ pub fn process_env() -> Env {
 /// A union rather than one shape with optional fields, so an fs-only path cannot
 /// be handed a WebDAV URL and read a wrong directory: the two have nothing in
 /// common to default.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand rather than derived, because the derived one
+/// printed the credential in cleartext: `Webdav { url: "...", user: "u",
+/// password: "hunter2" }`. A derived `Debug` is a one-word change that puts a
+/// secret into every log line, every assertion message and every panic that
+/// formats this type — and the type is formatted in a refusal path
+/// (`ConfigResult`), which is exactly where a diagnostic is wanted. The
+/// manual impl below keeps the shape readable and drops the secret.
+#[derive(Clone, PartialEq, Eq)]
 pub enum VaultConfig {
     Fs {
         /// Absolute path to the vault directory.
@@ -64,6 +72,33 @@ pub enum VaultConfig {
         password: String,
     },
 }
+
+impl std::fmt::Debug for VaultConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fs { dir } => f.debug_struct("Fs").field("dir", dir).finish(),
+            Self::Webdav {
+                url,
+                user,
+                password: _,
+            } => f
+                .debug_struct("Webdav")
+                .field("url", url)
+                .field("user", user)
+                // The password is REDACTED, not omitted: a missing field reads
+                // as "there is no password", which is a different claim from
+                // "there is a password and it is not shown here".
+                .field("password", &REDACTED)
+                .finish(),
+        }
+    }
+}
+
+/// What a secret is replaced with in a diagnostic.
+///
+/// The same shape `redact_url` uses for userinfo in a URL, so there is one
+/// convention for "this was withheld" rather than one per secret.
+pub const REDACTED: &str = "***";
 
 impl VaultConfig {
     /// A word for the backend, for a diagnostic that never carries a secret.

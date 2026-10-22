@@ -58,8 +58,38 @@ impl HttpEndpoint {
     /// [`HttpEndpoint::resolve`], which is where a name either resolves to
     /// address(es) or is refused with the value named.
     pub fn from_env() -> Result<Self, String> {
-        let host = read_host()?;
-        let port = read_port()?;
+        Self::from_values(
+            std::env::var("MCP_HTTP_HOST").ok(),
+            std::env::var("MCP_HTTP_PORT").ok(),
+        )
+    }
+
+    /// The endpoint the operator asked for, over the VALUES rather than over
+    /// the environment.
+    ///
+    /// The split exists because the default is a load-bearing claim — "unset
+    /// binds loopback" is what makes a misconfigured deployment safe — and a
+    /// test that reads the real environment cannot pin it: the test inherits
+    /// whatever `MCP_HTTP_HOST` the shell happens to carry, so it asserts the
+    /// ambient value while claiming to assert the default. Measured: with
+    /// `MCP_HTTP_HOST=0.0.0.0` in the environment, the old test failed with
+    /// `left: 0.0.0.0:8765, right: 127.0.0.1:8765` — a false red about the
+    /// code, caused by the environment.
+    ///
+    /// [`HttpEndpoint::from_env`] is the thin shell around this, and it reads
+    /// the two variables and hands them here. Both halves agree because there
+    /// is one implementation of the rules.
+    pub fn from_values(host: Option<String>, port: Option<String>) -> Result<Self, String> {
+        let host = parse_host(
+            host.as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        )?;
+        let port = match port {
+            Some(value) => parse_port(&value)?,
+            None => 8765,
+        };
         let addresses = Self::resolve(host, port)?;
         Ok(Self {
             allowed_hosts: allowed_hosts_for(&addresses),
@@ -145,10 +175,6 @@ enum Host {
 /// resolver look up the literal string `127.0.0.1:8765` and refuse with a
 /// message about a name that does not resolve, which names the wrong mistake.
 /// The port belongs to `MCP_HTTP_PORT`, and saying so is the whole point.
-fn read_host() -> Result<Host, String> {
-    parse_host(filled("MCP_HTTP_HOST"))
-}
-
 fn parse_host(value: Option<String>) -> Result<Host, String> {
     let Some(value) = value else {
         return Ok(Host::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
@@ -165,14 +191,6 @@ fn parse_host(value: Option<String>) -> Result<Host, String> {
     Ok(Host::Name(value))
 }
 
-/// `MCP_HTTP_PORT`, defaulting to 8765.
-fn read_port() -> Result<u16, String> {
-    match std::env::var("MCP_HTTP_PORT") {
-        Ok(value) => parse_port(&value),
-        Err(_) => Ok(8765),
-    }
-}
-
 /// The port rule, over the value rather than over the environment.
 ///
 /// A variable that is set and blank is a refusal, not an absence: blank
@@ -182,17 +200,6 @@ fn read_port() -> Result<u16, String> {
 /// binary must not do, because other tests here read the environment.
 fn parse_port(value: &str) -> Result<u16, String> {
     value.trim().parse::<u16>().map_err(|_| bad_port(value))
-}
-
-/// A variable with content in it: present, non-blank, trimmed.
-///
-/// The same rule `config::parse_config` applies to a backend selector: a
-/// variable that is set and blank is an error rather than an absence.
-fn filled(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 fn bad_host(name: &str, port: u16) -> String {
@@ -389,7 +396,16 @@ mod tests {
 
     #[test]
     fn the_default_endpoint_binds_loopback_and_serves_its_own_names() {
-        let endpoint = HttpEndpoint::from_env().expect("an empty environment is loopback");
+        // Over the VALUES, not over the environment. This test asserts the
+        // DEFAULT — "unset binds loopback", which is the control that makes a
+        // misconfigured deployment safe — and the environment is not the
+        // default: it carries whatever `MCP_HTTP_HOST` the shell happened to
+        // export. Read the environment and the test asserts the ambient value
+        // while claiming to assert the default; measured, with
+        // `MCP_HTTP_HOST=0.0.0.0` exported, it failed with
+        // `left: 0.0.0.0:8765, right: 127.0.0.1:8765` — a false red about
+        // the code, caused by the shell.
+        let endpoint = HttpEndpoint::from_values(None, None).expect("an absent value is loopback");
         assert_eq!(
             endpoint.address(),
             SocketAddr::from(([127, 0, 0, 1], 8765)),
@@ -560,6 +576,72 @@ mod tests {
         assert!(
             refusal.contains("MCP_HTTP_PORT"),
             "names the variable: {refusal}"
+        );
+    }
+
+    /// A blank `MCP_HTTP_HOST` is the DEFAULT, not a refusal.
+    ///
+    /// The rule is the same one `config::parse_config` applies to a backend
+    /// selector — a variable that is set and blank is an error — but here the
+    /// blank case cannot be an error, because the default IS the safe one: a
+    /// blank bind address means "unset", and unset binds loopback. Treating it
+    /// as an error would refuse a deployment that a blank line in an env file
+    /// made indistinguishable from an unset one.
+    ///
+    /// What it must NOT be is a NAME: a blank host carried as `Host::Name("")`
+    /// would be resolved by the operating system, and some resolvers answer an
+    /// empty name with the wildcard address. That would turn a typo into a
+    /// listener on every interface — the exact failure the loopback default
+    /// exists to prevent.
+    #[test]
+    fn a_blank_host_is_the_default_and_never_a_name() {
+        let endpoint = HttpEndpoint::from_values(Some("   ".to_string()), None)
+            .expect("a blank host is an absent host");
+        assert_eq!(
+            endpoint.address(),
+            SocketAddr::from(([127, 0, 0, 1], 8765)),
+            "a blank host binds loopback, like an absent one"
+        );
+        assert!(
+            !endpoint.address().ip().is_unspecified(),
+            "a blank host never becomes a wildcard bind: {}",
+            endpoint.address()
+        );
+    }
+
+    /// The default does not depend on the environment, and neither does the
+    /// refusal.
+    ///
+    /// This is the property that makes the default a CONTROL rather than a
+    /// hope: whatever the shell exports, an unset variable means loopback. The
+    /// two halves are asserted together because they are the two answers to
+    /// the same question — what does this server bind when nobody says
+    /// otherwise.
+    #[test]
+    fn the_default_is_the_default_whatever_the_environment_says() {
+        // The value half, over the values.
+        let absent = HttpEndpoint::from_values(None, None).expect("absent is loopback");
+        let blank =
+            HttpEndpoint::from_values(Some("  ".to_string()), None).expect("blank is absent");
+        assert_eq!(
+            absent.address(),
+            blank.address(),
+            "a blank host and an absent host are the same endpoint"
+        );
+        assert_eq!(
+            absent.address().ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        );
+
+        // The environment half: `from_env` reads the two variables and hands
+        // them to the same implementation, so the shell can only ever change
+        // the answer through the values it actually exports. A refusal is a
+        // refusal whatever is exported too.
+        let refusal = HttpEndpoint::from_values(Some("not-an-address".to_string()), None)
+            .expect_err("a name that resolves to nothing is refused");
+        assert!(
+            refusal.contains("MCP_HTTP_HOST"),
+            "the refusal names the variable: {refusal}"
         );
     }
 }
