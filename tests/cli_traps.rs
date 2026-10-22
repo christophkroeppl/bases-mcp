@@ -297,14 +297,19 @@ fn a_json_row_carries_exactly_the_ordered_columns() {
     );
 }
 
-/// `order: []` falls back to the file-name column.
+/// `order: []` renders NO columns at all.
 ///
-/// Obsidian's accessor is `this.order || ["file.name"]`, and an empty array is
-/// falsy in JavaScript -- so `order: []` is not "no columns", it is the
-/// default. An implementation that treated an empty list as an instruction
-/// would render a table with no columns at all, where Obsidian renders one.
+/// Obsidian's accessor is `this.order || ["file.name"]`, and the `||` fires
+/// only for an ABSENT `order`: an empty array is TRUTHY in JavaScript, not
+/// falsy, so `getOrder()` answers `[]` and the view has no columns.
+///
+/// This is the trap in its sharpest form. `order: []` LOOKS like "no columns"
+/// and, by the accident of JavaScript truthiness, it IS -- but the reason is
+/// not the one the accessor suggests. An implementation that read `||` as
+/// "falsy" and fell back to `file.name` would show a column Obsidian does not
+/// show, and the guard here would be green on that wrong implementation.
 #[test]
-fn an_empty_order_falls_back_to_the_file_name_column() {
+fn an_empty_order_renders_no_columns_at_all() {
     let vault = traps_vault();
     let mut base = traps_base(&vault);
     for view in &mut base.views {
@@ -323,21 +328,53 @@ fn an_empty_order_falls_back_to_the_file_name_column() {
     )
     .expect("the query resolves");
     let columns = render_columns(&base, &result.view);
-    assert_eq!(
-        columns.iter().map(|c| &c.id).collect::<Vec<_>>(),
-        ["file.name"],
-        "`order: []` falls back to the default, it does not empty the table"
+    assert!(
+        columns.is_empty(),
+        "`order: []` renders no columns, it does not fall back to `file.name`: {:?}",
+        columns.iter().map(|c| &c.id).collect::<Vec<_>>()
     );
 }
 
-/// The JSON surface falls back the same way the markdown one does.
+/// The flat table of a zero-column view is a line of just `|`.
+///
+/// Obsidian's markdown writer emits one `|`-terminated run per column, so a
+/// table with no columns is `|` -- not `|  |`, and not a table with a
+/// `file.name` column. The byte shape is the parity surface, so it is pinned.
+#[test]
+fn a_zero_column_view_renders_a_table_of_bare_pipes() {
+    let vault = traps_vault();
+    let mut base = traps_base(&vault);
+    for view in &mut base.views {
+        if view.name == "Ordered" {
+            view.order = Some(Vec::new());
+        }
+    }
+    let result = query_base(
+        &vault,
+        "Traps.base",
+        &base,
+        &QueryOptions {
+            context: None,
+            view: Some("Ordered".into()),
+        },
+    )
+    .expect("the query resolves");
+    let markdown = render_markdown(&base, &result, RenderStyle::Flat).expect("the view renders");
+    assert_eq!(
+        markdown.lines().collect::<Vec<_>>(),
+        ["|", "|", "|", "|", "|"],
+        "a zero-column table is one `|` per line: a header, a rule and a row each"
+    );
+}
+
+/// The JSON surface renders no columns either.
 ///
 /// The two surfaces build their columns separately, and the CLI builds both
-/// from the same `getOrder()`, so the fallback has to be the SAME on both. A
-/// JSON surface that fell back to the Base's DECLARED properties would put
-/// columns in the row that the markdown table beside it does not have.
+/// from the same `getOrder()`, so the answer has to be the SAME on both. A
+/// JSON surface that fell back to `file.name` would put a column in the row
+/// that the markdown table beside it does not have.
 #[test]
-fn the_json_surface_falls_back_to_the_file_name_column_too() {
+fn the_json_surface_renders_no_columns_either() {
     let vault = traps_vault();
     let mut base = traps_base(&vault);
     for view in &mut base.views {
@@ -364,8 +401,40 @@ fn the_json_surface_falls_back_to_the_file_name_column_too() {
         .collect();
     assert_eq!(
         keys,
-        ["path", "file name"],
-        "the JSON row falls back to the file-name column, like the table does"
+        ["path"],
+        "the JSON row carries only its path, like the table beside it carries no columns"
+    );
+}
+
+/// A MISSING `order` is the case the fallback exists for.
+///
+/// `order: []` and no `order` at all are DIFFERENT: the absent one falls back
+/// to `file.name`, the empty one renders nothing. A guard that only pinned
+/// one of them would let the other drift, and they drifted together once.
+#[test]
+fn a_missing_order_falls_back_to_the_file_name_column() {
+    let vault = traps_vault();
+    let mut base = traps_base(&vault);
+    for view in &mut base.views {
+        if view.name == "Ordered" {
+            view.order = None;
+        }
+    }
+    let result = query_base(
+        &vault,
+        "Traps.base",
+        &base,
+        &QueryOptions {
+            context: None,
+            view: Some("Ordered".into()),
+        },
+    )
+    .expect("the query resolves");
+    let columns = render_columns(&base, &result.view);
+    assert_eq!(
+        columns.iter().map(|c| &c.id).collect::<Vec<_>>(),
+        ["file.name"],
+        "an ABSENT `order` is what falls back to `file.name`"
     );
 }
 

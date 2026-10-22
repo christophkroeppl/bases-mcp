@@ -535,7 +535,7 @@ entry records the divergence rather than repairing it there. The Rust side is
 the one the project ships, so the Rust side is the one that was repaired.
 
 | `limit: 0` | **No limit at all** — the view keeps every row | The one value that looks like "keep nothing" and means "keep everything". Obsidian's view parser only keeps a limit that is a number AND positive. |
-| `order: []` | Falls back to the single `file.name` column | An empty array is falsy in JavaScript, so Obsidian's own accessor (`this.order \|\| ["file.name"]`) never sees it as "no columns". |
+| `order: []` | **No columns at all** — every table line is a bare `\|` | An empty array is TRUTHY in JavaScript, so Obsidian's own accessor (`this.order \|\| ["file.name"]`) does **not** treat it as absent: `getOrder()` answers `[]`. The fallback is for a MISSING `order`, and the two cases are different. |
 | Nulls in a sort | Sort **last**, in **both** directions | The direction is applied to the comparison of two VALUES, not to the null check, so a row with no value stays at the bottom whichever way the sort runs. A descending sort that simply reversed the ascending order would put it first. |
 | The columns of a view | Exactly the ones the view **orders** | A property the Base *declares*, or one the view *sorts* on, is not a column. Obsidian builds both its JSON rows and its markdown table from `getOrder()`. |
 | The keys of a JSON row | The columns' **display names** | Two columns sharing a display name share one key, and the later one overwrites the earlier — so a column can vanish from the JSON without the row changing shape. |
@@ -558,7 +558,7 @@ The three facts that decide the traps, transcribed from that bundle:
 
 | Trap | The code |
 |---|---|
-| The columns | `getOrder()` returns `this.order \|\| ["file.name"]`; the CLI maps its rows over it and keys each one by `getDisplayName()`. |
+| The columns | `getOrder()` returns `this.order \|\| ["file.name"]`; the CLI maps its rows over it and keys each one by `getDisplayName()`. The `\|\|` fires only for an ABSENT `order` — an empty array is TRUTHY in JavaScript, so `order: []` yields NO columns. |
 | The values | The cell is `null == n \|\| n === NullValue.value ? "" : n.toString()` — a string, always, with the empty string for an absent one. |
 | The sort | The comparator returns `1` when the left value is the null value and `-1` when the right one is, and only THEN applies the direction to the value comparison. |
 
@@ -1253,6 +1253,43 @@ the temp-vault one failing.
 
 Found while landing `t_f89ef4ef`, whose date-equality rule only means what it
 says once the clock is the query's.
+
+### `order: []` rendered a column Obsidian does not render
+
+`view_order` and `json_columns` both fell back to `file.name` when a view
+declared no columns, and the doc comment said why: *"an empty array is falsy in
+JavaScript, so `order: []` falls back the same way a missing `order` does."*
+
+That reasoning was wrong, and it was wrong in the one direction that hides
+itself. An empty array is **truthy** in JavaScript — `Boolean([]) === true` —
+so `this.order || ["file.name"]` does not fire for it. Obsidian's
+`getOrder()` answers `[]`, and the view renders **no columns at all**. Only an
+ABSENT `order` falls back.
+
+The commit that introduced the fallback (`808db56`) also pinned it with a
+guard, so the suite was green on the wrong behaviour — worse than unguarded,
+because a correct implementation would have failed the gate.
+
+**The evidence.** Read out of the shipped bundle, as the other traps are:
+`getOrder=function(){return this.order||gY.slice()}` with `gY=["file.name"]`,
+and the view parser's `case"order"` branch, which type-checks with
+`Array.isArray` and then stores `i.order.map(MY)` — an empty array passes the
+check and stays empty. The CLI's markdown writer emits one `|`-terminated run
+per column, so a zero-column table is a line of just `|`.
+
+**Fix.** `view_order` and `json_columns` now honour `order` whenever it is
+PRESENT and fall back only when it is absent. The flat table emits `|` per
+line for a zero-column view, and a structured list has no primary column, so
+its rows are bare bullets.
+
+Pinned by `an_empty_order_renders_no_columns_at_all`,
+`a_zero_column_view_renders_a_table_of_bare_pipes`,
+`the_json_surface_renders_no_columns_either` and
+`a_missing_order_falls_back_to_the_file_name_column` in `tests/cli_traps.rs`,
+and by `an_empty_order_renders_no_columns_at_all` and
+`a_missing_order_falls_back_to_file_name` in `tests/render.rs`. The last pair
+matters as much as the first: an ABSENT `order` and an EMPTY one are different
+constructs, and a guard that pins only one of them lets the other drift.
 
 ## Branches
 

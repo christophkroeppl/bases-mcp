@@ -350,14 +350,25 @@ fn structured_left_aligns_cells_instead_of_centring_them() {
 }
 
 #[test]
-fn an_empty_order_falls_back_to_file_name() {
-    // An `order` of zero columns is as absent as no `order` at all: Obsidian
-    // shows `file.name` plus the Base's own properties either way, so there is
-    // always a primary column for a list to bullet on.
+fn an_empty_order_renders_no_columns_at_all() {
+    // An `order` of zero columns is NOT the same as no `order` at all.
+    // Obsidian's accessor is `this.order || ["file.name"]`, and the `||` fires
+    // only for an ABSENT `order` -- an empty array is TRUTHY in JavaScript, so
+    // `getOrder()` answers `[]` and the view has no columns.
+    //
+    // A list with no columns has no primary column to bullet on, so the rows
+    // are bare bullets.
     let mut result = result("list");
     result.view.order = Some(Vec::new());
-    // The Base declares no properties, so `file.name` is the only column and
-    // every row is a bare bullet.
+    assert_eq!(render(&base(), &result, RenderStyle::Structured), "-\n-");
+}
+
+#[test]
+fn a_missing_order_falls_back_to_file_name() {
+    // The case the fallback exists for: an ABSENT `order` shows `file.name`
+    // alone, so there is always a primary column for a list to bullet on.
+    let mut result = result("list");
+    result.view.order = None;
     assert_eq!(
         render(&base(), &result, RenderStyle::Structured),
         "- Beta\n- Alpha"

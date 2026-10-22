@@ -75,16 +75,18 @@ fn renders_as_list(view: &BaseView) -> bool {
 /// The columns a view shows, in order.
 ///
 /// A view with no `order` shows `file.name` alone. Obsidian's accessor is
-/// `this.order || ["file.name"]`, and an empty array is falsy in JavaScript, so
-/// `order: []` falls back the same way a missing `order` does.
+/// `this.order || ["file.name"]`, and the `||` fires only for an ABSENT
+/// `order`: an empty array is TRUTHY in JavaScript, not falsy, so `order: []`
+/// is not "no order" -- `getOrder()` answers `[]` and the view has NO columns
+/// at all.
 ///
 /// The fallback is NOT the Base's declared properties. The CLI builds both its
 /// JSON rows and its markdown table from `getOrder()`, so a property the Base
 /// DECLARES is not a column unless the view ORDERS it.
 fn view_order(view: &BaseView) -> Vec<String> {
     match view.order.as_deref() {
-        Some(ids) if !ids.is_empty() => ids.to_vec(),
-        _ => vec!["file.name".to_string()],
+        Some(ids) => ids.to_vec(),
+        None => vec!["file.name".to_string()],
     }
 }
 
@@ -164,15 +166,28 @@ fn table_for(
         .collect();
     let body: Vec<String> = rows
         .iter()
-        .map(|row| format!("| {} |", pad_cells(&row_cells(columns, row), widths, align)))
+        .map(|row| pad_cells(&row_cells(columns, row), widths, align))
         .collect();
 
     let mut lines = vec![
-        format!("| {} |", pad_cells(&headers, widths, align)),
-        format!("| {} |", rule(widths)),
+        table_line(columns, &pad_cells(&headers, widths, align)),
+        table_line(columns, &rule(widths)),
     ];
-    lines.extend(body);
+    lines.extend(body.into_iter().map(|cells| table_line(columns, &cells)));
     lines.join("\n")
+}
+
+/// One line of a markdown table.
+///
+/// Obsidian builds every line as a `|` followed by one `|`-terminated run per
+/// column, so a table with NO columns -- which is what `order: []` produces --
+/// is a line of just `|`, not `|  |`.
+fn table_line(columns: &[RenderColumn], cells: &str) -> String {
+    if columns.is_empty() {
+        "|".to_string()
+    } else {
+        format!("| {cells} |")
+    }
 }
 
 /// Every column's cell text for one row, in column order.
@@ -339,13 +354,17 @@ fn render_as_table(base: &BaseFile, result: &QueryResult) -> Result<String> {
 /// with three missing properties should not be three lines of nothing.
 fn render_as_list(base: &BaseFile, result: &QueryResult) -> String {
     let columns = render_columns(base, &result.view);
-    let primary = columns
-        .first()
-        .expect("view_order always yields at least file.name");
 
     let emit = |rows: &[ResolvedRow]| -> Vec<String> {
         let mut out = Vec::new();
         for row in rows {
+            // A view with NO columns has no primary column, and so no title.
+            // `order: []` is that case: the row is still a row, but there is
+            // nothing to put on it, so the bullet is bare.
+            let Some(primary) = columns.first() else {
+                out.push("-".to_string());
+                continue;
+            };
             let title = to_cell_text(cell_value(row, &primary.id));
             out.push(format!(
                 "- {}",
@@ -355,7 +374,7 @@ fn render_as_list(base: &BaseFile, result: &QueryResult) -> String {
                     title.as_str()
                 }
             ));
-            for column in &columns[1..] {
+            for column in columns.iter().skip(1) {
                 let value = to_cell_text(cell_value(row, &column.id));
                 if value.is_empty() {
                     continue;
@@ -437,9 +456,9 @@ fn summary_table(columns: &[RenderColumn], cells: &[String], widths: &[usize]) -
         .map(|column| column.header.as_str())
         .collect();
     [
-        format!("| {} |", pad_cells(&labels, widths, TableAlign::Left)),
-        format!("| {} |", rule(widths)),
-        format!("| {} |", pad_cells(cells, widths, TableAlign::Left)),
+        table_line(columns, &pad_cells(&labels, widths, TableAlign::Left)),
+        table_line(columns, &rule(widths)),
+        table_line(columns, &pad_cells(cells, widths, TableAlign::Left)),
     ]
     .join("\n")
 }
