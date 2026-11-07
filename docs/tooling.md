@@ -102,8 +102,10 @@ varlock run -- bases-mcp          # inject the resolved values and run
 ```
 
 Values go in `.env.local` (gitignored); the schema carries names and examples
-only. `.guarden/.env.schema` is the deployment's credential shape — the four
-vault variables the renderer plants as podman secrets — and does not duplicate
+only. `.guarden/.env.schema` is the deployment's credential shape — the three
+WebDAV variables the renderer injects as environment variables (podman
+`Secret=...,type=env`, because the binary reads `std::env::vars()`, not
+`/run/secrets`) — and does not duplicate
 the transport or audit variables, which `compose.yaml` sets.
 
 ### The HTTP endpoint
