@@ -1,0 +1,744 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "bases-mcp: one vault, two transports, six tools",
+    "output": "docs/architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/christophkroeppl/bases-mcp.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "8d4f32547402e260aafd8f79aa5abd9676eebdd4"
+    }
+  },
+  "components": [
+    {
+      "id": "client_stdio",
+      "type": "external",
+      "label": "MCP client",
+      "sublabel": "spawned process",
+      "pos": [
+        14,
+        240
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "README.md",
+          "line": 5,
+          "end_line": 8
+        }
+      ]
+    },
+    {
+      "id": "client_http",
+      "type": "external",
+      "label": "MCP clients",
+      "sublabel": "many sessions",
+      "pos": [
+        14,
+        370
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "README.md",
+          "line": 5,
+          "end_line": 8
+        }
+      ]
+    },
+    {
+      "id": "transport_stdio",
+      "type": "backend",
+      "label": "stdio transport",
+      "sublabel": "one client · pipes",
+      "pos": [
+        210,
+        240
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/main.rs",
+          "line": 69,
+          "end_line": 82
+        },
+        {
+          "path": "src/transport.rs",
+          "line": 22,
+          "end_line": 30
+        }
+      ]
+    },
+    {
+      "id": "transport_http",
+      "type": "backend",
+      "label": "Streamable HTTP",
+      "sublabel": "SSE at /mcp",
+      "tag": "no authn",
+      "pos": [
+        210,
+        370
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/main.rs",
+          "line": 89,
+          "end_line": 128
+        },
+        {
+          "path": "src/transport.rs",
+          "line": 16,
+          "end_line": 20
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "backend",
+      "label": "Tool surface",
+      "sublabel": "validate · dispatch",
+      "tag": "6 tools",
+      "pos": [
+        415,
+        300
+      ],
+      "size": [
+        130,
+        74
+      ],
+      "sources": [
+        {
+          "path": "src/tools.rs",
+          "line": 156,
+          "end_line": 216
+        },
+        {
+          "path": "src/tools.rs",
+          "line": 490,
+          "end_line": 499
+        },
+        {
+          "path": "src/tools.rs",
+          "line": 840,
+          "end_line": 849
+        }
+      ]
+    },
+    {
+      "id": "audit",
+      "type": "database",
+      "label": "Audit trail",
+      "sublabel": "JSON Lines",
+      "tag": "5 MB rollover",
+      "pos": [
+        415,
+        120
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/audit.rs",
+          "line": 11,
+          "end_line": 56
+        },
+        {
+          "path": "src/audit.rs",
+          "line": 368,
+          "end_line": 388
+        },
+        {
+          "path": "src/audit.rs",
+          "line": 475,
+          "end_line": 500
+        }
+      ]
+    },
+    {
+      "id": "resolver",
+      "type": "backend",
+      "label": "Resolver",
+      "sublabel": "one entry point",
+      "pos": [
+        620,
+        300
+      ],
+      "size": [
+        130,
+        74
+      ],
+      "sources": [
+        {
+          "path": "src/service.rs",
+          "line": 148,
+          "end_line": 157
+        },
+        {
+          "path": "src/service.rs",
+          "line": 199,
+          "end_line": 217
+        },
+        {
+          "path": "src/service.rs",
+          "line": 438,
+          "end_line": 464
+        }
+      ]
+    },
+    {
+      "id": "projection",
+      "type": "backend",
+      "label": "Projection",
+      "sublabel": "note byte spans",
+      "tag": "reconciler",
+      "pos": [
+        620,
+        440
+      ],
+      "size": [
+        130,
+        74
+      ],
+      "sources": [
+        {
+          "path": "src/render/project.rs",
+          "line": 1,
+          "end_line": 32
+        },
+        {
+          "path": "src/render/project.rs",
+          "line": 302,
+          "end_line": 318
+        },
+        {
+          "path": "src/note.rs",
+          "line": 39,
+          "end_line": 49
+        }
+      ]
+    },
+    {
+      "id": "pipeline",
+      "type": "backend",
+      "label": "Query pipeline",
+      "sublabel": "filter · sort",
+      "pos": [
+        825,
+        300
+      ],
+      "size": [
+        130,
+        74
+      ],
+      "sources": [
+        {
+          "path": "src/base/query.rs",
+          "line": 69,
+          "end_line": 105
+        },
+        {
+          "path": "src/base/query.rs",
+          "line": 112,
+          "end_line": 143
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "backend",
+      "label": "Evaluator",
+      "sublabel": "formulas · filters",
+      "pos": [
+        825,
+        120
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/evaluator.rs",
+          "line": 1,
+          "end_line": 16
+        },
+        {
+          "path": "src/parser.rs",
+          "line": 1,
+          "end_line": 4
+        }
+      ]
+    },
+    {
+      "id": "drafts",
+      "type": "backend",
+      "label": "Drafts",
+      "sublabel": "propose · verify",
+      "tag": "30 min",
+      "pos": [
+        825,
+        440
+      ],
+      "size": [
+        130,
+        74
+      ],
+      "sources": [
+        {
+          "path": "src/drafts.rs",
+          "line": 1,
+          "end_line": 28
+        },
+        {
+          "path": "src/drafts.rs",
+          "line": 130,
+          "end_line": 149
+        },
+        {
+          "path": "src/drafts.rs",
+          "line": 267,
+          "end_line": 280
+        }
+      ]
+    },
+    {
+      "id": "index",
+      "type": "database",
+      "label": "Vault index",
+      "sublabel": "links · properties",
+      "tag": "in-memory",
+      "pos": [
+        1030,
+        297
+      ],
+      "size": [
+        130,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/vault.rs",
+          "line": 79,
+          "end_line": 96
+        },
+        {
+          "path": "src/vault.rs",
+          "line": 145,
+          "end_line": 160
+        },
+        {
+          "path": "src/vault.rs",
+          "line": 418,
+          "end_line": 430
+        }
+      ]
+    },
+    {
+      "id": "fs",
+      "type": "backend",
+      "label": "Filesystem",
+      "sublabel": "BASES_MCP_VAULT",
+      "tag": "local",
+      "pos": [
+        1030,
+        440
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/vault/fs.rs",
+          "line": 257,
+          "end_line": 292
+        },
+        {
+          "path": "src/vault/fs.rs",
+          "line": 336,
+          "end_line": 381
+        }
+      ]
+    },
+    {
+      "id": "webdav",
+      "type": "backend",
+      "label": "WebDAV",
+      "sublabel": "BASES_MCP_WEBDAV_*",
+      "tag": "remote",
+      "pos": [
+        1235,
+        440
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/vault/webdav.rs",
+          "line": 1294,
+          "end_line": 1321
+        },
+        {
+          "path": "src/vault/webdav.rs",
+          "line": 1520,
+          "end_line": 1560
+        },
+        {
+          "path": "src/vault/webdav.rs",
+          "line": 1592,
+          "end_line": 1610
+        }
+      ]
+    },
+    {
+      "id": "vault_dir",
+      "type": "database",
+      "label": "Vault directory",
+      "sublabel": "notes + .base files",
+      "pos": [
+        1030,
+        570
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/vault/fs.rs",
+          "line": 83,
+          "end_line": 100
+        },
+        {
+          "path": "README.md",
+          "line": 82,
+          "end_line": 92
+        }
+      ]
+    },
+    {
+      "id": "dav_collection",
+      "type": "cloud",
+      "label": "WebDAV collection",
+      "sublabel": "remote vault",
+      "pos": [
+        1235,
+        570
+      ],
+      "size": [
+        130,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/vault/webdav.rs",
+          "line": 1420,
+          "end_line": 1459
+        },
+        {
+          "path": "README.md",
+          "line": 82,
+          "end_line": 92
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "bases-mcp process · exactly one vault",
+      "wraps": [
+        "transport_stdio",
+        "transport_http",
+        "tools",
+        "audit",
+        "resolver",
+        "projection",
+        "pipeline",
+        "engine",
+        "drafts",
+        "index",
+        "fs",
+        "webdav"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-to-stdio",
+      "from": "client_stdio",
+      "to": "transport_stdio",
+      "label": "spawn",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "clients-to-http",
+      "from": "client_http",
+      "to": "transport_http",
+      "label": "connect",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "stdio-to-tools",
+      "from": "transport_stdio",
+      "to": "tools",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "http-to-tools",
+      "from": "transport_http",
+      "to": "tools",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "tools-to-resolver",
+      "from": "tools",
+      "to": "resolver",
+      "label": "dispatch",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "tools-to-audit",
+      "from": "tools",
+      "to": "audit",
+      "label": "one record per call",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "straight",
+      "labelAt": [
+        480,
+        241
+      ]
+    },
+    {
+      "id": "resolver-to-pipeline",
+      "from": "resolver",
+      "to": "pipeline",
+      "label": "query",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "resolver-to-projection",
+      "from": "resolver",
+      "to": "projection",
+      "label": "projection",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [
+        685,
+        424
+      ]
+    },
+    {
+      "id": "resolver-to-drafts",
+      "from": "resolver",
+      "to": "drafts",
+      "label": "add_note_to_base",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          685,
+          405
+        ],
+        [
+          890,
+          405
+        ]
+      ],
+      "labelAt": [
+        800,
+        420
+      ]
+    },
+    {
+      "id": "pipeline-to-engine",
+      "from": "pipeline",
+      "to": "engine",
+      "label": "compile + evaluate",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "straight",
+      "labelAt": [
+        890,
+        241
+      ]
+    },
+    {
+      "id": "pipeline-to-index",
+      "from": "pipeline",
+      "to": "index",
+      "label": "note data",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "drafts-to-index",
+      "from": "drafts",
+      "to": "index",
+      "label": "verify",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          1000,
+          477
+        ],
+        [
+          1000,
+          337
+        ]
+      ],
+      "labelAt": [
+        985,
+        400
+      ]
+    },
+    {
+      "id": "index-to-fs",
+      "from": "index",
+      "to": "fs",
+      "label": "VaultSource",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [
+        1155,
+        408
+      ]
+    },
+    {
+      "id": "index-to-webdav",
+      "from": "index",
+      "to": "webdav",
+      "label": "VaultSource",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [
+        [
+          1300,
+          337
+        ]
+      ],
+      "labelAt": [
+        1250,
+        390
+      ]
+    },
+    {
+      "id": "fs-to-vault",
+      "from": "fs",
+      "to": "vault_dir",
+      "label": "read · write",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [
+        1095,
+        548
+      ]
+    },
+    {
+      "id": "webdav-to-collection",
+      "from": "webdav",
+      "to": "dav_collection",
+      "label": "PROPFIND · PUT",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [
+        1300,
+        548
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Six tools, two writers",
+      "items": [
+        "list_bases, resolve_base, get_note and backlinks read.",
+        "write_note and add_note_to_base are the only tools that write.",
+        "Every tool validates arguments, calls the Resolver and shapes the answer."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Query pipeline",
+      "items": [
+        "Formulas evaluate once per note, in dependency order.",
+        "Global and view filters run before sort, group and limit.",
+        "this binds to the Host note; an unbound this is an error, not empty rows."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Two rendering surfaces",
+      "items": [
+        "resolve_base format=markdown is the flat, byte-comparable CLI-parity table.",
+        "get_note replaces each Base region with a structured base-rendered fence.",
+        "A Projection is never written back: Obsidian needs live YAML in a base fence."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Conditional writes",
+      "items": [
+        "base_hash is read-verify-write: a note changed since the read is refused.",
+        "Base regions are restored byte-for-byte and matched by path, not position.",
+        "add_note_to_base proposes, verifies against the real filter, then writes.",
+        "A draft expires after 30 minutes."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "A record, not a control",
+      "items": [
+        "One JSON line per call and one for the initialize handshake.",
+        "No note contents, credentials or error prose; 5 MB rollover keeps one generation.",
+        "HTTP has no authentication, authorization or rate limiting.",
+        "The network boundary is where the port is published, not where the server binds."
+      ]
+    }
+  ]
+}
